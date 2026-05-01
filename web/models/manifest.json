@@ -51,12 +51,14 @@
     {
       "id": "yeo7-2mm",
       "filename": "Yeo7_LiberalMask_2mm.nii.gz",
-      "sizeBytes": 0,
-      "checksum": "sha256:pending",
+      "sizeBytes": 73181,
+      "checksum": "sha256:edfd11af848974b2d40936492d72995d41e1582eff114fbfdca07c4fa278e67d",
       "cacheKey": "yeo7-2mm-v1",
-      "sourceUrl": "https://huggingface.co/datasets/neurodesk/lnm-webapp-models/resolve/main/atlases/Yeo7_LiberalMask_2mm.nii.gz",
-      "sourceVersion": "Yeo2011-7Networks",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/atlases/Yeo7_LiberalMask_2mm.nii.gz",
+      "sourceVersion": "Yeo2011-7Networks-LiberalMask",
       "resolutionMm": 2,
+      "mniSpace": "MNI152NLin2009cAsym",
+      "dims": [99, 117, 95],
       "parcelCount": 7,
       "supportStatus": "supported",
       "networkLabels": {
@@ -68,7 +70,7 @@
         "6": "Frontoparietal",
         "7": "Default"
       },
-      "_comment": "Phase 1 atlas. Yeo 2011 7-network liberal-mask parcellation in MNI152 2mm. Labels 1..7 map to canonical Yeo network names; 0 is background."
+      "_comment": "Phase 1 atlas. Yeo 2011 7-network liberal-mask parcellation, resampled (nearest-neighbour) from FreeSurfer-conformed 1mm to MNI152NLin2009cAsym 2mm via nilearn. Labels 1..7 map to canonical Yeo network names; 0 is background. Hosted under sbollmann/lnm-webapp-models pending neurodesk org access; transfer planned."
     },
     {
       "id": "schaefer400-7n-2mm",

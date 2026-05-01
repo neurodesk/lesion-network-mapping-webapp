@@ -27,10 +27,13 @@ Common issues it catches:
 
 ## Architecture
 
-- `web/js/spinalcordtoolbox-app.js` — Main app class, orchestrates everything
+- `web/js/lnm-app.js` — Main Lesion Network Mapping app class, orchestrates Phase 1 file loading, viewer display, and overlap stubs
 - `web/js/app/config.js` — Model config, version (bumped by the manual release workflow)
+- `web/js/app/lnm-tasks.js` — LNM pipeline inventory and stage status helpers
+- `web/js/app/lnm-labels.js` — Yeo 7-network label table and NiiVue colormap
 - `web/js/app/sct-tasks.js` — SCT stable task inventory and task status helpers
 - `web/js/app/labels.js` — Task labels + NiiVue colormap
+- `web/js/modules/parcel-overlap.js` — Pure JS parcel and network overlap reducers
 - `web/js/inference-worker.js` — Web Worker running the 3D inference pipeline (~700 lines, uses `importScripts`, not ES modules)
 - `web/js/controllers/` — FileIO, DICOM, Inference, Viewer controllers
 - `web/js/modules/` — UI components and inference pipeline modules
