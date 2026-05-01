@@ -87,4 +87,37 @@ assert.match(src, /outsideAtlasWarning/,
 assert.match(src, /loadAtlasFromManifest|fetchAndDecodeAtlas|loadAtlas/,
   'runYeoOverlap must invoke the atlas-loader (no longer a stub)');
 
-console.log('LNM app skeleton OK: class + 5 methods + import surface + atlas wiring validated.');
+// Phase 1c.3: runYeoOverlap must populate #networkOverlapTable via the new
+// renderer, and exportCsv must serialise via overlap-export and trigger a
+// real Blob download (no more 'not implemented' stub).
+assert.match(src, /from\s+['"]\.\/modules\/overlap-export\.js['"]/,
+  'lnm-app.js must import from ./modules/overlap-export.js');
+assert.match(src, /from\s+['"]\.\/modules\/overlap-render\.js['"]/,
+  'lnm-app.js must import from ./modules/overlap-render.js');
+assert.match(src, /renderOverlapTable\s*\(/,
+  'runYeoOverlap must call renderOverlapTable(...)');
+assert.match(src, /serializeOverlapCsv\s*\(/,
+  'exportCsv must call serializeOverlapCsv(...)');
+
+// exportCsv must trigger a real download — Blob + createObjectURL + a .csv
+// filename. Source-grep is brittle but matches the SCT-style guardrails:
+// catches the "stub left behind" regression at lint time.
+assert.match(src, /\bnew\s+Blob\b/,
+  'exportCsv must construct a Blob for download');
+assert.match(src, /URL\.createObjectURL\s*\(/,
+  'exportCsv must create an object URL for the Blob');
+assert.match(src, /\.csv['"]/,
+  'exportCsv must reference a .csv filename');
+
+// renderOverlapTable receives the Yeo7 colormap so the bars match the
+// canonical Yeo palette across the app + the NiiVue overlay.
+assert.match(src, /YEO7_COLORMAP/,
+  'overlap rendering must reference YEO7_COLORMAP for bar colors');
+
+// Once an overlap result exists, the CSV download button must become
+// interactive. Source-grep the toggle so a regression that leaves the button
+// disabled forever surfaces here, not in user reports.
+assert.match(src, /downloadOverlapCsv[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadOverlapCsv|downloadOverlapCsv[\s\S]*?removeAttribute\(['"]disabled/,
+  'lnm-app.js must enable #downloadOverlapCsv after a successful run');
+
+console.log('LNM app skeleton OK: class + 5 methods + import surface + atlas + render + CSV wiring validated.');

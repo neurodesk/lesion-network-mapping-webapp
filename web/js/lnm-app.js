@@ -4,6 +4,8 @@ import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
 import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
+import { serializeOverlapCsv } from './modules/overlap-export.js';
+import { renderOverlapTable } from './modules/overlap-render.js';
 import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
 import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
@@ -21,6 +23,17 @@ function dimsEqual(a, b) {
   return Array.isArray(a) && Array.isArray(b) &&
     a.length === b.length &&
     a.every((value, index) => value === b[index]);
+}
+
+function computeNetworkSizes(atlasData, networkLabels) {
+  const sizes = {};
+  for (let i = 0; i < atlasData.length; i++) {
+    const label = atlasData[i];
+    if (label === 0 || !Object.prototype.hasOwnProperty.call(networkLabels, label)) continue;
+    const network = networkLabels[label];
+    sizes[network] = (sizes[network] || 0) + 1;
+  }
+  return sizes;
 }
 
 export class LesionNetworkMappingApp {
@@ -97,7 +110,10 @@ export class LesionNetworkMappingApp {
     if (computeButton) computeButton.addEventListener('click', () => this.runYeoOverlap());
 
     const csvButton = document.getElementById('downloadOverlapCsv');
-    if (csvButton) csvButton.addEventListener('click', () => this.exportCsv());
+    if (csvButton) {
+      csvButton.disabled = true;
+      csvButton.addEventListener('click', () => this.exportCsv());
+    }
 
     const copyConsole = document.getElementById('copyConsole');
     if (copyConsole) copyConsole.addEventListener('click', () => this.console.copyToClipboard());
@@ -229,13 +245,23 @@ export class LesionNetworkMappingApp {
       dims: atlas.dims,
     });
     const summary = summarizeNetworkOverlap(parcelResult, atlas.networkLabels);
-    this.overlapResult = { parcelResult, summary, atlas };
+    const networkSizes = computeNetworkSizes(atlas.data, atlas.networkLabels);
+    this.overlapResult = { parcelResult, summary, atlas, networkSizes };
     this.showOutsideAtlasWarning(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
-    // TODO Phase 1c.3: render the overlap table and chart.
+
+    const tableEl = document.getElementById('networkOverlapTable');
+    if (tableEl) {
+      renderOverlapTable(tableEl, summary, {
+        colormap: YEO7_COLORMAP,
+        networkLabels: atlas.networkLabels
+      });
+    }
+    const csvButton = document.getElementById('downloadOverlapCsv');
+    if (csvButton) csvButton.disabled = false;
+
     this.updateOutput(
-      `Overlap computed: ${parcelResult.totalLesionVoxels} lesion voxels, ` +
-      `${parcelResult.voxelsOutsideAtlas} outside atlas, ` +
-      `${parcelResult.parcels.length} parcels touched.`
+      `Overlap computed for ${summary.networks.length} networks ` +
+      `(${parcelResult.voxelsOutsideAtlas} lesion voxels outside atlas).`
     );
   }
 
@@ -253,8 +279,19 @@ export class LesionNetworkMappingApp {
   }
 
   exportCsv() {
-    // TODO Phase 1c.3: serialize this.overlapResult as CSV and download it.
-    this.updateOutput('CSV export is not implemented in this phase.');
+    if (!this.overlapResult) return;
+    const csv = serializeOverlapCsv(this.overlapResult.summary, {
+      networkSizes: this.overlapResult.networkSizes
+    });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lnm-overlap.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   updateOutput(message) {

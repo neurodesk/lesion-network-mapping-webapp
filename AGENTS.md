@@ -31,6 +31,8 @@ Common issues it catches:
 - `web/js/app/config.js` — Model config, version (bumped by the manual release workflow)
 - `web/js/app/lnm-tasks.js` — LNM pipeline inventory and stage status helpers
 - `web/js/app/lnm-labels.js` — Yeo 7-network label table and NiiVue colormap
+- `web/js/modules/overlap-export.js` — Pure JS CSV serialization for LNM overlap summaries
+- `web/js/modules/overlap-render.js` — DOM rendering for the LNM network-overlap results table
 - `web/js/app/sct-tasks.js` — SCT stable task inventory and task status helpers
 - `web/js/app/labels.js` — Task labels + NiiVue colormap
 - `web/js/modules/parcel-overlap.js` — Pure JS parcel and network overlap reducers
@@ -67,6 +69,7 @@ Common issues it catches:
 | Script | What it covers |
 | --- | --- |
 | `npm run lint` | acorn syntax check on all `web/**/*.js` |
+| `node scripts/test_overlap_export.cjs` | CSV schema, ordering, numeric formatting, and missing-network-size edge cases for LNM overlap export |
 | `npm run test:manifest` | Asserts `web/js/app/sct-tasks.js` (read by the browser) and `web/models/manifest.json` (read by fixture-parity scripts) agree on `preprocessing`, `inferenceDefaults`, `patchSize`, `checksum`, `filename` for every supported task. Catches the silent runtime drift class that fixture tests miss. Also asserts every supported, non-`processingOnly` task ships at least one model asset. |
 | `npm run test:routing` | Asserts the SCT Segmentation dropdown only offers tasks with a model asset, that `processingOnly` tasks (vertebrae) are gated through SCT Processing → `runVertebralLabeling`, and that label-mask stages render as overlays via `_overlayStage`/`resolveOverlayStage`. Catches the silent fall-back class where `runInference()` would run the default model on a model-less task. |
 | `npm run test:labels` | Asserts `generateNiivueColormap()` emits a step LUT (held stops between consecutive label indices) so NiiVue does not interpolate across discrete labels. |
