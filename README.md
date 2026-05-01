@@ -14,11 +14,16 @@ No backend. No data upload. Hosted on GitHub Pages.
 
 ## Status
 
-Early scaffold. The app is being built up phase-by-phase under TDD. Current
-state: scaffold imported from
-[`neurodesk/spinalcordtoolbox-webapp`](https://github.com/neurodesk/spinalcordtoolbox-webapp)
-at SHA `40d0f5451ec38ee402f7c62186a6614f19eb2304`, SCT-specific assets
-stripped, awaiting LNM pipeline wiring.
+**Phase 1 complete (v0.1.0)**: manual-mask Yeo 7-network overlap. Drop a
+binary lesion mask aligned to MNI152NLin2009cAsym 2mm, click "Compute
+overlap", get a per-network table with voxel counts, % of lesion, an inline
+magnitude bar, and a CSV export. Voxels falling outside the Yeo brain mask
+are surfaced as a warning. The Yeo7 atlas is fetched live from
+[`sbollmann/lnm-webapp-models`](https://huggingface.co/datasets/sbollmann/lnm-webapp-models)
+on Hugging Face and cached client-side.
+
+Phases 2–5 (auto-segmentation, MNI registration, parcel-FC weighted sum,
+thresholding) are planned but not yet implemented.
 
 ## Attribution
 
@@ -39,9 +44,22 @@ Pipeline-specific dependencies (added incrementally):
 ```sh
 npm install
 bash web/setup.sh   # downloads ONNX Runtime WASM
-bash web/run.sh     # serves http://localhost:8000/web/
-npm test            # lint-only at scaffold; tests grow per phase
+bash web/run.sh     # serves http://localhost:8080/
+npm test            # 7 Node-only suites: lint, tasks, manifest, parcel-overlap,
+                    #                     overlap-export, app, html
 ```
+
+### Browser smoke test
+
+Optional, runs the full Phase 1 flow in headless Chromium against a deterministic
+phantom. Not in `npm test`; requires a one-off browser install:
+
+```sh
+npx playwright install chromium
+npm run test:smoke
+```
+
+The smoke test fetches the Yeo atlas live from Hugging Face.
 
 ## License
 
