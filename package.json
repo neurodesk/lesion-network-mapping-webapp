@@ -1,9 +1,13 @@
 {
   "name": "lesion-network-mapping-webapp",
   "private": true,
+  "type": "module",
   "scripts": {
     "lint": "node scripts/check-syntax.mjs",
-    "test": "npm run lint"
+    "test": "npm run lint && npm run test:tasks && npm run test:manifest && npm run test:parcel-overlap",
+    "test:tasks": "node --no-warnings scripts/test_lnm_tasks.mjs",
+    "test:manifest": "node --no-warnings scripts/test_lnm_manifest.mjs",
+    "test:parcel-overlap": "node scripts/test_parcel_overlap.cjs"
   },
   "dependencies": {
     "nifti-reader-js": "^0.8.0",
