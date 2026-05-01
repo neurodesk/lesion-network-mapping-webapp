@@ -51,6 +51,9 @@ const { pathToFileURL } = require('node:url');
 
   assert.ok(Array.isArray(result.parcels), 'result.parcels must be an array');
   assert.equal(result.totalLesionVoxels, 5, 'totalLesionVoxels');
+  // All 5 lesion voxels in case 1 sit on labelled parcels at z=0.
+  assert.equal(result.voxelsOutsideAtlas, 0,
+    'no voxelsOutsideAtlas when lesion is fully inside the atlas');
   // Background (label 0) must NOT appear in parcels[].
   assert.ok(
     !result.parcels.some(p => p.label === 0),
@@ -95,7 +98,32 @@ const { pathToFileURL } = require('node:url');
     dims
   });
   assert.equal(empty.totalLesionVoxels, 0);
+  assert.equal(empty.voxelsOutsideAtlas, 0);
   assert.deepEqual(empty.parcels, []);
+
+  // ---- Case 3b: lesion partially outside the atlas ----
+  // Add 2 lesion voxels at z=1 (where the atlas is all-zero background).
+  // Existing case-1 lesion stays in lesion[]; we re-run with extra voxels.
+  const lesionPartialOutside = new Uint8Array(N);
+  lesionPartialOutside.set(lesion);
+  lesionPartialOutside[idx(0, 0, 1)] = 1;
+  lesionPartialOutside[idx(0, 1, 1)] = 1;
+  const partialOutside = computeParcelOverlap({
+    lesion: lesionPartialOutside,
+    atlas,
+    dims
+  });
+  assert.equal(partialOutside.totalLesionVoxels, 7,
+    'totalLesionVoxels counts every lesion voxel, in or out of the atlas');
+  assert.equal(partialOutside.voxelsOutsideAtlas, 2,
+    'voxelsOutsideAtlas counts lesion voxels where atlas label is 0');
+  // Voxels inside the atlas remain unchanged from case 1.
+  const partialByLabel = Object.fromEntries(partialOutside.parcels.map(p => [p.label, p]));
+  assert.equal(partialByLabel[1]?.voxelsInLesion, 4);
+  assert.equal(partialByLabel[2]?.voxelsInLesion, 1);
+  // fractionOfLesion is over totalLesionVoxels (incl. outside), so 4/7 not 4/5.
+  assert.equal(partialByLabel[1]?.fractionOfLesion, 4 / 7,
+    'fractionOfLesion uses totalLesionVoxels (incl. outside-atlas voxels)');
 
   // ---- Case 4: summarizeNetworkOverlap aggregates parcels by network id ----
   // parcelToNetwork maps label -> network name. Yeo-style 7 networks.
@@ -117,7 +145,7 @@ const { pathToFileURL } = require('node:url');
   assert.equal(partialByNet.Default.voxelsInLesion, 4);
   assert.equal(partialByNet.Unassigned.voxelsInLesion, 1);
 
-  console.log('parcel-overlap OK: 5 assertions across 5 cases.');
+  console.log('parcel-overlap OK: 6 cases (incl. outside-atlas counting).');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

@@ -32,6 +32,7 @@ export function computeParcelOverlap({ lesion, atlas, dims }) {
   const parcelSize = new Map();    // label -> parcel size (voxel count)
   const inLesion = new Map();      // label -> lesion voxels in parcel
   let totalLesionVoxels = 0;
+  let voxelsOutsideAtlas = 0;      // lesion voxels where atlas label == 0
 
   for (let i = 0; i < expected; i++) {
     const label = atlas[i];
@@ -42,6 +43,8 @@ export function computeParcelOverlap({ lesion, atlas, dims }) {
       totalLesionVoxels += 1;
       if (label !== 0) {
         inLesion.set(label, (inLesion.get(label) || 0) + 1);
+      } else {
+        voxelsOutsideAtlas += 1;
       }
     }
   }
@@ -62,7 +65,7 @@ export function computeParcelOverlap({ lesion, atlas, dims }) {
     b.voxelsInLesion - a.voxelsInLesion || a.label - b.label
   );
 
-  return { totalLesionVoxels, parcels };
+  return { totalLesionVoxels, voxelsOutsideAtlas, parcels };
 }
 
 // Aggregate per-parcel overlaps into per-network sums using a label->network

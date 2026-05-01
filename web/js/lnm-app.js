@@ -1,12 +1,27 @@
 import { FileIOController } from './controllers/FileIOController.js';
 import { ViewerController } from './controllers/ViewerController.js';
 import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
-import { YEO7_COLORMAP, YEO7_NETWORK_LABELS } from './app/lnm-labels.js';
+import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
+import { loadAtlasFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
 import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
 import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
+
+function binarise(typedArray) {
+  const out = new Uint8Array(typedArray.length);
+  for (let i = 0; i < typedArray.length; i++) {
+    out[i] = typedArray[i] > 0 ? 1 : 0;
+  }
+  return out;
+}
+
+function dimsEqual(a, b) {
+  return Array.isArray(a) && Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((value, index) => value === b[index]);
+}
 
 export class LesionNetworkMappingApp {
   constructor() {
@@ -192,19 +207,49 @@ export class LesionNetworkMappingApp {
   }
 
   async runYeoOverlap() {
-    const atlasAssetId = 'yeo7-2mm';
-    this.updateOutput(`Preparing ${atlasAssetId} overlap.`);
+    if (!this.lesionFile) {
+      this.updateOutput('Drop a lesion mask before computing overlap.');
+      return;
+    }
+    this.updateOutput('Loading Yeo7 atlas...');
+    const atlas = await loadAtlasFromManifest('yeo7-2mm');
+    this.updateOutput('Decoding lesion mask...');
+    const lesionBuf = await this.lesionFile.arrayBuffer();
+    const lesion = await decodeNiftiBuffer(lesionBuf);
 
-    // TODO Phase 1c.2: fetch and decode the atlas asset, then pass real typed arrays.
+    if (!dimsEqual(lesion.dims, atlas.dims)) {
+      this.updateOutput(`Lesion dims ${lesion.dims.join('x')} do not match atlas ${atlas.dims.join('x')}. Re-register the mask to ${atlas.manifestEntry.mniSpace || 'MNI152 2mm'} first.`);
+      return;
+    }
+
+    const lesionBin = binarise(lesion.data);
     const parcelResult = computeParcelOverlap({
-      lesion: new Uint8Array([0]),
-      atlas: new Uint16Array([0]),
-      dims: [1, 1, 1]
+      lesion: lesionBin,
+      atlas: atlas.data,
+      dims: atlas.dims,
     });
-    this.overlapResult = summarizeNetworkOverlap(parcelResult, YEO7_NETWORK_LABELS);
-
+    const summary = summarizeNetworkOverlap(parcelResult, atlas.networkLabels);
+    this.overlapResult = { parcelResult, summary, atlas };
+    this.showOutsideAtlasWarning(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
     // TODO Phase 1c.3: render the overlap table and chart.
-    return this.overlapResult;
+    this.updateOutput(
+      `Overlap computed: ${parcelResult.totalLesionVoxels} lesion voxels, ` +
+      `${parcelResult.voxelsOutsideAtlas} outside atlas, ` +
+      `${parcelResult.parcels.length} parcels touched.`
+    );
+  }
+
+  showOutsideAtlasWarning(outside, total) {
+    const el = document.getElementById('outsideAtlasWarning');
+    if (!el) return;
+    if (outside > 0 && total > 0) {
+      const pct = ((outside / total) * 100).toFixed(1);
+      el.textContent = `${outside} of ${total} lesion voxels (${pct}%) fall outside the Yeo atlas brain mask.`;
+      el.classList.remove('hidden');
+    } else {
+      el.textContent = '';
+      el.classList.add('hidden');
+    }
   }
 
   exportCsv() {

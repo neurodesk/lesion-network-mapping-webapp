@@ -44,7 +44,8 @@ const requiredImports = [
   /from\s+['"]\.\/controllers\/ViewerController\.js['"]/,
   /from\s+['"]\.\/app\/lnm-tasks\.js['"]/,
   /from\s+['"]\.\/app\/lnm-labels\.js['"]/,
-  /from\s+['"]\.\/modules\/parcel-overlap\.js['"]/
+  /from\s+['"]\.\/modules\/parcel-overlap\.js['"]/,
+  /from\s+['"]\.\/modules\/atlas-loader\.js['"]/
 ];
 for (const re of requiredImports) {
   assert.match(src, re, `lnm-app.js must import ${re}`);
@@ -74,4 +75,16 @@ assert.match(src, /summarizeNetworkOverlap\s*\(/,
 assert.match(src, /['"]yeo7-2mm['"]/,
   'lnm-app.js must reference the yeo7-2mm asset ID literal');
 
-console.log('LNM app skeleton OK: class + 5 methods + import surface validated.');
+// Phase 1c.2: the orchestrator must surface 'X voxels of lesion fall outside
+// the atlas' as soon as voxelsOutsideAtlas > 0. Source-grep the wiring so we
+// catch typos that would silently drop the warning.
+assert.match(src, /voxelsOutsideAtlas/,
+  'lnm-app.js must reference voxelsOutsideAtlas (outside-atlas warning wiring)');
+assert.match(src, /outsideAtlasWarning/,
+  'lnm-app.js must reference the #outsideAtlasWarning element');
+
+// runYeoOverlap must call the atlas loader rather than the Phase 1c.1 stub.
+assert.match(src, /loadAtlasFromManifest|fetchAndDecodeAtlas|loadAtlas/,
+  'runYeoOverlap must invoke the atlas-loader (no longer a stub)');
+
+console.log('LNM app skeleton OK: class + 5 methods + import surface + atlas wiring validated.');
