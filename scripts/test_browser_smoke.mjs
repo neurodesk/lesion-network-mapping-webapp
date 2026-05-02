@@ -1,22 +1,23 @@
 #!/usr/bin/env node --no-warnings
-// Phase 1c.4 browser smoke test.
+// Browser smoke tests for the LNM webapp. Two phases:
 //
-// Runs the Phase 1 manual-mask Yeo overlap flow end-to-end in headless
-// Chromium against a real dev server. Uses the deterministic phantom from
-// tests/fixtures/lnm-phantom/lesion-mni2.nii.gz: a 4x4x4 cube placed inside
-// the Yeo Visual parcel (label 1) so the expected outcome is fixed:
-//
-//   - 64 lesion voxels, all in 'Visual' network
-//   - 0 voxels outside the atlas (warning stays hidden)
-//   - CSV header + 'Visual,64,...' as the first non-Unassigned row.
+//   Phase 1c.4: manual-mask Yeo overlap flow end-to-end. Uses
+//     tests/fixtures/lnm-phantom/lesion-mni2.nii.gz (64-voxel cube in the
+//     Yeo Visual parcel) -> 'Visual,64,...' row in the CSV download.
+//   Phase 2a.1.5: structural T1 -> auto-fired SynthStrip brain extraction
+//     -> brain-mask overlay + #downloadBrainMaskButton enabled + the
+//     downloaded mask is a non-trivial NIfTI gzip. Uses the
+//     tests/fixtures/synthstrip-mini/T1.nii.gz fixture (MNI152 2mm).
 //
 // NOT included in `npm test`. Requires:
 //   npm install            # adds playwright dep
 //   npx playwright install chromium
 //   npm run test:smoke
 //
-// The test fetches the Yeo atlas live from Hugging Face, by design (Phase 1
-// developer-machine smoke; CI gating with stubbed assets is a later phase).
+// Tests fetch their assets live from Hugging Face by design (developer-
+// machine smoke; CI gating with stubbed assets is a later phase). The
+// SynthStrip phase pulls the ~10 MB ONNX model, then runs whole-volume
+// WASM inference in headless Chromium, so it is slow (30-90s typical).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,10 +29,10 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.LNM_SMOKE_PORT || 8123);
+const BASE_PORT = Number(process.env.LNM_SMOKE_PORT || 8123);
 // run.sh cd's into web/ before serving, so the docroot IS web/.
-const URL = `http://localhost:${PORT}/`;
 const PHANTOM_PATH = path.join(ROOT, 'tests/fixtures/lnm-phantom/lesion-mni2.nii.gz');
+const STRUCTURAL_PATH = path.join(ROOT, 'tests/fixtures/synthstrip-mini/T1.nii.gz');
 
 async function waitForServer(url, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -49,20 +50,37 @@ async function waitForServer(url, timeoutMs = 10000) {
   throw new Error(`server at ${url} not reachable within ${timeoutMs}ms (${lastErr?.message})`);
 }
 
-test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeout: 90000 }, async (t) => {
-  // Confirm fixture exists; a missing fixture = build_phantom.py never ran.
-  await fs.access(PHANTOM_PATH);
-
-  const server = spawn('bash', ['web/run.sh', String(PORT)], {
+async function spawnServer(port) {
+  const server = spawn('bash', ['web/run.sh', String(port)], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, LANG: 'C.UTF-8' }
   });
-  let serverStdout = '';
-  let serverStderr = '';
-  server.stdout?.on('data', buf => { serverStdout += buf.toString(); });
-  server.stderr?.on('data', buf => { serverStderr += buf.toString(); });
+  let stdout = '';
+  let stderr = '';
+  server.stdout?.on('data', buf => { stdout += buf.toString(); });
+  server.stderr?.on('data', buf => { stderr += buf.toString(); });
+  return {
+    server,
+    getStdout: () => stdout,
+    getStderr: () => stderr,
+    async close() {
+      server.kill('SIGTERM');
+      await new Promise((resolve) => {
+        server.once('exit', resolve);
+        setTimeout(() => { server.kill('SIGKILL'); resolve(undefined); }, 2000).unref?.();
+      });
+    }
+  };
+}
 
+test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeout: 90000 }, async (t) => {
+  // Confirm fixture exists; a missing fixture = build_phantom.py never ran.
+  await fs.access(PHANTOM_PATH);
+
+  const port = BASE_PORT;
+  const URL = `http://localhost:${port}/`;
+  const { server, getStdout, getStderr, close } = await spawnServer(port);
   try {
     await waitForServer(URL);
 
@@ -150,13 +168,121 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
       await browser.close();
     }
   } catch (err) {
-    err.message += `\n\n--- server stdout ---\n${serverStdout}\n--- server stderr ---\n${serverStderr}`;
+    err.message += `\n\n--- server stdout ---\n${getStdout()}\n--- server stderr ---\n${getStderr()}`;
     throw err;
   } finally {
-    server.kill('SIGTERM');
-    await new Promise((resolve) => {
-      server.once('exit', resolve);
-      setTimeout(() => { server.kill('SIGKILL'); resolve(undefined); }, 2000).unref?.();
-    });
+    await close();
   }
 });
+
+test('Phase 2a.1.5 browser smoke: structural T1 -> SynthStrip -> brain mask download',
+  { timeout: 240000 },
+  async (t) => {
+    await fs.access(STRUCTURAL_PATH);
+
+    // Use a different port so a leftover server from the previous test
+    // (in case its teardown timed out) cannot collide.
+    const port = BASE_PORT + 1;
+    const URL = `http://localhost:${port}/`;
+    const { getStdout, getStderr, close } = await spawnServer(port);
+
+    try {
+      await waitForServer(URL);
+
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const page = await context.newPage();
+
+        const consoleMessages = [];
+        page.on('console', msg => consoleMessages.push(`[main:${msg.type()}] ${msg.text()}`));
+        page.on('pageerror', err => consoleMessages.push(`[main:pageerror] ${err.message}`));
+        // Worker contexts have their own console. Forward.
+        page.on('worker', worker => {
+          consoleMessages.push(`[worker:spawned] ${worker.url()}`);
+          worker.on('console', msg => consoleMessages.push(`[worker:${msg.type()}] ${msg.text()}`));
+          worker.on('close', () => consoleMessages.push(`[worker:closed]`));
+        });
+
+        await page.goto(URL, { waitUntil: 'load' });
+        await page.waitForFunction(
+          () => Boolean(window.app && window.app.viewerController && window.app.executor),
+          { timeout: 15000 }
+        );
+
+        // Drop the structural T1. setStructural() loads it into NiiVue and
+        // auto-fires runBrainExtraction(), which posts 'load' + 'run-synthstrip'
+        // to the worker. The worker fetches the SynthStrip ONNX from HF on
+        // first run (cached after) and runs the whole-volume WASM pipeline.
+        await page.setInputFiles('#structuralFileInput', STRUCTURAL_PATH);
+
+        // Wait for SynthStrip completion: brainmaskFile is set by
+        // handleStageData('brainmask') in lnm-app.js. Manual poll loop
+        // (Playwright's `waitForFunction({timeout})` second-arg overload is
+        // unreliable with no-arg page functions — was firing the 30s default
+        // instead of the configured 180s).
+        const SYNTH_TIMEOUT_MS = 180000;
+        const synthStart = Date.now();
+        let synthDone = false;
+        while (Date.now() - synthStart < SYNTH_TIMEOUT_MS) {
+          synthDone = await page.evaluate(() => Boolean(window.app && window.app.brainmaskFile));
+          if (synthDone) break;
+          await sleep(500);
+        }
+        if (!synthDone) {
+          const inPageConsole = await page
+            .$eval('#consoleOutput', el => el ? el.innerText : '(missing)')
+            .catch(() => '(unavailable)');
+          throw new Error(
+            `Brain mask did not appear within ${SYNTH_TIMEOUT_MS}ms\n` +
+            `--- captured browser-console messages ---\n${consoleMessages.slice(-30).join('\n')}\n` +
+            `--- in-page #consoleOutput widget ---\n${inPageConsole}`
+          );
+        }
+        t.diagnostic(`SynthStrip elapsed: ${((Date.now() - synthStart) / 1000).toFixed(1)}s`);
+
+        const downloadEnabled = await page.$eval('#downloadBrainMaskButton', el => !el.disabled);
+        assert.ok(
+          downloadEnabled,
+          '#downloadBrainMaskButton must enable after the brainmask stage completes\n' +
+          `console: ${consoleMessages.slice(-30).join('\n')}`
+        );
+
+        const [download] = await Promise.all([
+          page.waitForEvent('download', { timeout: 15000 }),
+          page.click('#downloadBrainMaskButton')
+        ]);
+        assert.match(
+          download.suggestedFilename(),
+          /\.nii(\.gz)?$/,
+          `download filename must end with .nii or .nii.gz (got ${download.suggestedFilename()})`
+        );
+        const downloadPath = await download.path();
+        assert.ok(downloadPath, 'playwright must materialise the download to a temp file');
+        const masked = await fs.readFile(downloadPath);
+        assert.ok(masked.length > 1000, `downloaded brain mask too small: ${masked.length} bytes`);
+        // Either a NIfTI-1 .nii (header byte[0]=0x5C, sizeof_hdr=348 LE) or
+        // a gzip .nii.gz (magic 0x1f 0x8b).
+        const isGzip = masked[0] === 0x1f && masked[1] === 0x8b;
+        const isNiftiHdr = masked[0] === 0x5c && masked[1] === 0x01;
+        assert.ok(
+          isGzip || isNiftiHdr,
+          `brain mask download is neither gzip nor a NIfTI-1 header; ` +
+          `got first bytes ${masked[0].toString(16)} ${masked[1].toString(16)}`
+        );
+
+        t.diagnostic(
+          `SynthStrip smoke green; downloaded brain mask = ${masked.length} bytes ` +
+          `(suggested filename: ${download.suggestedFilename()}).`
+        );
+      } finally {
+        await browser.close();
+      }
+    } catch (err) {
+      err.message += `\n\n--- server stdout ---\n${getStdout()}\n--- server stderr ---\n${getStderr()}`;
+      throw err;
+    } finally {
+      await close();
+    }
+  }
+);

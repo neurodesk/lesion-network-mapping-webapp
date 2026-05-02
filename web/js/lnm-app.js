@@ -18,8 +18,10 @@ function splitModelUrl(url) {
 }
 
 function arrayBufferToFile(buffer, name) {
-  const blob = new Blob([buffer], { type: 'application/gzip' });
-  return new File([blob], name, { type: 'application/gzip' });
+  // The worker emits uncompressed NIfTI bytes (createOutputNifti); files
+  // ending in .nii are raw, .nii.gz are gzip-compressed. We use .nii.
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  return new File([blob], name, { type: 'application/octet-stream' });
 }
 
 function binarise(typedArray) {
@@ -340,7 +342,12 @@ export class LesionNetworkMappingApp {
       modelName: name || 'synthstrip.onnx',
       modelBaseUrl: base,
       cacheKey: entry.cacheKey,
-      fast: false,
+      // SynthStrip 'fast' mode caps the resample target at 2mm (instead of
+      // 1mm). For 1-2mm inputs this is a no-op resample and brings the
+      // conformed inference volume down to ~7-8M voxels — within the WASM
+      // 4GB heap. 1mm-mode produces ~12-15M voxels and reliably ORT-OOMs
+      // in headless Chromium; the higher-quality path is a future option.
+      fast: true,
       dilate: false
     });
   }
@@ -357,7 +364,7 @@ export class LesionNetworkMappingApp {
   handleStageData(data) {
     if (!data || !data.stage) return;
     if (data.stage === 'brainmask' && data.niftiData) {
-      const file = arrayBufferToFile(data.niftiData, 'brainmask.nii.gz');
+      const file = arrayBufferToFile(data.niftiData, 'brainmask.nii');
       this.brainmaskFile = file;
       // Render as a translucent overlay over the structural; if the user
       // dropped a lesion manually before the structural, the lesion stage
@@ -381,7 +388,7 @@ export class LesionNetworkMappingApp {
     const url = URL.createObjectURL(this.brainmaskFile);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'lnm-brainmask.nii.gz';
+    a.download = 'lnm-brainmask.nii';
     document.body.appendChild(a);
     a.click();
     a.remove();

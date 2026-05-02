@@ -17,13 +17,20 @@ import * as ort from '../wasm/ort.webgpu.bundle.min.mjs';
 import * as InferencePipeline from './inference-pipeline.js';
 import { runSynthStrip } from './modules/brain-extraction.js';
 
-// nifti-reader-js is shipped as a UMD bundle that installs `self.nifti` as a
-// side-effect. Top-level await loads it once at worker boot.
-await import('../nifti-js/index.js');
-const nifti = globalThis.nifti;
-if (!nifti) {
-  throw new Error('nifti-reader-js failed to install globalThis.nifti at worker boot');
-}
+// nifti-reader-js is a UMD bundle that installs `self.nifti` as a side-
+// effect. We do NOT await its import at module top level: Chromium drops
+// any message posted while a module worker is suspended on top-level
+// await, instead of queueing it (the spec-mandated behaviour). Loading
+// nifti-js lazily and setting up onmessage immediately keeps the queue
+// working.
+const niftiReady = import('../nifti-js/index.js').then(() => {
+  if (!globalThis.nifti) {
+    throw new Error('nifti-reader-js failed to install globalThis.nifti at worker boot');
+  }
+  return globalThis.nifti;
+});
+let nifti = null;
+niftiReady.then(n => { nifti = n; });
 
 const MODEL_CACHE_NAME = 'lnm-models-v1';
 const MAX_PROCESSING_VOXELS = 100 * 1024 * 1024;
@@ -1232,6 +1239,15 @@ async function stepSynthStrip(params = {}) {
 
 self.onmessage = async (e) => {
   const { type, data } = e.data;
+  // nifti-reader-js is loaded lazily (see top-of-file comment) so the
+  // module-worker's first messages don't get dropped during a top-level
+  // await. Wait once per message so handlers can safely read `nifti`.
+  try {
+    await niftiReady;
+  } catch (err) {
+    postError(`Worker boot failed: ${err.message}`);
+    return;
+  }
 
   switch (type) {
     case 'init':

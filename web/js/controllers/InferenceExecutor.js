@@ -140,6 +140,22 @@ export class InferenceExecutor {
 
     this.worker = new Worker(`js/inference-worker.js?v=${VERSION}`, { type: 'module' });
 
+    // Surface module-worker boot failures (top-level imports, top-level
+    // await throws, etc.). Without this the orchestrator would sit forever
+    // waiting for 'initialized'.
+    this.worker.onerror = (event) => {
+      const detail = [event.message, event.filename, event.lineno && `line ${event.lineno}`]
+        .filter(Boolean).join(' ');
+      const message = `Worker error: ${detail || '(no detail)'}`;
+      this.updateOutput(message);
+      this.onError(message);
+    };
+    this.worker.onmessageerror = (event) => {
+      const message = `Worker messageerror: ${event?.data || '(no detail)'}`;
+      this.updateOutput(message);
+      this.onError(message);
+    };
+
     this.worker.onmessage = (e) => {
       const { type, ...data } = e.data;
 
