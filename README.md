@@ -72,6 +72,47 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phases 26–30 complete (v0.14.0)** — autonomy push.
+
+This batch closes work I'd previously framed as needing user input,
+after a re-review showed every blocker was softer than it sounded.
+
+- **Phase 26 — PCA principal-axis prealign**
+  [`web/js/modules/prealign.js`](web/js/modules/prealign.js) now exports
+  `covarianceOfMask`, `jacobiEigen3x3`, and `principalAxisAlign`. The
+  prealigner rotates the brain's principal axes onto MNI canonical
+  axes (forced right-handed) on top of the centroid match. Validated
+  on synthetic rotated phantoms AND on the real ds004884 T1 — PCA
+  lands the brain mask centroid at MNI160 voxel (79, 81, 96) within
+  1.5 voxels.
+
+- **Phase 27 — N=40 ADHD-200 connectome rebuild + HF upload**
+  Re-ran [`scripts/build_yeo7_connectome.py`](scripts/build_yeo7_connectome.py)
+  at the maximum N (40) supported by `nilearn.datasets.fetch_adhd`,
+  uploaded as `connectomes/yeo7_fc_pack_n40.bin` (cacheKey
+  `yeo7-fc-pack-adhd200-n40-v1`), bumped the manifest. New group t-stat
+  range [-13.85, 19.74]; old N=30 pack remains accessible via its
+  prior URL.
+
+- **Phase 28 — SynthMorph EP introspection**
+  Worker now tries WebGPU explicitly first, catches the failure, then
+  retries with WASM, and logs `SynthMorph EP=<name>`. Smoke surfaces
+  the chosen EP in test output. Catches a regression where a future
+  ORT upgrade silently always picks WASM (which OOMs on the 4 GB heap).
+
+- **Phase 29 — PCA on real anatomical data**
+  New `scripts/test_real_data_pca.mjs` runs the Phase 26 pipeline on
+  the ds004884 T1 with a quick intensity-threshold brain mask. Asserts
+  positive eigenvalues, dominant principal axis, det(R)=+1, and the
+  resampled centroid lands within 1.5 voxels of MNI center.
+
+- **Phase 30 — real-data Dice parity gate**
+  `tests/fixtures/ds004884-mini/expected_yeo_overlap.json` pins the
+  network voxel counts for ds004884; the bridge test asserts max-abs
+  diff stays under 25 voxels per network. Catches a silent shift in
+  the resample / bridge / overlap chain that doesn't crash but moves
+  the answer.
+
 **Phase 25 complete (v0.13.2)** — manifest checksum verifier.
 
 `scripts/test_manifest_checksums.cjs` walks every supported asset in
