@@ -128,6 +128,31 @@
             <button class="btn btn-primary btn-sm" id="computeNetworkMapButton">Compute network map</button>
             <button class="btn btn-secondary btn-sm" id="downloadNetworkMapButton" disabled>Download network map</button>
           </div>
+          <div class="threshold-controls" id="thresholdControls" style="margin-top:12px">
+            <h4 style="font-size:11px;text-transform:uppercase;color:var(--muted,#888);margin:0 0 6px 0">Threshold</h4>
+            <div class="param-row">
+              <label for="networkThresholdMode">Mode</label>
+              <select id="networkThresholdMode" class="param-input">
+                <option value="absolute" selected>Absolute</option>
+                <option value="percentile">Percentile of |voxels|</option>
+              </select>
+            </div>
+            <div class="param-row">
+              <label for="networkThresholdValue">Value <span id="networkThresholdValueLabel" class="param-help" style="float:right">0.00</span></label>
+              <input type="range" id="networkThresholdValue" class="param-input" min="0" max="1" step="0.01" value="0.5">
+            </div>
+            <div class="param-row">
+              <label><input type="checkbox" id="networkThresholdSymmetric"> Symmetric (|x| &gt; T)</label>
+            </div>
+            <div class="param-row">
+              <label for="networkThresholdMinCluster">Min cluster (voxels)</label>
+              <input type="number" id="networkThresholdMinCluster" class="param-input" min="0" step="1" value="0">
+            </div>
+            <p class="param-help" id="networkThresholdSummary" style="margin:6px 0 0 0">Compute a network map first to enable thresholding.</p>
+            <div class="step-buttons" style="margin-top:6px">
+              <button class="btn btn-secondary btn-sm" id="downloadThresholdedNetworkMapButton" disabled>Download thresholded mask</button>
+            </div>
+          </div>
         </div>
       </section>
     </div>

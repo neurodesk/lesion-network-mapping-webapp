@@ -41,7 +41,9 @@ for (const method of [
   // Phase 3.4 additions:
   'runRegistration',
   // Phase 4.4 additions:
-  'runFcNetworkMap', 'downloadNetworkMap'
+  'runFcNetworkMap', 'downloadNetworkMap',
+  // Phase 5 additions:
+  'applyNetworkThreshold', 'downloadThresholdedNetworkMap'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -139,6 +141,19 @@ assert.match(src, /\bloadConnectomeFromManifest\s*\(/,
   'orchestrator must load the FC pack via loadConnectomeFromManifest');
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
+
+// Phase 5: threshold UI wiring. applyNetworkThreshold reads the slider /
+// mode / symmetric / min-cluster controls and updates either the
+// thresholded mask state or the live overlay; downloadThresholdedNetworkMap
+// emits a Blob NIfTI with the thresholded binary mask.
+assert.match(src, /from\s+['"]\.\/modules\/threshold\.js['"]/,
+  'lnm-app.js must import threshold.js');
+assert.match(src, /\bapplyThreshold\s*\(/,
+  'orchestrator must call applyThreshold(...)');
+assert.match(src, /['"]thresholdValue['"]|getElementById\(['"]thresholdValue['"]\)|networkThresholdValue/,
+  'orchestrator must read the threshold slider value');
+assert.match(src, /thresholdMode|networkThresholdMode/,
+  'orchestrator must read the threshold mode (absolute / percentile)');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

@@ -6,6 +6,7 @@ import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
+import { applyThreshold } from './modules/threshold.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
@@ -66,6 +67,10 @@ export class LesionNetworkMappingApp {
     this.brainmaskFile = null;     // populated by handleStageData('brainmask')
     this.lesionMaskFile = null;    // populated by handleStageData('segmentation')
     this.networkMapFile = null;    // Phase 4: populated by runFcNetworkMap
+    this.networkMapData = null;    // Phase 5: raw Float32Array for re-thresholding
+    this.networkMapDims = null;
+    this.networkMapSpacing = null;
+    this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
 
@@ -192,6 +197,56 @@ export class LesionNetworkMappingApp {
     if (downloadFcBtn) {
       downloadFcBtn.disabled = true;
       downloadFcBtn.addEventListener('click', () => this.downloadNetworkMap());
+    }
+
+    const thresholdValue = document.getElementById('networkThresholdValue');
+    const thresholdMode = document.getElementById('networkThresholdMode');
+    const thresholdSym = document.getElementById('networkThresholdSymmetric');
+    const thresholdMinCluster = document.getElementById('networkThresholdMinCluster');
+    const thresholdValueLabel = document.getElementById('networkThresholdValueLabel');
+    const updateThresholdLabel = () => {
+      if (!thresholdValueLabel || !thresholdValue) return;
+      const mode = thresholdMode ? thresholdMode.value : 'absolute';
+      const v = Number(thresholdValue.value);
+      thresholdValueLabel.textContent = mode === 'percentile'
+        ? `${v.toFixed(0)}%`
+        : v.toFixed(2);
+    };
+    const triggerRecompute = () => {
+      updateThresholdLabel();
+      if (this.networkMapData) {
+        try { this.applyNetworkThreshold(); }
+        catch (err) { this.updateOutput(`Threshold failed: ${err.message}`); }
+      }
+    };
+    if (thresholdMode) {
+      thresholdMode.addEventListener('change', () => {
+        // Re-tune slider range to match the chosen mode.
+        if (thresholdValue) {
+          if (thresholdMode.value === 'percentile') {
+            thresholdValue.min = '0';
+            thresholdValue.max = '100';
+            thresholdValue.step = '1';
+            thresholdValue.value = '95';
+          } else {
+            thresholdValue.min = '0';
+            thresholdValue.max = '1';
+            thresholdValue.step = '0.01';
+            thresholdValue.value = '0.5';
+          }
+        }
+        triggerRecompute();
+      });
+    }
+    if (thresholdValue) thresholdValue.addEventListener('input', triggerRecompute);
+    if (thresholdSym) thresholdSym.addEventListener('change', triggerRecompute);
+    if (thresholdMinCluster) thresholdMinCluster.addEventListener('change', triggerRecompute);
+    updateThresholdLabel();
+
+    const downloadThreshBtn = document.getElementById('downloadThresholdedNetworkMapButton');
+    if (downloadThreshBtn) {
+      downloadThreshBtn.disabled = true;
+      downloadThreshBtn.addEventListener('click', () => this.downloadThresholdedNetworkMap());
     }
 
     const copyConsole = document.getElementById('copyConsole');
@@ -531,14 +586,19 @@ export class LesionNetworkMappingApp {
     );
     const fcMap = fcWeightedSum(weights, pack.tMaps, dims);
 
+    // Stash for Phase 5 re-thresholding without recomputing the FC sum.
+    this.networkMapData = fcMap;
+    this.networkMapDims = dims;
+    const spacingMm = manifestEntry.atlasResolutionMm || 2;
+    this.networkMapSpacing = [spacingMm, spacingMm, spacingMm];
+
     // Wrap as a NIfTI for download / overlay. The Yeo atlas's spacing /
     // affine is the canonical pose for the FC pack — manifestEntry from
     // the connectome carries atlasResolutionMm; the Yeo atlas itself is
     // the same grid (99x117x95 2mm).
-    const spacingMm = manifestEntry.atlasResolutionMm || 2;
     const niftiBuffer = writeNifti1(fcMap, {
       dims,
-      spacing: [spacingMm, spacingMm, spacingMm],
+      spacing: this.networkMapSpacing,
       description: 'LNM Yeo7 FC weighted sum'
     });
     this.networkMapFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map.nii');
@@ -575,6 +635,75 @@ export class LesionNetworkMappingApp {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'lnm-network-map.nii';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Phase 5: re-threshold the cached network map and update the
+  // thresholded-mask download. The 'live' overlay update for the slider is
+  // best done via NiiVue cal_min/cal_max (no data swap), but this method
+  // is the source of truth for the *binary* thresholded mask used by the
+  // download button + the parity tests.
+  //
+  // Reads the threshold UI controls:
+  //   #networkThresholdValue   range slider, 0..100 (% for percentile;
+  //                            t-stat for absolute, scaled by /10).
+  //   #networkThresholdMode    select: 'absolute' | 'percentile'.
+  //   #networkThresholdSymmetric  checkbox.
+  //   #networkThresholdMinCluster number input.
+  applyNetworkThreshold() {
+    if (!this.networkMapData) {
+      this.updateOutput('Compute the network map first.');
+      return null;
+    }
+    const valueEl = document.getElementById('networkThresholdValue');
+    const modeEl = document.getElementById('networkThresholdMode');
+    const symEl = document.getElementById('networkThresholdSymmetric');
+    const minClEl = document.getElementById('networkThresholdMinCluster');
+    const rawValue = valueEl ? Number(valueEl.value) : 0;
+    const mode = modeEl ? modeEl.value : 'absolute';
+    const symmetric = symEl ? !!symEl.checked : false;
+    const minClusterVoxels = minClEl ? Number(minClEl.value) || 0 : 0;
+    // For the slider: 'percentile' mode interprets [0..100] as a percentile;
+    // 'absolute' mode interprets the slider value directly as a t-stat.
+    const value = mode === 'percentile' ? rawValue / 100 : rawValue;
+
+    const mask = applyThreshold(this.networkMapData, this.networkMapDims, {
+      mode, value, symmetric, minClusterVoxels
+    });
+    let count = 0;
+    for (let i = 0; i < mask.length; i++) count += mask[i];
+    const niftiBuffer = writeNifti1(mask, {
+      dims: this.networkMapDims,
+      spacing: this.networkMapSpacing,
+      description: `LNM thresholded ${mode}=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
+    });
+    this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii');
+    const dlBtn = document.getElementById('downloadThresholdedNetworkMapButton');
+    if (dlBtn) dlBtn.disabled = false;
+    const summaryEl = document.getElementById('networkThresholdSummary');
+    if (summaryEl) {
+      summaryEl.textContent =
+        `${count.toLocaleString()} voxels survive ${mode}` +
+        (symmetric ? ' (|t|)' : ' (t)') +
+        ` > ${value}` +
+        (minClusterVoxels > 1 ? ` + cluster≥${minClusterVoxels}` : '');
+    }
+    return mask;
+  }
+
+  downloadThresholdedNetworkMap() {
+    if (!this.thresholdedMaskFile) {
+      // Try to (re)compute first.
+      this.applyNetworkThreshold();
+      if (!this.thresholdedMaskFile) return;
+    }
+    const url = URL.createObjectURL(this.thresholdedMaskFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lnm-network-map-thresh.nii';
     document.body.appendChild(a);
     a.click();
     a.remove();

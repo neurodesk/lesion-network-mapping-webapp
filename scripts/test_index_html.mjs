@@ -45,7 +45,13 @@ const requiredIds = [
   '#runRegistrationButton',
   // Phase 4.4 additions: Network map subsection.
   '#computeNetworkMapButton',
-  '#downloadNetworkMapButton'
+  '#downloadNetworkMapButton',
+  // Phase 5 additions: threshold controls + thresholded download.
+  '#networkThresholdValue',
+  '#networkThresholdMode',
+  '#networkThresholdSymmetric',
+  '#networkThresholdMinCluster',
+  '#downloadThresholdedNetworkMapButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);
