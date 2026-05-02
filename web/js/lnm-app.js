@@ -74,6 +74,8 @@ export class LesionNetworkMappingApp {
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.mniLesionFile = null;       // Phase 6: warped lesion at MNI160 1mm (pre-resample)
     this._mniLesionResolver = null;  // Phase 6: one-shot promise for warp-mask stage data
+    this._perfStats = [];            // Phase 19: per-stage runtime markers
+    this._perfRunStart = null;       // Phase 19: total runFullPipeline start
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
 
@@ -924,15 +926,42 @@ export class LesionNetworkMappingApp {
       }
     }
 
+    this._perfStats = [];
+    this._perfRunStart = this._now();
     for (const stage of pipeline.stages) {
+      const stageStart = this._now();
       try {
         await this._runStage(stage);
       } catch (err) {
         this.updateOutput(`Stage '${stage.id}' (${stage.module}) failed: ${err.message}`);
         return;
       }
+      const elapsedMs = this._now() - stageStart;
+      this._perfStats.push({ id: stage.id, module: stage.module, ms: elapsedMs });
+      this.updateOutput(`[perf] ${stage.id} (${stage.module}): ${this._formatMs(elapsedMs)}`);
     }
-    this.updateOutput('=== Pipeline complete ===');
+    const totalMs = this._now() - this._perfRunStart;
+    this.updateOutput(
+      `=== Pipeline complete in ${this._formatMs(totalMs)} ` +
+      `(${this._perfStats.length} stage${this._perfStats.length === 1 ? '' : 's'}) ===`
+    );
+  }
+
+  // Phase 19: monotonic clock; falls back to Date.now in non-browser
+  // environments (the contract test imports the module under Node, so
+  // performance.now is always defined there too — but we keep the guard
+  // for older runtimes / shims).
+  _now() {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now();
+    }
+    return Date.now();
+  }
+
+  _formatMs(ms) {
+    if (ms < 1000) return `${ms.toFixed(0)} ms`;
+    if (ms < 60_000) return `${(ms / 1000).toFixed(2)} s`;
+    return `${(ms / 60_000).toFixed(2)} min`;
   }
 
   // Phase 15: stage dispatch. Maps a pipeline stage's `module` to the

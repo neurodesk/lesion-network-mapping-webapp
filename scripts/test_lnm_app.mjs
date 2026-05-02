@@ -49,7 +49,9 @@ for (const method of [
   // Phase 13 additions: dropdown surface + about-modal version wiring.
   'populatePipelineSelect', 'populateVersionLabel',
   // Phase 15 additions: stage dispatch + threshold-default helper.
-  '_runStage', '_applyThresholdDefaults'
+  '_runStage', '_applyThresholdDefaults',
+  // Phase 19 additions: per-stage perf instrumentation helpers.
+  '_now', '_formatMs'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -163,6 +165,16 @@ assert.match(src, /populateVersionLabel\s*\(/,
   'populateVersionLabel must be defined');
 assert.match(src, /aboutAppVersion/,
   'populateVersionLabel must reference the #aboutAppVersion DOM id');
+
+// Phase 19: per-stage perf instrumentation. runFullPipeline must collect
+// stage timings into _perfStats and log a [perf] line per stage. Source-
+// grep guards so a future refactor that drops the timing loses the test.
+assert.match(src, /this\._perfStats\s*=\s*\[\s*\]/,
+  'runFullPipeline must reset _perfStats at start');
+assert.match(src, /\[perf\]/,
+  'each stage must emit a [perf] line into the console');
+assert.match(src, /performance\.now/,
+  '_now must call performance.now() when available');
 
 // Phase 15: _runStage must dispatch on stage.module and cover every
 // implemented module. Source-grep that each module's case-clause exists

@@ -72,6 +72,15 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 19 complete (v0.11.0)** — per-stage perf instrumentation.
+
+`runFullPipeline()` now wraps each stage in `performance.now()` markers,
+logs a `[perf] <stage> (<module>): NN.NN s` line per stage, and emits a
+final `=== Pipeline complete in X ===` summary with the total runtime
+and stage count. Stage timings are also collected into
+`window.app._perfStats` for inspection (e.g. `JSON.stringify(app._perfStats)`
+in the dev console). No external deps; same suite stays green.
+
 **Phase 15 complete (v0.10.0)** — pipeline-driven `runFullPipeline`.
 
 - `runFullPipeline()` now iterates `selectedPipeline.stages` instead of
