@@ -40,6 +40,17 @@ Drop a structural T1; the app:
    downloadable as `lnm-lesion.nii`. Sliding-window 128³ patches,
    threshold 0.4, min cluster 30, overlap 0.25, no TTA.
 
+**Phase 4 complete (v0.4.0)** — Yeo7 group functional-connectivity weighted
+sum. After running "Compute overlap" on a manual MNI 2 mm lesion mask, click
+"Compute network map" — the orchestrator fetches a 30 MB Yeo7 FC pack (7
+brain-wide t-maps, computed from 30 ADHD-200 subjects via
+[`scripts/build_yeo7_connectome.py`](scripts/build_yeo7_connectome.py)),
+weights each network's t-map by the lesion's share of that network, and
+emits a Float32 NIfTI on the Yeo7 atlas grid (99×117×95 2 mm). Output
+renders as a red-yellow overlay and downloads as `lnm-network-map.nii`.
+Pure main-thread JS — no worker round-trip; the math is a per-voxel linear
+combination via [`web/js/modules/fc-weighted-sum.js`](web/js/modules/fc-weighted-sum.js).
+
 **Phase 3 complete (v0.3.0)** — deformable MNI registration via
 **SynthMorph** (Hoffmann 2022, Apache-2.0). Click "Run MNI registration"
 on a 160×160×192 1mm structural T1; the app fetches the SynthMorph
@@ -61,8 +72,8 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
-Phases 4–5 (parcel-FC weighted sum, thresholding / network-map
-overlay) remain.
+Phase 5 (thresholding + significance-cluster cleanup + symmetric/
+positive-only toggle on the network-map overlay) remains.
 
 ## Attribution
 
@@ -77,7 +88,7 @@ Pipeline-specific dependencies (added incrementally):
 - **Lesion segmentation**: SynthStroke baseline (Chalcroft 2025 MELBA, MIT); 3D MONAI UNet, T1.
 - **Registration**: SynthMorph (Hoffmann 2022, Apache-2.0); UNet-only ONNX cut (layers 0–33); JS-side SVF integration + warp.
 - **Atlas**: Schaefer 2018 400 × 7 networks (CC-BY).
-- **Connectome** (Phase 4): Lead-DBS GSP1000 group functional connectome.
+- **Connectome**: ADHD-200 group functional connectivity (computed by `scripts/build_yeo7_connectome.py`, N=30 subjects, Yeo7 ROI seed-to-voxel t-maps); Lead-DBS GSP1000 + Schaefer 400 are a future hardening upgrade.
 
 ## Local development
 
@@ -85,10 +96,10 @@ Pipeline-specific dependencies (added incrementally):
 npm install
 bash web/setup.sh   # downloads ONNX Runtime WASM
 bash web/run.sh     # serves http://localhost:8080/
-npm test            # 11 Node-only suites: lint, tasks, manifest, parcel-overlap,
+npm test            # 12 Node-only suites: lint, tasks, manifest, parcel-overlap,
                     #                      overlap-export, volume-utils,
-                    #                      brain-extraction, registration, worker,
-                    #                      app, html
+                    #                      brain-extraction, registration,
+                    #                      fc-weighted-sum, worker, app, html
 ```
 
 ### Browser smoke tests
@@ -112,6 +123,7 @@ against a real MNI152 anatomical T1. Pipeline-correctness checks
 npm run test:synthstrip-parity     # SynthStrip:        ~5 s
 npm run test:lesion-seg-parity     # Lesion seg:        ~5 s; Dice >= 0.50 vs ds004884 ground truth
 npm run test:registration-parity   # SynthMorph:       ~37 s (CPU EP); self-pair near-identity
+npm run test:fc-weighted-sum-parity # FC weighted sum: ~1 s; identity case bit-exact
 ```
 
 All fetch their respective ONNX models live from Hugging Face on first
