@@ -72,6 +72,13 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 14 complete (v0.9.1)** — cancel-button wiring. The
+`#cancelButton` next to the status line now actually terminates the
+worker via `executor.cancel()`. Disabled state is driven from
+`handleWorkerProgress` (enabled while progress fraction is in [0, 1))
+and `handleStepComplete` (disabled at end-of-step), matching the
+SCT-era behaviour for which the button was originally drawn.
+
 **Phase 13 complete (v0.9.0)** — UX surface.
 
 - Pipeline dropdown now lists every runnable pipeline declared in

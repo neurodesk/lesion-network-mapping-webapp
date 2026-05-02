@@ -162,6 +162,14 @@ assert.match(src, /populateVersionLabel\s*\(/,
 assert.match(src, /aboutAppVersion/,
   'populateVersionLabel must reference the #aboutAppVersion DOM id');
 
+// Phase 14: cancel button must be wired to executor.cancel(). Source-grep
+// for the cancel-button id + an executor.cancel call so a regression that
+// re-disables the button at boot but never invokes cancel surfaces here.
+assert.match(src, /['"]cancelButton['"]/,
+  'cancel-button DOM id must be referenced');
+assert.match(src, /this\.executor\.cancel\s*\(/,
+  'cancel button must invoke this.executor.cancel(...)');
+
 // Phase 6: bridge module + warp+resample wiring. applyRegistrationToLesion
 // must invoke executor.runWarpMask, decode the 'mni-lesion' stage data, and
 // resample onto the Yeo grid via the new resample module.

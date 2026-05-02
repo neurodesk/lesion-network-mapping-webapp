@@ -207,6 +207,19 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    // Phase 14: cancel button terminates the worker. The executor's
+    // cancel() rejects pending restores + clears running-step state and
+    // surfaces a 'Cancelled' status. Disabled state is driven from
+    // handleWorkerProgress / handleStepComplete.
+    const cancelBtn = document.getElementById('cancelButton');
+    if (cancelBtn) {
+      cancelBtn.disabled = true;
+      cancelBtn.addEventListener('click', () => {
+        try { this.executor.cancel(); }
+        catch (err) { this.updateOutput(`Cancel failed: ${err.message}`); }
+      });
+    }
+
     const runFcBtn = document.getElementById('computeNetworkMapButton');
     if (runFcBtn) {
       runFcBtn.addEventListener('click', () => {
@@ -486,10 +499,18 @@ export class LesionNetworkMappingApp {
   handleWorkerProgress(frac, label) {
     if (!this.progress) return;
     this.progress.setProgress(frac, label);
+    // Phase 14: enable the cancel button while the worker is mid-run.
+    const cancelBtn = document.getElementById('cancelButton');
+    if (cancelBtn) {
+      cancelBtn.disabled = !(typeof frac === 'number' && frac >= 0 && frac < 1);
+    }
   }
 
   handleStepComplete(step) {
     this.updateOutput(`Worker step '${step}' complete.`);
+    // Phase 14: a completed step ends the cancellable window.
+    const cancelBtn = document.getElementById('cancelButton');
+    if (cancelBtn) cancelBtn.disabled = true;
   }
 
   handleStageData(data) {
