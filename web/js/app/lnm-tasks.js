@@ -53,6 +53,30 @@ export const LNM_PIPELINES = [
     ]
   },
   {
+    id: 'lnm-network-map',
+    displayName: 'Lesion network map (Yeo7 + group-FC pack)',
+    description:
+      'Manual-mask path with FC weighted sum: drop a binary lesion mask in ' +
+      'MNI152NLin2009cAsym 2mm, get the per-network overlap (Phase 1) PLUS ' +
+      'a brain-wide Yeo7-weighted FC t-map. Each Yeo network contributes its ' +
+      'group-level t-stat connectivity map weighted by the lesion\'s share ' +
+      'of that network. Output is a Float32 NIfTI on the Yeo7 atlas grid.',
+    stages: [
+      {
+        id: 'overlap',
+        module: 'parcel-overlap',
+        atlasAssetId: 'yeo7-2mm',
+        required: true
+      },
+      {
+        id: 'fc',
+        module: 'fc-weighted-sum',
+        connectomeAssetId: 'yeo7-fc-pack',
+        required: true
+      }
+    ]
+  },
+  {
     id: 'lnm-yeo-auto',
     displayName: 'Auto Yeo overlap (T1 -> SynthStrip -> seg -> MNI -> Yeo)',
     description:
@@ -151,7 +175,10 @@ const IMPLEMENTED_MODULES = new Set([
   'inference-pipeline',
   // Phase 3: SynthMorph SVF in web/js/modules/registration.js + integrate /
   // upsample / warp helpers, dispatched by the worker's 'run-register' op.
-  'registration'
+  'registration',
+  // Phase 4: Yeo7 group-FC weighted sum in web/js/modules/fc-weighted-sum.js,
+  // dispatched by the worker's 'run-fc-weighted-sum' op.
+  'fc-weighted-sum'
 ]);
 
 export function getPipelineById(id) {

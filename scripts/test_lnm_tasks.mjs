@@ -68,6 +68,17 @@ assert.equal(
   'a stage missing its required assets must be flagged not-runnable'
 );
 
+// Phase 4: lnm-network-map pipeline (manual MNI lesion mask + Yeo7 atlas
+// + Yeo7 group-FC pack -> per-voxel weighted-sum t-map).
+const netMap = getPipelineById('lnm-network-map');
+assert.ok(netMap, "Phase 4 must define an 'lnm-network-map' pipeline");
+const fcStage = netMap.stages.find(s => s.id === 'fc');
+assert.ok(fcStage, "lnm-network-map must declare an 'fc' stage");
+assert.equal(fcStage.module, 'fc-weighted-sum');
+assert.equal(fcStage.connectomeAssetId, 'yeo7-fc-pack');
+assert.equal(isStageRunnable(fcStage), true,
+  'fc stage must be runnable (Phase 4 wires fc-weighted-sum)');
+
 // Phase 3: lnm-yeo-auto pipeline (T1 -> SynthStrip -> seg -> register ->
 // warp lesion to MNI -> Yeo 7-network overlap). Declaring the structure;
 // individual stage runnability requires the matching modules to be in

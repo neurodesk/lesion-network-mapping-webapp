@@ -18,6 +18,14 @@
       ]
     },
     {
+      "id": "lnm-network-map",
+      "displayName": "Lesion network map (Yeo7 + group-FC pack)",
+      "stages": [
+        { "id": "overlap", "module": "parcel-overlap",   "atlasAssetId": "yeo7-2mm",     "required": true },
+        { "id": "fc",      "module": "fc-weighted-sum", "connectomeAssetId": "yeo7-fc-pack", "required": true }
+      ]
+    },
+    {
       "id": "lnm-yeo-auto",
       "displayName": "Auto Yeo overlap (T1 -> SynthStrip -> seg -> MNI -> Yeo)",
       "stages": [
@@ -147,6 +155,24 @@
     }
   ],
   "connectomeAssets": [
+    {
+      "id": "yeo7-fc-pack",
+      "filename": "connectomes/yeo7_fc_pack.bin",
+      "indexFilename": "connectomes/yeo7_fc_pack.index.json",
+      "sizeBytes": 30810780,
+      "checksum": "sha256:63d969fbb34a6eb07915e4d96e266281ff4e2107e56b07831717691e06fd0c58",
+      "cacheKey": "yeo7-fc-pack-adhd200-n30-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/connectomes/yeo7_fc_pack.bin",
+      "indexSourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/connectomes/yeo7_fc_pack.index.json",
+      "sourceVersion": "ADHD-200-N30-fetch_adhd-fp32",
+      "atlasAssetId": "yeo7-2mm",
+      "atlasResolutionMm": 2,
+      "parcelCount": 7,
+      "dtype": "float32",
+      "statistic": "tstat",
+      "supportStatus": "supported",
+      "_comment": "Phase 4 group-FC pack. 7 brain-wide one-sample t-maps (one per Yeo network) stacked Float32 in row-major order. Computed by scripts/build_yeo7_connectome.py from ADHD-200 30 subjects via nilearn fetch_adhd: per-subject Yeo7 ROI mean -> Pearson r-map vs every brain voxel -> Fisher-z -> group t-stat. Same 99x117x95 2mm grid as the yeo7-2mm atlas. Companion index.json carries byte offsets per network + label name + statistic metadata."
+    },
     {
       "id": "gsp1000-schaefer400-4mm",
       "filename": "schaefer400_gsp1000_4mm.bin",

@@ -79,6 +79,20 @@ assert.ok(Array.isArray(synmorph.inputShape) && synmorph.inputShape.length === 5
 assert.ok(Array.isArray(synmorph.svfShape) && synmorph.svfShape.length === 5,
   'lnm-synthmorph-mni must declare a 5D svfShape (1, X/2, Y/2, Z/2, 3)');
 
+// Phase 4: Yeo7 group-FC pack (7 brain-wide t-maps stacked into one
+// Float32 .bin). Lives under connectomeAssets so it gets the same
+// streaming fetch + cache treatment as future Schaefer400 packs.
+const yeoFc = manifest.connectomeAssets.find(a => a.id === 'yeo7-fc-pack');
+assert.ok(yeoFc, "Phase 4 manifest must register 'yeo7-fc-pack' under connectomeAssets");
+assert.equal(yeoFc.supportStatus, 'supported',
+  'yeo7-fc-pack must be supported once the pack is uploaded');
+assert.match(yeoFc.checksum, /^sha256:[0-9a-f]{64}$/i);
+assert.ok(yeoFc.indexFilename && /\.json$/i.test(yeoFc.indexFilename),
+  'yeo7-fc-pack must declare an indexFilename (byte-offsets JSON)');
+assert.equal(yeoFc.parcelCount, 7, "Yeo7 FC pack must declare parcelCount=7");
+assert.equal(yeoFc.dtype, 'float32');
+assert.equal(yeoFc.statistic, 'tstat');
+
 // Phase 2a.2: lesion-segmentation model (SynthStroke baseline) registered.
 const stroke = manifest.modelAssets.find(a => a.id === 'lnm-stroke-lesion');
 assert.ok(stroke, "Phase 2a.2 manifest must register 'lnm-stroke-lesion' under modelAssets");
