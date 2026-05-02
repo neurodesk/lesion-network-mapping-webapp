@@ -56,7 +56,9 @@ const requiredIds = [
   '#applyRegistrationToLesionButton',
   '#runFullPipelineButton',
   // Phase 16 addition: in-browser affine pre-registration.
-  '#prealignToMniButton'
+  '#prealignToMniButton',
+  // Phase 21 addition: clear-results / new-run UX control.
+  '#clearResultsButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);

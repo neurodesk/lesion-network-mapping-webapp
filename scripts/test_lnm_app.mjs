@@ -53,7 +53,9 @@ for (const method of [
   // Phase 19 additions: per-stage perf instrumentation helpers.
   '_now', '_formatMs',
   // Phase 16 additions: in-browser affine pre-registration to MNI160 1mm.
-  'prealignToMni160'
+  'prealignToMni160',
+  // Phase 21 additions: clear-results control.
+  'clearResults'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);

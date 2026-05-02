@@ -72,6 +72,21 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 21+22 complete (v0.13.0)** — UX + deploy budget.
+
+- **Reset state button**: New "Clear results" button in the Results
+  section drops every intermediate file (overlap, network map,
+  thresholded mask, brain mask, lesion mask, MNI lesion, network map
+  raw data) + re-disables every download button + clears the table
+  body and threshold summary. Structural file is retained so users
+  can quickly re-run on the same input.
+- **Deploy-size budget**: New `scripts/test_deploy_budget.cjs` walks
+  the static deploy artifact (web/ minus _dev_cache) and tallies
+  every supported manifest entry's `sizeBytes` for runtime fetches.
+  Asserts static < 60 MB (currently 38) and total cold-load < 300 MB
+  (currently 247). Locks the original plan's "<200 MB cold load"
+  acceptance criterion against future model swaps.
+
 **Phase 18 complete (v0.12.1)** — real-data bridge integration test.
 
 The unit suites covered the resample math on synthetic phantoms and

@@ -232,6 +232,11 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    const clearBtn = document.getElementById('clearResultsButton');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => this.clearResults({ full: false }));
+    }
+
     const runFcBtn = document.getElementById('computeNetworkMapButton');
     if (runFcBtn) {
       runFcBtn.addEventListener('click', () => {
@@ -1130,6 +1135,62 @@ export class LesionNetworkMappingApp {
     if (minClEl && typeof defaults.minClusterVoxels === 'number') {
       minClEl.value = String(defaults.minClusterVoxels);
     }
+  }
+
+  // Phase 21: clear all intermediate pipeline state so the user can start
+  // a fresh run without reloading the page. Resets every result slot, the
+  // viewer, and the threshold UI surface; preserves the structural file
+  // (the user usually wants to re-run on the same input) unless `full`
+  // is set.
+  clearResults({ full = false } = {}) {
+    this.overlapResult = null;
+    this.brainmaskFile = null;
+    this.lesionMaskFile = null;
+    this.networkMapFile = null;
+    this.networkMapData = null;
+    this.networkMapDims = null;
+    this.networkMapSpacing = null;
+    this.thresholdedMaskFile = null;
+    this.mniLesionFile = null;
+    if (full) {
+      this.structuralFile = null;
+      this.lesionFile = null;
+    }
+
+    // Re-disable every download / threshold-output button so the UI matches
+    // the cleared state.
+    const buttonIds = [
+      'downloadOverlapCsv',
+      'downloadBrainMaskButton',
+      'downloadLesionMaskButton',
+      'downloadNetworkMapButton',
+      'downloadThresholdedNetworkMapButton'
+    ];
+    for (const id of buttonIds) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    }
+    // Wipe the overlap table body if present.
+    const tbody = document.querySelector('#networkOverlapTable tbody');
+    if (tbody) tbody.innerHTML = '';
+    // Reset the threshold summary.
+    const summaryEl = document.getElementById('networkThresholdSummary');
+    if (summaryEl) summaryEl.textContent = 'Compute a network map first to enable thresholding.';
+    // Hide outside-atlas warning.
+    this.showOutsideAtlasWarning(0, 0);
+
+    if (this.executor && typeof this.executor.clearResults === 'function') {
+      this.executor.clearResults();
+    }
+
+    // Restore the structural file in the viewer (or clear entirely on full reset).
+    if (full || !this.structuralFile) {
+      try { this.viewerController.clearAll?.(); } catch (e) { /* non-fatal */ }
+    } else if (this.structuralFile) {
+      this.viewerController.loadBaseVolume(this.structuralFile, { stage: 'structural' })
+        .catch(err => this.updateOutput(`Viewer reload after reset failed: ${err.message}`));
+    }
+    this.updateOutput(full ? 'All state cleared.' : 'Results cleared (structural retained).');
   }
 
   async _lesionFileMatchesYeoGrid() {
