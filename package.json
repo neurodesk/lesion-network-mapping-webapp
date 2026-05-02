@@ -17,7 +17,8 @@
     "test:html": "node --no-warnings scripts/test_index_html.mjs",
     "test:smoke": "node --test --test-timeout=180000 scripts/test_browser_smoke.mjs",
     "test:synthstrip-parity": "node --no-warnings scripts/test_synthstrip_parity.mjs",
-    "test:lesion-seg-parity": "node --no-warnings scripts/test_lesion_seg_parity.mjs"
+    "test:lesion-seg-parity": "node --no-warnings scripts/test_lesion_seg_parity.mjs",
+    "test:registration-parity": "node --no-warnings scripts/test_registration_parity.mjs"
   },
   "dependencies": {
     "nifti-reader-js": "^0.8.0",
