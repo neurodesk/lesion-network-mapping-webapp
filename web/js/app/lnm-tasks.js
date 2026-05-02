@@ -117,6 +117,10 @@ export const LNM_PIPELINES = [
   },
   {
     id: 'lnm-default',
+    // Hidden until Schaefer400 / GSP1000 assets land — see plan note in
+    // README ("Schaefer 400 / GSP1000 connectome upgrade is license-
+    // blocked").
+    hidden: true,
     displayName: 'Lesion Network Mapping (Schaefer400 / GSP1000)',
     description:
       'Full pipeline: ONNX lesion segmentation -> deep-learning MNI ' +
@@ -207,6 +211,21 @@ export function isStageRunnable(stage) {
       stage.modelAssetId || stage.atlasAssetId || stage.connectomeAssetId
     );
     if (!hasAsset) return false;
+  }
+  return true;
+}
+
+// Phase 13: a pipeline is "runnable" only when every required stage is
+// runnable AND the pipeline is not flagged hidden:true (placeholder
+// declarations whose assets aren't shipped yet, e.g. Schaefer400/GSP1000).
+// The dropdown filter uses this so partially-implemented pipelines stay
+// hidden until they actually work end-to-end.
+export function isPipelineRunnable(pipeline) {
+  if (!pipeline || !Array.isArray(pipeline.stages)) return false;
+  if (pipeline.hidden === true) return false;
+  for (const stage of pipeline.stages) {
+    if (stage.required === false) continue;
+    if (!isStageRunnable(stage)) return false;
   }
   return true;
 }

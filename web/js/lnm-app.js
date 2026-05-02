@@ -1,7 +1,7 @@
 import { FileIOController } from './controllers/FileIOController.js';
 import { ViewerController } from './controllers/ViewerController.js';
 import { InferenceExecutor } from './controllers/InferenceExecutor.js';
-import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
+import { LNM_PIPELINES, getPipelineById, isPipelineRunnable } from './app/lnm-tasks.js';
 import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
@@ -109,6 +109,7 @@ export class LesionNetworkMappingApp {
     this.viewerController.registerSctColormap(YEO7_COLORMAP, 'lnm-yeo7');
     this.bindEvents();
     this.populatePipelineSelect();
+    this.populateVersionLabel();
     this.updateOutput('Ready.');
   }
 
@@ -350,13 +351,26 @@ export class LesionNetworkMappingApp {
     if (!pipelineSelect) return;
 
     pipelineSelect.innerHTML = '';
-    for (const pipeline of LNM_PIPELINES.filter(p => p.id === 'lnm-yeo-only')) {
+    // Phase 13: surface every fully-runnable pipeline (every required
+    // stage's module is implemented + has its asset). The 'Run full
+    // pipeline' button auto-detects manual-mask vs auto-T1 input
+    // regardless of selection; the dropdown is informational for now.
+    const runnable = LNM_PIPELINES.filter(isPipelineRunnable);
+    for (const pipeline of runnable) {
       const option = document.createElement('option');
       option.value = pipeline.id;
       option.textContent = pipeline.displayName;
       pipelineSelect.appendChild(option);
     }
     pipelineSelect.value = this.selectedPipeline?.id || 'lnm-yeo-only';
+  }
+
+  // Phase 13: populate the About modal's version line from Config.VERSION
+  // so users always see what they're running. Called from init() once
+  // the DOM is wired.
+  populateVersionLabel() {
+    const el = document.getElementById('aboutAppVersion');
+    if (el) el.textContent = Config.VERSION || '';
   }
 
   async setStructural(file) {

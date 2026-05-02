@@ -72,6 +72,17 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 13 complete (v0.9.0)** — UX surface.
+
+- Pipeline dropdown now lists every runnable pipeline declared in
+  `lnm-tasks.js`, not just `lnm-yeo-only`. The Schaefer400 / GSP1000
+  placeholder (`lnm-default`) is flagged `hidden: true` until those
+  assets ship.
+- New `isPipelineRunnable(pipeline)` helper + Node test enforces the
+  dropdown filter contract.
+- About modal now shows the actual `Config.VERSION` instead of an
+  empty placeholder.
+
 **Phase 8–11 complete (v0.8.0)** — fixtures + smoke + docs.
 
 - New 160×160×192 1mm fixture

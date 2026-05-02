@@ -14,7 +14,8 @@ const {
   LNM_PIPELINES,
   getPipelineById,
   getRequiredAssetIds,
-  isStageRunnable
+  isStageRunnable,
+  isPipelineRunnable
 } = await import(tasksUrl);
 
 assert.ok(Array.isArray(LNM_PIPELINES) && LNM_PIPELINES.length >= 1,
@@ -118,5 +119,15 @@ assert.equal(isStageRunnable(brainmaskStage), true,
   'brainmask stage must be runnable (Phase 2a.1 module is implemented)');
 assert.equal(isStageRunnable(segStage), true,
   'segment stage must be runnable (Phase 2a.2 module + asset are wired)');
+
+// Phase 13: pipeline-level runnability for the dropdown filter.
+// lnm-yeo-only + lnm-yeo-auto must surface; lnm-default (Schaefer400 +
+// GSP1000 placeholder) must stay hidden until those assets ship.
+assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-only')), true,
+  'lnm-yeo-only must be a runnable pipeline (drives the manual-mask flow)');
+assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-auto')), true,
+  'lnm-yeo-auto must be a runnable pipeline (drives the auto chain)');
+assert.equal(isPipelineRunnable(getPipelineById('lnm-default')), false,
+  'lnm-default is a Schaefer400/GSP1000 placeholder; must stay hidden');
 
 console.log(`LNM tasks OK: ${LNM_PIPELINES.length} pipeline(s); Yeo overlap + lnm-segment-only runnable.`);

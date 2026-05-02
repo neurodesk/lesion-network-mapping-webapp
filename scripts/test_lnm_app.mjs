@@ -45,7 +45,9 @@ for (const method of [
   // Phase 5 additions:
   'applyNetworkThreshold', 'downloadThresholdedNetworkMap',
   // Phase 6 additions: warp+resample bridge + one-click full chain.
-  'applyRegistrationToLesion', 'runFullPipeline'
+  'applyRegistrationToLesion', 'runFullPipeline',
+  // Phase 13 additions: dropdown surface + about-modal version wiring.
+  'populatePipelineSelect', 'populateVersionLabel'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -143,6 +145,22 @@ assert.match(src, /\bloadConnectomeFromManifest\s*\(/,
   'orchestrator must load the FC pack via loadConnectomeFromManifest');
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
+
+// Phase 13: the pipeline dropdown must surface every LNM_PIPELINES entry —
+// no `.filter(p => p.id === 'lnm-yeo-only')` (or any single-id filter) is
+// allowed. We keep this assertion source-grep-based because the runtime
+// behaviour is "render every pipeline" and the negative form is what
+// catches a regression to the Phase 1 hard-filter.
+assert.doesNotMatch(src, /LNM_PIPELINES\.filter\(\s*p\s*=>\s*p\.id\s*===/,
+  'populatePipelineSelect must not hard-filter LNM_PIPELINES to a single id');
+// Confirm both pipelines exist in the source we ship to the browser so
+// the dropdown can offer them.
+assert.match(src, /populatePipelineSelect\s*\(/,
+  'populatePipelineSelect must be defined');
+assert.match(src, /populateVersionLabel\s*\(/,
+  'populateVersionLabel must be defined');
+assert.match(src, /aboutAppVersion/,
+  'populateVersionLabel must reference the #aboutAppVersion DOM id');
 
 // Phase 6: bridge module + warp+resample wiring. applyRegistrationToLesion
 // must invoke executor.runWarpMask, decode the 'mni-lesion' stage data, and
