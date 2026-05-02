@@ -72,6 +72,24 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 6 complete (v0.6.0)** — end-to-end auto-pipeline. The native lesion
+mask produced by SynthStroke is now bridged onto the Yeo7 MNI 2 mm grid in
+two steps the orchestrator chains internally:
+
+1. The worker applies the SynthMorph integrated displacement field to the
+   F-order lesion voxels (`stepWarpMask` → 160×160×192 1 mm).
+2. Pure-JS [`web/js/modules/resample.js`](web/js/modules/resample.js)
+   performs an affine-aware resample (NIfTI sform → 4×4 inverse →
+   per-voxel destination lookup) onto the Yeo atlas grid (99×117×95
+   2 mm), nearest mode for binary masks.
+
+The result is adopted as `this.lesionFile` so a downstream
+`runYeoOverlap` → `runFcNetworkMap` → `applyNetworkThreshold` chain
+runs without any extra plumbing. A new **"Apply registration to lesion"**
+button exposes step (1)+(2); a **"Run full pipeline"** button chains
+brain extraction, lesion segmentation, registration, the bridge, Yeo
+overlap, FC network map, and threshold (defaults) in one click.
+
 **Phase 5 complete (v0.5.0)** — thresholding UI + cluster cleanup. The
 "Network map" subsection now exposes a Threshold panel:
 

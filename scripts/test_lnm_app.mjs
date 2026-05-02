@@ -43,7 +43,9 @@ for (const method of [
   // Phase 4.4 additions:
   'runFcNetworkMap', 'downloadNetworkMap',
   // Phase 5 additions:
-  'applyNetworkThreshold', 'downloadThresholdedNetworkMap'
+  'applyNetworkThreshold', 'downloadThresholdedNetworkMap',
+  // Phase 6 additions: warp+resample bridge + one-click full chain.
+  'applyRegistrationToLesion', 'runFullPipeline'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -141,6 +143,20 @@ assert.match(src, /\bloadConnectomeFromManifest\s*\(/,
   'orchestrator must load the FC pack via loadConnectomeFromManifest');
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
+
+// Phase 6: bridge module + warp+resample wiring. applyRegistrationToLesion
+// must invoke executor.runWarpMask, decode the 'mni-lesion' stage data, and
+// resample onto the Yeo grid via the new resample module.
+assert.match(src, /from\s+['"]\.\/modules\/resample\.js['"]/,
+  'lnm-app.js must import resample.js');
+assert.match(src, /\bresampleAffine\s*\(/,
+  'applyRegistrationToLesion must call resampleAffine(...)');
+assert.match(src, /\baffineFromHeader\s*\(/,
+  'applyRegistrationToLesion must read affines via affineFromHeader');
+assert.match(src, /\brunWarpMask\s*\(/,
+  'applyRegistrationToLesion must dispatch runWarpMask');
+assert.match(src, /['"]mni-lesion['"]/,
+  'orchestrator must wire the mni-lesion stage');
 
 // Phase 5: threshold UI wiring. applyNetworkThreshold reads the slider /
 // mode / symmetric / min-cluster controls and updates either the

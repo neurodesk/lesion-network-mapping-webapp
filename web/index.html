@@ -75,6 +75,16 @@
             <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">Run brain extraction</button>
             <button class="btn btn-primary btn-sm" id="runLesionSegmentationButton">Run lesion segmentation</button>
             <button class="btn btn-secondary btn-sm" id="runRegistrationButton">Run MNI registration</button>
+            <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">Apply registration to lesion</button>
+          </div>
+          <hr style="border:0;border-top:1px solid var(--border, #2a2a2a);margin:12px 0">
+          <p class="param-help">
+            One-click chain: brain extraction &rarr; lesion segmentation &rarr;
+            MNI registration &rarr; warp &rarr; Yeo overlap &rarr; FC network map
+            &rarr; threshold (defaults).
+          </p>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runFullPipelineButton">Run full pipeline</button>
           </div>
         </div>
       </section>

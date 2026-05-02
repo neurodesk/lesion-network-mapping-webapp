@@ -179,6 +179,9 @@ export async function loadAtlasFromManifest(atlasAssetId, { manifest } = {}) {
   return {
     data: decoded.data,
     dims: decoded.dims,
+    // Phase 6.2: surface the NIfTI header so callers can grab the world
+    // affine for affine-aware resampling onto the atlas grid.
+    header: decoded.header,
     manifestEntry,
     networkLabels: manifestEntry.networkLabels
   };

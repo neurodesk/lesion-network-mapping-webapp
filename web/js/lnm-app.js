@@ -7,6 +7,7 @@ import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
 import { applyThreshold } from './modules/threshold.js';
+import { affineFromHeader, resampleAffine } from './modules/resample.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
@@ -71,6 +72,8 @@ export class LesionNetworkMappingApp {
     this.networkMapDims = null;
     this.networkMapSpacing = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
+    this.mniLesionFile = null;       // Phase 6: warped lesion at MNI160 1mm (pre-resample)
+    this._mniLesionResolver = null;  // Phase 6: one-shot promise for warp-mask stage data
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
 
@@ -181,6 +184,24 @@ export class LesionNetworkMappingApp {
       runRegBtn.addEventListener('click', () => {
         this.runRegistration().catch(
           err => this.updateOutput(`Registration failed: ${err.message}`)
+        );
+      });
+    }
+
+    const applyRegBtn = document.getElementById('applyRegistrationToLesionButton');
+    if (applyRegBtn) {
+      applyRegBtn.addEventListener('click', () => {
+        this.applyRegistrationToLesion().catch(
+          err => this.updateOutput(`Apply registration failed: ${err.message}`)
+        );
+      });
+    }
+
+    const runFullBtn = document.getElementById('runFullPipelineButton');
+    if (runFullBtn) {
+      runFullBtn.addEventListener('click', () => {
+        this.runFullPipeline().catch(
+          err => this.updateOutput(`Full pipeline failed: ${err.message}`)
         );
       });
     }
@@ -486,6 +507,19 @@ export class LesionNetworkMappingApp {
       const btn = document.getElementById('downloadLesionMaskButton');
       if (btn) btn.disabled = false;
       this.updateOutput('Lesion segmentation ready.');
+      return;
+    }
+    // Phase 6.2: warp-mask emits the lesion warped onto MNI160 1mm. The
+    // stage data is the NIfTI ArrayBuffer; applyRegistrationToLesion()
+    // awaits it via a one-shot resolver before resampling onto the Yeo grid.
+    if (data.stage === 'mni-lesion' && data.niftiData) {
+      this.mniLesionFile = arrayBufferToFile(data.niftiData, 'lesion-mni1mm.nii');
+      this.updateOutput('Lesion warped to MNI160 1mm.');
+      if (this._mniLesionResolver) {
+        const r = this._mniLesionResolver;
+        this._mniLesionResolver = null;
+        r.resolve(data.niftiData);
+      }
     }
   }
 
@@ -743,6 +777,100 @@ export class LesionNetworkMappingApp {
       referenceCacheKey: ref.cacheKey,
       nbSteps: 7
     });
+  }
+
+  // Phase 6.2: bridge Register -> Yeo overlap. Decodes the segmentation NIfTI
+  // produced by runLesionSegmentation, hands the F-order Uint8 voxels to the
+  // worker (which applies the integrated displacement field stashed by
+  // runRegistration), then resamples the warped 1mm output onto the Yeo7
+  // atlas grid via affine resample. Sets `this.lesionFile` so a follow-up
+  // runYeoOverlap()/runFcNetworkMap()/applyNetworkThreshold() chain runs
+  // unmodified.
+  async applyRegistrationToLesion() {
+    if (!this.lesionMaskFile) {
+      this.updateOutput('Run lesion segmentation first.');
+      return null;
+    }
+    this.updateOutput('Decoding lesion mask for warp...');
+    const lesionBuf = await this.lesionMaskFile.arrayBuffer();
+    const decoded = await decodeNiftiBuffer(lesionBuf);
+    if (decoded.dims[0] !== 160 || decoded.dims[1] !== 160 || decoded.dims[2] !== 192) {
+      throw new Error(
+        `applyRegistrationToLesion: expected 160x160x192 lesion mask; got ${decoded.dims.join('x')}. ` +
+        `Run registration on a 160x160x192 1mm structural first.`
+      );
+    }
+    const maskU8 = new Uint8Array(decoded.data.length);
+    for (let i = 0; i < decoded.data.length; i++) maskU8[i] = decoded.data[i] > 0 ? 1 : 0;
+    // Copy to a transferable ArrayBuffer (worker takes ownership).
+    const transferBuf = maskU8.buffer.slice(0);
+
+    this.mniLesionFile = null;
+    const mniLesionPromise = new Promise((resolve, reject) => {
+      this._mniLesionResolver = { resolve, reject };
+    });
+    await this.executor.runWarpMask({
+      maskBuffer: transferBuf,
+      maskDims: [160, 160, 192]
+    });
+    const mniLesionBuf = await mniLesionPromise;
+
+    // Resample the 1mm warped lesion onto the Yeo atlas grid.
+    this.updateOutput('Resampling warped lesion onto Yeo atlas grid...');
+    const warped = await decodeNiftiBuffer(mniLesionBuf);
+    const warpedAffine = affineFromHeader(warped.header);
+    const atlas = await loadAtlasFromManifest('yeo7-2mm');
+    const atlasAffine = affineFromHeader(atlas.header);
+    const warpedU8 = warped.data instanceof Uint8Array
+      ? warped.data
+      : binarise(warped.data);
+    const yeoMask = resampleAffine(
+      warpedU8,
+      warped.dims, warpedAffine,
+      atlas.dims, atlasAffine,
+      'nearest'
+    );
+
+    // Wrap the Yeo-grid mask as a NIfTI and adopt it as the lesion file.
+    const flatAffine = [
+      atlasAffine[0][0], atlasAffine[0][1], atlasAffine[0][2], atlasAffine[0][3],
+      atlasAffine[1][0], atlasAffine[1][1], atlasAffine[1][2], atlasAffine[1][3],
+      atlasAffine[2][0], atlasAffine[2][1], atlasAffine[2][2], atlasAffine[2][3]
+    ];
+    const yeoNifti = writeNifti1(yeoMask, {
+      dims: atlas.dims,
+      spacing: [2, 2, 2],
+      affine: flatAffine,
+      description: 'LNM lesion warped + resampled to MNI Yeo grid'
+    });
+    const yeoFile = arrayBufferToFile(yeoNifti, 'lnm-lesion-yeo.nii');
+    await this.setLesion(yeoFile);
+    this.updateOutput('Lesion ready on Yeo grid.');
+    return yeoFile;
+  }
+
+  // Phase 6.2: one-click chain of all stages currently wired in the
+  // orchestrator. Each step short-circuits with a user-facing message if a
+  // prerequisite is missing. Catches at the call site already log failures
+  // — propagating here ensures a downstream stage is never skipped silently.
+  async runFullPipeline() {
+    if (!this.structuralFile) {
+      this.updateOutput('Drop a structural T1 first.');
+      return;
+    }
+    this.updateOutput('=== Run full pipeline ===');
+    if (!this.brainmaskFile) {
+      await this.runBrainExtraction();
+    }
+    if (!this.lesionMaskFile) {
+      await this.runLesionSegmentation();
+    }
+    await this.runRegistration();
+    await this.applyRegistrationToLesion();
+    await this.runYeoOverlap();
+    await this.runFcNetworkMap();
+    this.applyNetworkThreshold();
+    this.updateOutput('=== Full pipeline complete ===');
   }
 
   showOutsideAtlasWarning(outside, total) {

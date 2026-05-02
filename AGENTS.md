@@ -36,6 +36,8 @@ Common issues it catches:
 - `web/js/app/sct-tasks.js` — SCT stable task inventory and task status helpers
 - `web/js/app/labels.js` — Task labels + NiiVue colormap
 - `web/js/modules/parcel-overlap.js` — Pure JS parcel and network overlap reducers
+- `web/js/modules/threshold.js` — Threshold + cluster-cleanup for the FC network map (modes: absolute / percentile, optional symmetric, optional minClusterVoxels via existing CC helpers)
+- `web/js/modules/resample.js` — Affine-aware 3D resampler that bridges the SynthMorph 160×160×192 1mm warp output onto the Yeo7 MNI2mm 99×117×95 grid; `affineFromHeader` reads sform/qform off a nifti-reader-js header, `resampleAffine` does NN/trilinear sampling under the destination affine
 - `web/js/inference-worker.js` — Web Worker running the 3D inference pipeline (~700 lines, uses `importScripts`, not ES modules)
 - `web/js/controllers/` — FileIO, DICOM, Inference, Viewer controllers
 - `web/js/modules/` — UI components and inference pipeline modules

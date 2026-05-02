@@ -51,7 +51,10 @@ const requiredIds = [
   '#networkThresholdMode',
   '#networkThresholdSymmetric',
   '#networkThresholdMinCluster',
-  '#downloadThresholdedNetworkMapButton'
+  '#downloadThresholdedNetworkMapButton',
+  // Phase 6 additions: warp+resample bridge button + one-click full chain.
+  '#applyRegistrationToLesionButton',
+  '#runFullPipelineButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);
