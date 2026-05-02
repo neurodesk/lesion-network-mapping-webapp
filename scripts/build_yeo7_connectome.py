@@ -55,7 +55,38 @@ NETWORK_NAMES = [
 ]
 
 
-def main(n_subjects: int = 30):
+def upload_to_hf(bin_path: str, idx_path: str, token: str | None = None,
+                 repo_id: str = "datasets/sbollmann/lnm-webapp-models",
+                 path_in_repo: str = "connectomes/"):
+    """Upload the FC pack + index to a Hugging Face dataset repo. Idempotent
+    overwrite at the same path. Requires HF_TOKEN env var or explicit token."""
+    if token is None:
+        token = os.environ.get("HF_TOKEN")
+    if not token:
+        raise SystemExit(
+            "HF upload requires HF_TOKEN env var or --hf-token CLI flag."
+        )
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        raise SystemExit("pip install huggingface_hub")
+    api = HfApi(token=token)
+    # repo_id form for datasets is "<org>/<name>"; strip the "datasets/" prefix.
+    if repo_id.startswith("datasets/"):
+        repo_id = repo_id[len("datasets/"):]
+    for src in [bin_path, idx_path]:
+        dst = path_in_repo + os.path.basename(src)
+        print(f"Uploading {src} -> hf://datasets/{repo_id}/{dst} ...")
+        api.upload_file(
+            path_or_fileobj=src,
+            path_in_repo=dst,
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=f"Update connectome pack ({os.path.basename(src)})"
+        )
+
+
+def main(n_subjects: int = 30, do_upload: bool = False):
     os.makedirs(OUT_DIR, exist_ok=True)
     if not os.path.exists(YEO7_PATH):
         raise SystemExit(
@@ -131,6 +162,25 @@ def main(n_subjects: int = 30):
         "huggingface.co/datasets/sbollmann/lnm-webapp-models/connectomes/"
     )
 
+    if do_upload:
+        upload_to_hf(bin_path, idx_path)
+        print("HF upload complete.")
+
+    return {
+        "bin_path": bin_path,
+        "idx_path": idx_path,
+        "sha256": sha,
+        "sizeBytes": sz,
+        "n_subjects": n_subjects
+    }
+
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--n-subjects", type=int, default=30,
+                        help="ADHD-200 subjects to fetch (max 40 via nilearn).")
+    parser.add_argument("--upload", action="store_true",
+                        help="Upload the resulting pack to HF (HF_TOKEN env required).")
+    args = parser.parse_args()
+    main(n_subjects=args.n_subjects, do_upload=args.upload)

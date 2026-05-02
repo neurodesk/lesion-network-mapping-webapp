@@ -681,6 +681,21 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
         );
         assert.equal(wiringErrs.length, 0,
           `unexpected wiring errors after registration kickoff:\n${wiringErrs.join('\n')}`);
+
+        // Phase 28: surface which EP SynthMorph used. The worker explicitly
+        // tries WebGPU first then falls back to WASM, logging
+        // 'SynthMorph EP=<name>'. Headless Chromium without --enable-unsafe-
+        // webgpu falls back to WASM; with WebGPU enabled (via the launch
+        // args set above), WebGPU should be chosen. Diagnostic-only — we
+        // don't assert because both paths are valid; we just want the
+        // signal in the test log to catch a silent EP-list regression.
+        const epLine = consoleMessages.find(m => /SynthMorph EP=/.test(m));
+        if (epLine) {
+          t.diagnostic(`SynthMorph chosen EP signal: ${epLine}`);
+        } else {
+          t.diagnostic('No SynthMorph EP=... log line observed; ' +
+            'session may not have reached the create() step yet.');
+        }
       } finally {
         await browser.close();
       }

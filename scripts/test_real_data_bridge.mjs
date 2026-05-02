@@ -212,10 +212,45 @@ assert.equal(networksTotal + parcelResult.voxelsOutsideAtlas, yeoCount,
   `network voxels (${networksTotal}) + outsideAtlas (${parcelResult.voxelsOutsideAtlas}) ` +
   `should equal yeoCount (${yeoCount})`);
 
+// Phase 30: parity gate against the pinned JSON fixture. Catches a
+// silent regression in resampleAffine / computePrealignAffine /
+// computeParcelOverlap that shifts overlaps without crashing.
+const expectedPath = path.join(ROOT, 'tests/fixtures/ds004884-mini/expected_yeo_overlap.json');
+const expected = JSON.parse(await fs.readFile(expectedPath, 'utf8'));
+const tol = expected.tolerance;
+
+function assertWithinAbs(name, actual, expectedVal, allowed) {
+  const diff = Math.abs(actual - expectedVal);
+  assert.ok(diff <= allowed,
+    `${name} drifted: actual=${actual}, expected=${expectedVal}, diff=${diff} > ${allowed}`);
+}
+
+assertWithinAbs('totals.sourceLesionVoxels', srcCount, expected.totals.sourceLesionVoxels, tol.totalsAbsDiff);
+assertWithinAbs('totals.mniLesionVoxels', mniCount, expected.totals.mniLesionVoxels, tol.totalsAbsDiff);
+assertWithinAbs('totals.yeoLesionVoxels', yeoCount, expected.totals.yeoLesionVoxels, tol.totalsAbsDiff);
+assertWithinAbs('totals.voxelsOutsideAtlas', parcelResult.voxelsOutsideAtlas,
+  expected.totals.voxelsOutsideAtlas, tol.totalsAbsDiff);
+
+const expCentroid = expected.centroidMni160Voxel;
+const actCentroid = [cx, cy, cz];
+for (let i = 0; i < 3; i++) {
+  assertWithinAbs(`centroidMni160Voxel[${i}]`, actCentroid[i], expCentroid[i], tol.centroidAxisDiff);
+}
+
+// Per-network voxel counts.
+const actNetworks = Object.fromEntries(
+  summary.networks.map(n => [n.network, n.voxelsInLesion])
+);
+for (const [name, expectedVoxels] of Object.entries(expected.networks)) {
+  const actualVoxels = actNetworks[name] || 0;
+  assertWithinAbs(`networks.${name}`, actualVoxels, expectedVoxels, tol.networkAbsDiff);
+}
+
 console.log(
   `\nreal-data bridge OK: lesion ${srcCount.toLocaleString()} src ` +
   `-> ${mniCount.toLocaleString()} MNI160 ` +
   `-> ${yeoCount.toLocaleString()} Yeo7 ` +
   `-> ${networksHit} Yeo networks hit. ` +
-  `Centroid round-trip within 1 voxel.`
+  `Centroid round-trip within 1 voxel. ` +
+  `Phase 30 parity gate (Dice-style absolute-diff thresholds) passed.`
 );

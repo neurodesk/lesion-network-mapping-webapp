@@ -8,7 +8,7 @@ import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } 
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
 import { applyThreshold } from './modules/threshold.js';
 import { affineFromHeader, resampleAffine } from './modules/resample.js';
-import { centroidOfMask, applyAffineToVoxel, computePrealignAffine } from './modules/prealign.js';
+import { centroidOfMask, applyAffineToVoxel, computePrealignAffine, principalAxisAlign } from './modules/prealign.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
@@ -865,15 +865,19 @@ export class LesionNetworkMappingApp {
       );
     }
 
-    // Centroid math (pure JS).
+    // PCA principal-axis alignment (Phase 26): rotates the brain so its
+    // principal axes line up with MNI canonical axes, plus the centroid
+    // translation. For nearly-isotropic brains the rotation is small;
+    // for clinical T1s acquired off-axis it can be substantial.
+    const { dstAffine, mniDims, eigenvalues } = principalAxisAlign(
+      mask.data, t1.dims, t1Affine
+    );
     const cVox = centroidOfMask(mask.data, t1.dims);
     const cWorld = applyAffineToVoxel(t1Affine, cVox);
-    const mniDims = [160, 160, 192];
-    const dstAffine = computePrealignAffine(cWorld);
     this.updateOutput(
-      `Prealign centroid: src voxel (${cVox.map(v => v.toFixed(1)).join(', ')}) ` +
+      `Prealign (PCA): centroid src voxel (${cVox.map(v => v.toFixed(1)).join(', ')}) ` +
       `-> world (${cWorld.map(v => v.toFixed(1)).join(', ')}) mm; ` +
-      `placing at MNI160 voxel (80, 80, 96).`
+      `eigenvalues=[${eigenvalues.map(e => e.toFixed(1)).join(', ')}].`
     );
 
     // Resample T1 (trilinear) and brainmask (nearest, binary).

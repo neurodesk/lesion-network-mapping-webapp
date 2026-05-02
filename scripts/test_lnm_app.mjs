@@ -177,8 +177,9 @@ assert.match(src, /from\s+['"]\.\/modules\/prealign\.js['"]/,
   'lnm-app.js must import prealign.js');
 assert.match(src, /\bcentroidOfMask\s*\(/,
   'prealignToMni160 must call centroidOfMask');
-assert.match(src, /\bcomputePrealignAffine\s*\(/,
-  'prealignToMni160 must call computePrealignAffine');
+// Phase 26: prealignToMni160 must use the PCA principal-axis aligner.
+assert.match(src, /\bprincipalAxisAlign\s*\(/,
+  'prealignToMni160 must call principalAxisAlign (PCA-based, Phase 26)');
 assert.match(src, /['"]prealignToMniButton['"]/,
   '#prealignToMniButton must be referenced for the click binding');
 

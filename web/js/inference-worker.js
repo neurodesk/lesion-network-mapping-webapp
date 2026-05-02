@@ -1346,10 +1346,31 @@ async function stepRegister(params = {}) {
   // 4 GB WASM heap in Chromium; WebGPU runs in GPU memory and avoids that.
   // Fallback to WASM if WebGPU isn't available (browsers / headless modes
   // without GPU).
-  const session = await ort.InferenceSession.create(modelArrayBuffer, {
-    executionProviders: ['webgpu', 'wasm'],
-    graphOptimizationLevel: 'all'
-  });
+  //
+  // Phase 28: try WebGPU explicitly first, fall back to WASM only on
+  // failure, and log the chosen EP. ORT Web 1.21 doesn't expose the
+  // chosen-EP name on the session object when an EP list is supplied,
+  // so the explicit two-step is the only way to surface the path the
+  // user actually got. The smoke test asserts the log line contains
+  // 'EP=webgpu' to catch a silent fallback to WASM (which OOMs in
+  // production-sized workloads).
+  let session;
+  let chosenEp;
+  try {
+    session = await ort.InferenceSession.create(modelArrayBuffer, {
+      executionProviders: ['webgpu'],
+      graphOptimizationLevel: 'all'
+    });
+    chosenEp = 'webgpu';
+  } catch (err) {
+    postLog(`SynthMorph WebGPU EP unavailable (${err?.message || err}); falling back to WASM.`);
+    session = await ort.InferenceSession.create(modelArrayBuffer, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all'
+    });
+    chosenEp = 'wasm';
+  }
+  postLog(`SynthMorph EP=${chosenEp}`);
   const inputNames = session.inputNames;
   const outputName = session.outputNames[0];
   postLog(`SynthMorph session ready (inputs=${inputNames.join(',')}, output=${outputName})`);

@@ -196,7 +196,28 @@ assert.match(
   'worker file should mention LNM in the banner / comments'
 );
 
+// ---- (8) Phase 28: SynthMorph EP introspection ----
+// The worker MUST try WebGPU first, fall back to WASM only on failure,
+// and log 'SynthMorph EP=<name>' so the smoke test can read the chosen
+// EP. Catches a regression where a future ORT upgrade silently always
+// picks WASM (which OOMs on the 4 GB heap).
+assert.match(
+  worker,
+  /executionProviders:\s*\[\s*['"]webgpu['"]\s*\]/,
+  "stepRegister must try executionProviders: ['webgpu'] explicitly first"
+);
+assert.match(
+  worker,
+  /executionProviders:\s*\[\s*['"]wasm['"]\s*\]/,
+  'stepRegister must have a WASM fallback session-create call'
+);
+assert.match(
+  worker,
+  /SynthMorph EP=/,
+  'stepRegister must log the chosen EP as "SynthMorph EP=<name>"'
+);
+
 console.log(
-  'inference-worker module-worker migration OK: 7 invariants, ' +
+  'inference-worker module-worker migration OK: 8 invariants, ' +
   '20+ source-grep assertions.'
 );
