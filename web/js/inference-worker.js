@@ -1114,11 +1114,24 @@ async function stepInference(params) {
     },
     async (patch, patchDims) => {
       const [p0, p1, p2] = patchDims;
+      const voxels = p0 * p1 * p2;
       const inputTensor = new ort.Tensor('float32', patch, [1, 1, p0, p1, p2]);
       const out = await session.run({ [inputName]: inputTensor });
-      const logits = out[outputName].data;
+      const raw = out[outputName].data;
       inputTensor.dispose();
-      return logits;
+      // Collapse 2-channel softmax logits ([bg, stroke], NCHW) to single-
+      // channel raw log-odds: `logit_stroke - logit_bg`. The pipeline
+      // sigmoids this and thresholds; under the softmax model that yields
+      // P(stroke). 1-channel models pass through unchanged.
+      if (raw.length === voxels) return raw;
+      if (raw.length === 2 * voxels) {
+        const collapsed = new Float32Array(voxels);
+        for (let i = 0; i < voxels; i++) collapsed[i] = raw[voxels + i] - raw[i];
+        return collapsed;
+      }
+      throw new Error(
+        `Unexpected ${outputName} length ${raw.length}; expected ${voxels} (1-channel) or ${2 * voxels} (binary softmax)`
+      );
     },
     {
       overlap, threshold, minComponentSize, testTimeAugmentation,
