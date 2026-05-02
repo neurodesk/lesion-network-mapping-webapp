@@ -65,15 +65,23 @@
     },
     {
       "id": "lnm-synthmorph-mni",
-      "filename": "lnm-synthmorph-mni.onnx",
-      "sizeBytes": 0,
-      "checksum": "sha256:pending",
-      "cacheKey": "lnm-synthmorph-mni-pending",
-      "sourceUrl": "https://huggingface.co/datasets/neurodesk/lnm-webapp-models/resolve/main/lnm-synthmorph-mni.onnx",
-      "sourceVersion": "pending",
-      "browserFormat": "onnx-fp16",
-      "supportStatus": "unsupported",
-      "_comment": "Phase 3: SynthMorph-derived registration to MNI152; placeholder."
+      "filename": "models/lnm-synthmorph-mni.onnx",
+      "sizeBytes": 85153621,
+      "checksum": "sha256:ec874aefbee4cf7e28964ad8b5343255a95485ebe522f4edb48eb9750c00a984",
+      "cacheKey": "lnm-synthmorph-mni-brains-svf-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-synthmorph-mni.onnx",
+      "sourceVersion": "SynthMorph-brains-dice-vel-0.5-res-16-256f-Apache-2.0",
+      "browserFormat": "onnx-fp32",
+      "supportStatus": "supported",
+      "inputShape": [1, 160, 160, 192, 1],
+      "svfShape":   [1, 80, 80, 96, 3],
+      "targetSpacing": [1.0, 1.0, 1.0],
+      "preprocessing": {
+        "axisOrder": "channelLast",
+        "normalize": "minmax",
+        "padding": "center"
+      },
+      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser performs scaling-and-squaring SVF integration, half->full upsample, and the spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py. Inputs: (1, 160, 160, 192, 1) source + same-shape target, both float32 zero-to-one normalised, channel-last. Output: (1, 80, 80, 96, 3) SVF in voxel units of the half-resolution grid."
     }
   ],
   "atlasAssets": [

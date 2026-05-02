@@ -63,6 +63,22 @@ assert.ok(typeof synthstrip.sizeBytes === 'number' && synthstrip.sizeBytes > 0,
 assert.match(synthstrip.sourceUrl, /huggingface\.co.+\.onnx$/,
   'lnm-synthstrip sourceUrl must point at an ONNX file on Hugging Face');
 
+// Phase 3: SynthMorph MNI registration model (SVF sub-model).
+const synmorph = manifest.modelAssets.find(a => a.id === 'lnm-synthmorph-mni');
+assert.ok(synmorph, "Phase 3 manifest must register 'lnm-synthmorph-mni' under modelAssets");
+assert.equal(synmorph.supportStatus, 'supported',
+  'lnm-synthmorph-mni must be supported once the SVF ONNX is uploaded');
+assert.match(synmorph.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'lnm-synthmorph-mni must declare a real sha256 checksum');
+assert.ok(typeof synmorph.sizeBytes === 'number' && synmorph.sizeBytes > 0,
+  'lnm-synthmorph-mni must declare a non-zero sizeBytes');
+assert.match(synmorph.sourceUrl, /huggingface\.co.+\.onnx$/,
+  'lnm-synthmorph-mni sourceUrl must point at an ONNX file on Hugging Face');
+assert.ok(Array.isArray(synmorph.inputShape) && synmorph.inputShape.length === 5,
+  'lnm-synthmorph-mni must declare a 5D inputShape (1, X, Y, Z, 1)');
+assert.ok(Array.isArray(synmorph.svfShape) && synmorph.svfShape.length === 5,
+  'lnm-synthmorph-mni must declare a 5D svfShape (1, X/2, Y/2, Z/2, 3)');
+
 // Phase 2a.2: lesion-segmentation model (SynthStroke baseline) registered.
 const stroke = manifest.modelAssets.find(a => a.id === 'lnm-stroke-lesion');
 assert.ok(stroke, "Phase 2a.2 manifest must register 'lnm-stroke-lesion' under modelAssets");
