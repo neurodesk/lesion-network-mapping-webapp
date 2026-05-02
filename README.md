@@ -72,6 +72,21 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 8–11 complete (v0.8.0)** — fixtures + smoke + docs.
+
+- New 160×160×192 1mm fixture
+  ([`tests/fixtures/lnm-auto-mini`](tests/fixtures/lnm-auto-mini)):
+  MNI152NLin2009cAsym 1mm template + planted hypointensity sphere as a
+  smoke-test stand-in for a real stroke T1.
+- Browser smoke now covers both branches of the full pipeline button.
+  Phase 8 (manual mask, ~15 s) and Phase 10 (auto chain, ~5 min cold)
+  exercise the orchestrator end-to-end.
+- AGENTS.md "Test surface" + "Key Conventions" sections rewritten
+  from the SCT scaffold to the current LNM invariants (module worker
+  lazy nifti load, Cache Storage URL fragment trick, NiiVue
+  `addVolumeFromUrl` call shape, SynthMorph 160³ hard check,
+  bridge/runFullPipeline contract, threshold UI live-update).
+
 **Phase 7 complete (v0.7.0)** — polish + parity guard.
 
 - Citations modal updated with Yeo, SynthStrip (Hoopes 2022),
