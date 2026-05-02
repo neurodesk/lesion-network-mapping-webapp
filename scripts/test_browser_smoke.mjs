@@ -224,6 +224,36 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
       assert.equal(fcBytes[0], 0x5c, 'FC download must start with NIfTI-1 header byte 0x5C');
       assert.equal(fcBytes[1], 0x01, 'FC download must start with NIfTI-1 header byte 0x01');
       t.diagnostic(`FC network map: ${fcBytes.length} bytes downloaded.`);
+
+      // Phase 5.4 extension: drive the threshold UI, expect the
+      // download-thresholded button to flip to enabled and emit a NIfTI
+      // mask. Switch to percentile mode @ 95 (typical user default for
+      // group-FC LNM) so the threshold is meaningful regardless of the
+      // raw t-stat range.
+      await page.selectOption('#networkThresholdMode', 'percentile');
+      // The change handler retunes the slider to [0..100]; set 95.
+      await page.fill('#networkThresholdValue', '95');
+      await page.evaluate(() => {
+        document.getElementById('networkThresholdValue').dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      // Recompute should fire on input; give the synchronous handler a tick.
+      await sleep(200);
+      const threshDlEnabled = await page.$eval('#downloadThresholdedNetworkMapButton', el => !el.disabled);
+      assert.ok(threshDlEnabled, '#downloadThresholdedNetworkMapButton must enable after applyNetworkThreshold');
+      const threshSummary = await page.$eval('#networkThresholdSummary', el => el.textContent);
+      assert.match(threshSummary, /voxels survive/i,
+        `threshold summary must show survivor count, got: ${JSON.stringify(threshSummary)}`);
+
+      const [threshDownload] = await Promise.all([
+        page.waitForEvent('download', { timeout: 15000 }),
+        page.click('#downloadThresholdedNetworkMapButton')
+      ]);
+      const threshPath = await threshDownload.path();
+      const threshBytes = await fs.readFile(threshPath);
+      assert.ok(threshBytes.length > 348, `thresholded mask too small: ${threshBytes.length} bytes`);
+      assert.equal(threshBytes[0], 0x5c, 'thresholded NIfTI must start with header byte 0x5C');
+      assert.equal(threshBytes[1], 0x01, 'thresholded NIfTI must start with header byte 0x01');
+      t.diagnostic(`Thresholded mask: ${threshBytes.length} bytes, summary="${threshSummary}".`);
     } finally {
       await browser.close();
     }

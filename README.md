@@ -72,8 +72,22 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
-Phase 5 (thresholding + significance-cluster cleanup + symmetric/
-positive-only toggle on the network-map overlay) remains.
+**Phase 5 complete (v0.5.0)** — thresholding UI + cluster cleanup. The
+"Network map" subsection now exposes a Threshold panel:
+
+- **Mode**: absolute (slider is t-stat) or percentile of |voxels| (slider
+  is 0–100).
+- **Symmetric** toggle: `|x| > T` instead of `x > T` for positive/negative
+  one-sided.
+- **Min cluster (voxels)**: post-threshold 26-connected component cleanup
+  via the existing `removeSmallComponents` helper.
+- A live summary line reports the survivor count; a **Download
+  thresholded mask** button emits a `Uint8` NIfTI binary mask
+  (`lnm-network-map-thresh.nii`).
+
+Pure JS in [`web/js/modules/threshold.js`](web/js/modules/threshold.js);
+the slider re-fires `applyNetworkThreshold` on every input change so the
+mask + summary stay in sync with the controls.
 
 ## Attribution
 
