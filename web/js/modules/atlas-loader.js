@@ -90,25 +90,9 @@ async function fetchAtlasBuffer(manifestEntry) {
   if (typeof fetch === 'undefined') {
     throw new Error('fetch is required to load atlas asset');
   }
-
-  if (typeof caches !== 'undefined' && manifestEntry.cacheKey) {
-    const cache = await caches.open(ATLAS_CACHE);
-    const cached = await cache.match(manifestEntry.cacheKey);
-    if (cached) return cached.arrayBuffer();
-
-    const response = await fetch(manifestEntry.sourceUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to load atlas ${manifestEntry.id}: HTTP ${response.status}`);
-    }
-    await cache.put(manifestEntry.cacheKey, response.clone());
-    return response.arrayBuffer();
-  }
-
-  const response = await fetch(manifestEntry.sourceUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to load atlas ${manifestEntry.id}: HTTP ${response.status}`);
-  }
-  return response.arrayBuffer();
+  let cache = null;
+  if (typeof caches !== 'undefined') cache = await caches.open(ATLAS_CACHE);
+  return fetchCacheFirst(manifestEntry.sourceUrl, manifestEntry.cacheKey, cache);
 }
 
 // Phase 4: load a connectome pack (.bin + companion index.json) via the
@@ -153,18 +137,24 @@ export async function loadConnectomeFromManifest(connectomeAssetId, { manifest }
   return { arrayBuffer, index, manifestEntry };
 }
 
-// Shared fetch+cache helper. Returns ArrayBuffer.
+// Shared fetch+cache helper. Returns ArrayBuffer. Uses the URL itself as
+// the cache key — Chromium's Cache Storage rejects bare strings that
+// resemble URL schemes (e.g. 'yeo7-fc-pack-adhd200-n30-v1' parses as a
+// scheme name and fails). The manifest's cacheKey is folded into the URL
+// search-params so different versions of the same source URL don't collide.
 async function fetchCacheFirst(url, cacheKey, cache) {
-  if (cache && cacheKey) {
-    const hit = await cache.match(cacheKey);
+  const cacheUrl = cacheKey ? `${url}#${encodeURIComponent(cacheKey)}` : url;
+  if (cache) {
+    const hit = await cache.match(cacheUrl);
     if (hit) return hit.arrayBuffer();
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`fetch ${url} -> HTTP ${response.status}`);
-    await cache.put(cacheKey, response.clone());
-    return response.arrayBuffer();
   }
   const response = await fetch(url);
   if (!response.ok) throw new Error(`fetch ${url} -> HTTP ${response.status}`);
+  if (cache) {
+    try {
+      await cache.put(cacheUrl, response.clone());
+    } catch (e) { /* non-fatal: continue without cache */ }
+  }
   return response.arrayBuffer();
 }
 

@@ -182,6 +182,48 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
         `Smoke test green: ${barInfo.length} table rows, ${nonzeroBars.length} non-zero bars, ` +
         `CSV byte-size=${csv.length}.`
       );
+
+      // Phase 4.6 extension: click 'Compute network map' on the same
+      // overlap result, capture the NIfTI download, assert the FC chain
+      // ran end-to-end in the browser (Cache Storage fetch of the FC
+      // pack + JS fcWeightedSum + writeNifti1 + Blob download).
+      // Manual poll loop because Playwright's waitForFunction({timeout})
+      // is unreliable with no-arg page functions (uses 30 s default).
+      await page.click('#computeNetworkMapButton');
+      const FC_TIMEOUT_MS = 60000;
+      const fcStart = Date.now();
+      let fcDone = false;
+      while (Date.now() - fcStart < FC_TIMEOUT_MS) {
+        fcDone = await page.evaluate(() => Boolean(window.app && window.app.networkMapFile));
+        if (fcDone) break;
+        await sleep(500);
+      }
+      if (!fcDone) {
+        throw new Error(
+          `Network map never appeared within ${FC_TIMEOUT_MS}ms\n` +
+          `console: ${consoleMessages.slice(-30).join('\n')}`
+        );
+      }
+
+      const dlEnabled = await page.$eval('#downloadNetworkMapButton', el => !el.disabled);
+      assert.ok(dlEnabled, '#downloadNetworkMapButton must enable after a successful run');
+
+      const [fcDownload] = await Promise.all([
+        page.waitForEvent('download', { timeout: 15000 }),
+        page.click('#downloadNetworkMapButton')
+      ]);
+      assert.match(
+        fcDownload.suggestedFilename(),
+        /\.nii(\.gz)?$/,
+        `FC download filename must end with .nii (got ${fcDownload.suggestedFilename()})`
+      );
+      const fcPath = await fcDownload.path();
+      const fcBytes = await fs.readFile(fcPath);
+      assert.ok(fcBytes.length > 1000, `FC download too small: ${fcBytes.length} bytes`);
+      // NIfTI-1 single-file: header byte[0] = 0x5C (sizeof_hdr=348 LE).
+      assert.equal(fcBytes[0], 0x5c, 'FC download must start with NIfTI-1 header byte 0x5C');
+      assert.equal(fcBytes[1], 0x01, 'FC download must start with NIfTI-1 header byte 0x01');
+      t.diagnostic(`FC network map: ${fcBytes.length} bytes downloaded.`);
     } finally {
       await browser.close();
     }
