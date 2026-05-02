@@ -14,7 +14,8 @@
     "test:overlap-export": "node scripts/test_overlap_export.cjs",
     "test:app": "node --no-warnings scripts/test_lnm_app.mjs",
     "test:html": "node --no-warnings scripts/test_index_html.mjs",
-    "test:smoke": "node --test --test-timeout=180000 scripts/test_browser_smoke.mjs"
+    "test:smoke": "node --test --test-timeout=180000 scripts/test_browser_smoke.mjs",
+    "test:synthstrip-parity": "node --no-warnings scripts/test_synthstrip_parity.mjs"
   },
   "dependencies": {
     "nifti-reader-js": "^0.8.0",

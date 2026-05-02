@@ -7,6 +7,9 @@ web/preprocessing-wasm/
 # Model files
 # web/models/*.onnx
 
+# Node-side parity-test model cache (downloaded from HF on first run)
+web/models/_dev_cache/
+
 # OS files
 .DS_Store
 Thumbs.db

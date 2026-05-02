@@ -288,6 +288,10 @@ export async function runSynthStrip({
   ort,
   fast = false,
   dilate = false,
+  // Execution providers passed straight through to ort.InferenceSession.create.
+  // Defaults to ['wasm'] for browser module workers (WebGPU lacks 3D MaxPool).
+  // Node-side parity tests pass ['cpu'] to use onnxruntime-node.
+  executionProviders = ['wasm'],
   onProgress = () => {},
   onLog = () => {}
 }) {
@@ -358,7 +362,7 @@ export async function runSynthStrip({
   // 6. Create ONNX session (WASM only — WebGPU lacks 3D MaxPool)
   onProgress(0.10, `${modeLabel}: loading model...`);
   const session = await ort.InferenceSession.create(modelArrayBuffer, {
-    executionProviders: ['wasm'],
+    executionProviders,
     graphOptimizationLevel: 'all'
   });
   const inputName = session.inputNames[0];
