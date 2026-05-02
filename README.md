@@ -14,7 +14,7 @@ No backend. No data upload. Hosted on GitHub Pages.
 
 ## Status
 
-**Phase 1 complete (v0.1.0)**: manual-mask Yeo 7-network overlap. Drop a
+**Phase 1 complete (v0.1.0)** — manual-mask Yeo 7-network overlap. Drop a
 binary lesion mask aligned to MNI152NLin2009cAsym 2mm, click "Compute
 overlap", get a per-network table with voxel counts, % of lesion, an inline
 magnitude bar, and a CSV export. Voxels falling outside the Yeo brain mask
@@ -22,8 +22,17 @@ are surfaced as a warning. The Yeo7 atlas is fetched live from
 [`sbollmann/lnm-webapp-models`](https://huggingface.co/datasets/sbollmann/lnm-webapp-models)
 on Hugging Face and cached client-side.
 
-Phases 2–5 (auto-segmentation, MNI registration, parcel-FC weighted sum,
-thresholding) are planned but not yet implemented.
+**Phase 2a.1 complete (v0.2.0-alpha.1)** — SynthStrip brain extraction.
+Drop a structural T1; the app auto-runs SynthStrip in a module worker
+(WASM execution provider, ~7-10 s on M-series headless Chromium for
+~100 KB MNI152 2 mm input). Result is rendered as a translucent green
+overlay and downloadable as a NIfTI. Brain-extraction model is the
+[FreeSurfer SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/)
+ONNX export ported from [`neurodesk/vesselboost-webapp`](https://github.com/neurodesk/vesselboost-webapp).
+
+The remaining Phase 2 work (lesion segmentation against ATLAS-2 nnU-Net),
+plus Phases 3-5 (MNI registration, parcel-FC weighted sum, thresholding),
+are planned but not yet implemented.
 
 ## Attribution
 
@@ -45,21 +54,34 @@ Pipeline-specific dependencies (added incrementally):
 npm install
 bash web/setup.sh   # downloads ONNX Runtime WASM
 bash web/run.sh     # serves http://localhost:8080/
-npm test            # 7 Node-only suites: lint, tasks, manifest, parcel-overlap,
-                    #                     overlap-export, app, html
+npm test            # 10 Node-only suites: lint, tasks, manifest, parcel-overlap,
+                    #                      overlap-export, volume-utils,
+                    #                      brain-extraction, worker, app, html
 ```
 
-### Browser smoke test
+### Browser smoke tests
 
-Optional, runs the full Phase 1 flow in headless Chromium against a deterministic
-phantom. Not in `npm test`; requires a one-off browser install:
+Optional. Run the Phase 1 manual-mask Yeo flow + the Phase 2a.1 auto-fired
+SynthStrip flow in headless Chromium. Not in `npm test`; requires a one-off
+browser install:
 
 ```sh
 npx playwright install chromium
-npm run test:smoke
+npm run test:smoke               # ~10 s on M-series; needs HF access
 ```
 
-The smoke test fetches the Yeo atlas live from Hugging Face.
+### SynthStrip Node-side parity test
+
+Validates the brain-extraction port end-to-end against the same ONNX model
+the browser uses, via `onnxruntime-node`. Drives `runSynthStrip` against a
+real MNI152 anatomical T1 and asserts the produced mask is plausible.
+
+```sh
+npm run test:synthstrip-parity   # ~5 s after the model is cached locally
+```
+
+Both smoke and parity fetch the SynthStrip ONNX live from Hugging Face on
+first run (cached afterward).
 
 ## License
 
