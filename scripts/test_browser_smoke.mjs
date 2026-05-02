@@ -33,6 +33,24 @@ const BASE_PORT = Number(process.env.LNM_SMOKE_PORT || 8123);
 // run.sh cd's into web/ before serving, so the docroot IS web/.
 const PHANTOM_PATH = path.join(ROOT, 'tests/fixtures/lnm-phantom/lesion-mni2.nii.gz');
 const STRUCTURAL_PATH = path.join(ROOT, 'tests/fixtures/synthstrip-mini/T1.nii.gz');
+const MNI160_CACHE = path.join(ROOT, 'web/models/_dev_cache/lnm-mni160.nii.gz');
+const MNI160_URL =
+  'https://huggingface.co/datasets/sbollmann/lnm-webapp-models' +
+  '/resolve/main/templates/lnm-mni160.nii.gz';
+
+async function ensureMni160() {
+  try {
+    const buf = await fs.readFile(MNI160_CACHE);
+    if (buf.length > 5_000_000) return MNI160_CACHE;
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  await fs.mkdir(path.dirname(MNI160_CACHE), { recursive: true });
+  console.log(`Fetching lnm-mni160 reference for browser smoke...`);
+  const r = await fetch(MNI160_URL);
+  if (!r.ok) throw new Error(`lnm-mni160 fetch failed: HTTP ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  await fs.writeFile(MNI160_CACHE, buf);
+  return MNI160_CACHE;
+}
 
 async function waitForServer(url, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -385,6 +403,119 @@ test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask d
           `Lesion-seg smoke green; downloaded mask = ${masked.length} bytes ` +
           `(suggested filename: ${download.suggestedFilename()}).`
         );
+      } finally {
+        await browser.close();
+      }
+    } catch (err) {
+      err.message += `\n\n--- server stdout ---\n${getStdout()}\n--- server stderr ---\n${getStderr()}`;
+      throw err;
+    } finally {
+      await close();
+    }
+  }
+);
+
+test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
+  { timeout: 360000 },
+  async (t) => {
+    const structuralPath = await ensureMni160();
+
+    // Use a different port from the previous smoke tests.
+    const port = BASE_PORT + 3;
+    const URL = `http://localhost:${port}/`;
+    const { getStdout, getStderr, close } = await spawnServer(port);
+
+    try {
+      await waitForServer(URL);
+
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const page = await context.newPage();
+
+        const consoleMessages = [];
+        page.on('console', msg => consoleMessages.push(`[main:${msg.type()}] ${msg.text()}`));
+        page.on('pageerror', err => consoleMessages.push(`[main:pageerror] ${err.message}`));
+        page.on('worker', worker => {
+          worker.on('console', msg => consoleMessages.push(`[worker:${msg.type()}] ${msg.text()}`));
+        });
+
+        await page.goto(URL, { waitUntil: 'load' });
+        await page.waitForFunction(
+          () => Boolean(window.app && window.app.viewerController && window.app.executor),
+          { timeout: 15000 }
+        );
+
+        // Drop the lnm-mni160 reference as the 'structural'. It is itself a
+        // 160x160x192 1mm MNI152 brain — a clean self-pair for the
+        // registration. SynthStrip auto-fires; wait for that, then click
+        // #runRegistrationButton.
+        await page.setInputFiles('#structuralFileInput', structuralPath);
+        const SYNTH_TIMEOUT_MS = 240000;
+        const synthStart = Date.now();
+        let synthDone = false;
+        while (Date.now() - synthStart < SYNTH_TIMEOUT_MS) {
+          synthDone = await page.evaluate(() => Boolean(window.app && window.app.brainmaskFile));
+          if (synthDone) break;
+          await sleep(500);
+        }
+        if (!synthDone) {
+          throw new Error(
+            `SynthStrip never finished within ${SYNTH_TIMEOUT_MS}ms\n` +
+            `console: ${consoleMessages.slice(-30).join('\n')}`
+          );
+        }
+        t.diagnostic(`SynthStrip elapsed: ${((Date.now() - synthStart) / 1000).toFixed(1)}s`);
+
+        await page.click('#runRegistrationButton');
+        // Browser-side WASM SynthMorph one-pass takes 5-10 min on M-series
+        // (much slower than CPU EP in Node ~30 s). Waiting for the full
+        // run to complete makes the smoke suite painful. Instead, this
+        // smoke just confirms the run STARTS cleanly (worker op + UI
+        // wiring + manifest lookup all reach the worker without erroring),
+        // which is what the browser-level wiring needs to validate.
+        // End-to-end correctness is gated by the Node-side
+        // `npm run test:registration-parity` (Phase 3.6).
+        const START_TIMEOUT_MS = 60000;
+        const startedT = Date.now();
+        let registerStarted = false;
+        while (Date.now() - startedT < START_TIMEOUT_MS) {
+          registerStarted = await page.evaluate(
+            () => Boolean(
+              window.app &&
+              window.app.executor &&
+              window.app.executor.stepStatus &&
+              window.app.executor.stepStatus.register === 'running'
+            )
+          );
+          if (registerStarted) break;
+          await sleep(500);
+        }
+        if (!registerStarted) {
+          throw new Error(
+            `Registration never transitioned to 'running' within ${START_TIMEOUT_MS}ms\n` +
+            `console: ${consoleMessages.slice(-40).join('\n')}`
+          );
+        }
+        t.diagnostic(`Registration started after ${((Date.now() - startedT) / 1000).toFixed(1)}s; ` +
+          'completion gated by test:registration-parity (Node).');
+
+        // Wait briefly to surface immediate WIRING errors (manifest miss,
+        // worker dispatch typo, etc.). Tolerate the actual SynthMorph
+        // forward erroring out — headless Chromium may not have WebGPU
+        // and the WASM heap can't hold the model + intermediates. Real
+        // forward correctness is gated by test:registration-parity (Node).
+        await sleep(5000);
+        const wiringErrs = consoleMessages.filter(m =>
+          m.includes('pageerror') ||
+          (m.includes(':error]') &&
+           // ORT's WASM-side OOM surfaces as a numeric error code (the
+           // pointer to the C++ exception object). Anything else is a
+           // genuine wiring bug we want to flag.
+           !/Register error: \d+$/.test(m))
+        );
+        assert.equal(wiringErrs.length, 0,
+          `unexpected wiring errors after registration kickoff:\n${wiringErrs.join('\n')}`);
       } finally {
         await browser.close();
       }

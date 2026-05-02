@@ -1340,8 +1340,14 @@ async function stepRegister(params = {}) {
   );
 
   postProgress(0.55, 'Building SynthMorph session...');
+  // Prefer WebGPU for SynthMorph: the network is pure conv/upsample/concat
+  // (no 3D MaxPool — that was the SynthStrip blocker). 80 MB of weights +
+  // ~1 GB peak intermediate activations on a (160x160x192) pair OOMs the
+  // 4 GB WASM heap in Chromium; WebGPU runs in GPU memory and avoids that.
+  // Fallback to WASM if WebGPU isn't available (browsers / headless modes
+  // without GPU).
   const session = await ort.InferenceSession.create(modelArrayBuffer, {
-    executionProviders: ['wasm'],
+    executionProviders: ['webgpu', 'wasm'],
     graphOptimizationLevel: 'all'
   });
   const inputNames = session.inputNames;
