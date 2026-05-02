@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "lint": "node scripts/check-syntax.mjs",
-    "test": "npm run lint && npm run test:tasks && npm run test:manifest && npm run test:parcel-overlap && npm run test:overlap-export && npm run test:volume-utils && npm run test:app && npm run test:html",
+    "test": "npm run lint && npm run test:tasks && npm run test:manifest && npm run test:parcel-overlap && npm run test:overlap-export && npm run test:volume-utils && npm run test:brain-extraction && npm run test:app && npm run test:html",
     "test:volume-utils": "node scripts/test_volume_utils.cjs",
+    "test:brain-extraction": "node scripts/test_brain_extraction.cjs",
     "test:tasks": "node --no-warnings scripts/test_lnm_tasks.mjs",
     "test:manifest": "node --no-warnings scripts/test_lnm_manifest.mjs",
     "test:parcel-overlap": "node scripts/test_parcel_overlap.cjs",
