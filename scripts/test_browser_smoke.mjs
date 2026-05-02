@@ -1,13 +1,16 @@
 #!/usr/bin/env node --no-warnings
-// Browser smoke tests for the LNM webapp. Two phases:
+// Browser smoke tests for the LNM webapp. Phases:
 //
 //   Phase 1c.4: manual-mask Yeo overlap flow end-to-end. Uses
-//     tests/fixtures/lnm-phantom/lesion-mni2.nii.gz (64-voxel cube in the
-//     Yeo Visual parcel) -> 'Visual,64,...' row in the CSV download.
-//   Phase 2a.1.5: structural T1 -> auto-fired SynthStrip brain extraction
-//     -> brain-mask overlay + #downloadBrainMaskButton enabled + the
-//     downloaded mask is a non-trivial NIfTI gzip. Uses the
-//     tests/fixtures/synthstrip-mini/T1.nii.gz fixture (MNI152 2mm).
+//     tests/fixtures/lnm-phantom/lesion-mni2.nii.gz.
+//   Phase 2a.1.5: structural T1 -> SynthStrip brain extraction.
+//     Uses tests/fixtures/synthstrip-mini/T1.nii.gz (MNI152 2mm).
+//   Phase 2a.2.5: structural T1 -> SynthStroke lesion segmentation.
+//   Phase 3.7: structural T1 -> SynthMorph MNI registration kickoff.
+//   Phase 8: phantom -> Run full pipeline (manual-mask branch).
+//   Phase 10: structural T1 -> Run full pipeline (auto branch).
+//     Uses tests/fixtures/lnm-auto-mini/T1.nii.gz (MNI 1mm template +
+//     planted hypointensity sphere). Slow: ~5 min cold.
 //
 // NOT included in `npm test`. Requires:
 //   npm install            # adds playwright dep
@@ -33,6 +36,10 @@ const BASE_PORT = Number(process.env.LNM_SMOKE_PORT || 8123);
 // run.sh cd's into web/ before serving, so the docroot IS web/.
 const PHANTOM_PATH = path.join(ROOT, 'tests/fixtures/lnm-phantom/lesion-mni2.nii.gz');
 const STRUCTURAL_PATH = path.join(ROOT, 'tests/fixtures/synthstrip-mini/T1.nii.gz');
+// Phase 10: 160x160x192 1mm MNI fixture with a planted hypointensity sphere,
+// used by the auto-branch Run-full-pipeline smoke. Built by
+// tests/fixtures/lnm-auto-mini/build.py.
+const AUTO_T1_PATH = path.join(ROOT, 'tests/fixtures/lnm-auto-mini/T1.nii.gz');
 const MNI160_CACHE = path.join(ROOT, 'web/models/_dev_cache/lnm-mni160.nii.gz');
 const MNI160_URL =
   'https://huggingface.co/datasets/sbollmann/lnm-webapp-models' +
@@ -674,6 +681,109 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
         );
         assert.equal(wiringErrs.length, 0,
           `unexpected wiring errors after registration kickoff:\n${wiringErrs.join('\n')}`);
+      } finally {
+        await browser.close();
+      }
+    } catch (err) {
+      err.message += `\n\n--- server stdout ---\n${getStdout()}\n--- server stderr ---\n${getStderr()}`;
+      throw err;
+    } finally {
+      await close();
+    }
+  }
+);
+
+// Phase 10: full pipeline on the auto branch. Uses the lnm-auto-mini
+// fixture (160x160x192 1mm MNI template + planted hypointensity sphere)
+// so SynthMorph converges near-identity. Asserts the chain *completes*
+// — the planted lesion is coarse and SynthStroke may produce a small or
+// empty mask; we don't gate on lesion-detection accuracy here. Empty
+// downstream results are acceptable as long as the chain finishes
+// without throwing and the threshold UI surfaces a definite count.
+//
+// Slow: ~5 min cold (3 ONNX models + bridge + FC pack on first run).
+test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
+  { timeout: 600000 },
+  async (t) => {
+    await fs.access(AUTO_T1_PATH);
+
+    const port = BASE_PORT + 6;
+    const URL = `http://localhost:${port}/`;
+    const { server, getStdout, getStderr, close } = await spawnServer(port);
+    try {
+      await waitForServer(URL);
+
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const page = await context.newPage();
+        const consoleMessages = [];
+        page.on('console', msg => consoleMessages.push(`[${msg.type()}] ${msg.text()}`));
+        page.on('pageerror', err => consoleMessages.push(`[pageerror] ${err.message}`));
+
+        await page.goto(URL, { waitUntil: 'load' });
+        await page.waitForFunction(
+          () => Boolean(window.app && window.app.viewerController),
+          { timeout: 15000 }
+        );
+
+        await page.setInputFiles('#structuralFileInput', AUTO_T1_PATH);
+        await page.waitForFunction(() => Boolean(window.app.structuralFile), { timeout: 15000 });
+
+        await page.click('#runFullPipelineButton');
+
+        const FULL_TIMEOUT = 540000;
+        const startedAt = Date.now();
+        let done = false;
+        let lastStateLog = 0;
+        while (Date.now() - startedAt < FULL_TIMEOUT) {
+          const state = await page.evaluate(() => ({
+            brain: Boolean(window.app?.brainmaskFile),
+            seg: Boolean(window.app?.lesionMaskFile),
+            mniLesion: Boolean(window.app?.mniLesionFile),
+            yeoLesion: Boolean(window.app?.lesionFile),
+            overlap: Boolean(window.app?.overlapResult),
+            netmap: Boolean(window.app?.networkMapFile),
+            thresh: Boolean(window.app?.thresholdedMaskFile)
+          }));
+          if (state.thresh && state.overlap) { done = true; break; }
+          if (Date.now() - lastStateLog > 30000) {
+            t.diagnostic(`auto-pipeline state: ${JSON.stringify(state)}`);
+            lastStateLog = Date.now();
+          }
+          await sleep(1000);
+        }
+        if (!done) {
+          throw new Error(
+            `Auto-pipeline did not complete within ${FULL_TIMEOUT}ms\n` +
+            `console (last 50): ${consoleMessages.slice(-50).join('\n')}`
+          );
+        }
+
+        const threshSummary = await page.$eval(
+          '#networkThresholdSummary',
+          el => el.textContent
+        );
+        assert.match(threshSummary, /voxels\s+survive/i,
+          `threshold summary must mention 'voxels survive'; got ${JSON.stringify(threshSummary)}`);
+
+        const fcEnabled = await page.$eval('#downloadNetworkMapButton', el => !el.disabled);
+        assert.ok(fcEnabled, '#downloadNetworkMapButton must be enabled after the auto chain.');
+
+        const threshEnabled = await page.$eval(
+          '#downloadThresholdedNetworkMapButton',
+          el => !el.disabled
+        );
+        assert.ok(threshEnabled, '#downloadThresholdedNetworkMapButton must be enabled.');
+
+        const wiringErrs = consoleMessages.filter(m =>
+          (m.includes('pageerror') ||
+            (m.includes(':error]') && !/Register error: \d+$/.test(m))));
+        if (wiringErrs.length) {
+          t.diagnostic(`auto-branch wiring warnings (${wiringErrs.length}):\n${wiringErrs.slice(-10).join('\n')}`);
+        }
+
+        t.diagnostic(`Auto-branch full pipeline OK. Summary: "${threshSummary}".`);
       } finally {
         await browser.close();
       }
