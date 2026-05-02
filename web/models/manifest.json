@@ -23,16 +23,28 @@
   ],
   "modelAssets": [
     {
+      "id": "lnm-synthstrip",
+      "filename": "models/synthstrip.onnx",
+      "sizeBytes": 10294211,
+      "checksum": "sha256:7b8eeecf3793a6c4510b9f5270ecc03d9c3262d26e08d568203a651ab4b84074",
+      "cacheKey": "lnm-synthstrip-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/synthstrip.onnx",
+      "sourceVersion": "SynthStrip-Hoopes2022-Apache-2.0",
+      "browserFormat": "onnx-fp32",
+      "supportStatus": "supported",
+      "_comment": "Phase 2a.1 brain-extraction model. SynthStrip ONNX export ported from neurodesk/vesselboost-webapp@web/models/synthstrip.onnx (FreeSurfer Apache-2.0). Wrapper code uses LIA reorientation + 1mm resample + 192-320 conform + 99th percentile normalization + SDT<1 threshold + largest-CC + interior fill (matches FreeSurfer defaults). WASM execution provider only — WebGPU lacks 3D MaxPool."
+    },
+    {
       "id": "lnm-stroke-lesion",
       "filename": "lnm-stroke-lesion.onnx",
       "sizeBytes": 0,
       "checksum": "sha256:pending",
       "cacheKey": "lnm-stroke-lesion-pending",
-      "sourceUrl": "https://huggingface.co/datasets/neurodesk/lnm-webapp-models/resolve/main/lnm-stroke-lesion.onnx",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/lnm-stroke-lesion.onnx",
       "sourceVersion": "pending",
       "browserFormat": "onnx-fp16",
       "supportStatus": "unsupported",
-      "_comment": "Phase 2: ATLAS-2 nnU-Net derivative; placeholder until weights are exported."
+      "_comment": "Phase 2a.2: ATLAS-2 nnU-Net derivative; placeholder until weights are exported."
     },
     {
       "id": "lnm-synthmorph-mni",

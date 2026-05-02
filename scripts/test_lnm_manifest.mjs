@@ -49,6 +49,20 @@ const allIds = [
 assert.equal(new Set(allIds).size, allIds.length,
   'asset IDs must be globally unique across modelAssets/atlasAssets/connectomeAssets');
 
+// Phase 2a.1: SynthStrip brain-extraction model must be registered as a
+// supported modelAsset so the worker can fetch it. Pin the asset id literal
+// here so a typo in either the manifest or the orchestrator surfaces fast.
+const synthstrip = manifest.modelAssets.find(a => a.id === 'lnm-synthstrip');
+assert.ok(synthstrip, "Phase 2a.1 manifest must register 'lnm-synthstrip' under modelAssets");
+assert.equal(synthstrip.supportStatus, 'supported',
+  'lnm-synthstrip must be marked supported once the model is uploaded');
+assert.match(synthstrip.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'lnm-synthstrip must declare a real sha256 checksum');
+assert.ok(typeof synthstrip.sizeBytes === 'number' && synthstrip.sizeBytes > 0,
+  'lnm-synthstrip must declare a non-zero sizeBytes');
+assert.match(synthstrip.sourceUrl, /huggingface\.co.+\.onnx$/,
+  'lnm-synthstrip sourceUrl must point at an ONNX file on Hugging Face');
+
 // Phase 1: the Yeo7 atlas must exist and have a sensible parcel count
 // (network labels 1..7 plus 0 background -> at least 7 nonzero networks).
 const yeoAtlas = manifest.atlasAssets.find(a => /yeo/i.test(a.id));
