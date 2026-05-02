@@ -40,11 +40,29 @@ Drop a structural T1; the app:
    downloadable as `lnm-lesion.nii`. Sliding-window 128³ patches,
    threshold 0.4, min cluster 30, overlap 0.25, no TTA.
 
-Phases 3–5 (MNI registration, parcel-FC weighted sum, thresholding /
-network-map overlay) are planned but not yet implemented. Until Phase 3
-ships registration, the lesion segmentation produces a mask in the
-input image's native space; the manual-mask Yeo overlap flow continues
-to require a mask already aligned to MNI152NLin2009cAsym 2mm.
+**Phase 3 complete (v0.3.0)** — deformable MNI registration via
+**SynthMorph** (Hoffmann 2022, Apache-2.0). Click "Run MNI registration"
+on a 160×160×192 1mm structural T1; the app fetches the SynthMorph
+ONNX (81 MB) + the lnm-mni160 reference (8 MB), runs the SVF-only
+sub-network in the worker, then performs scaling-and-squaring SVF
+integration + half→full upsample + the spatial warp in pure JS
+([`web/js/modules/registration.js`](web/js/modules/registration.js)).
+WebGPU execution provider when available; falls back to WASM.
+
+The **`lnm-yeo-auto`** pipeline declares the full T1 → SynthStrip →
+seg → register → MNI Yeo overlap chain. Stages run individually for
+now (each is a button click); a one-shot "auto" runner that also
+resamples the warped lesion onto the MNI152 2mm Yeo grid is a
+follow-up polish slice.
+
+**Experimental notes**: SynthMorph's deformable head expects roughly-
+MNI-aligned input. Without an upstream affine pre-step (FSL FLIRT,
+ANTs `antsRegistrationSyNQuick`), deformable registration on raw
+clinical T1 may not converge well. Inputs must be exactly 160×160×192
+at 1mm; the orchestrator surfaces a clear error otherwise.
+
+Phases 4–5 (parcel-FC weighted sum, thresholding / network-map
+overlay) remain.
 
 ## Attribution
 
@@ -57,7 +75,7 @@ Pipeline-specific dependencies (added incrementally):
 
 - **Brain extraction**: SynthStrip (Hoopes 2022, Apache-2.0); ONNX export ported from `neurodesk/vesselboost-webapp`.
 - **Lesion segmentation**: SynthStroke baseline (Chalcroft 2025 MELBA, MIT); 3D MONAI UNet, T1.
-- **Registration** (Phase 3): SynthMorph (Hoffmann et al., Apache-2.0), exported to ONNX.
+- **Registration**: SynthMorph (Hoffmann 2022, Apache-2.0); UNet-only ONNX cut (layers 0–33); JS-side SVF integration + warp.
 - **Atlas**: Schaefer 2018 400 × 7 networks (CC-BY).
 - **Connectome** (Phase 4): Lead-DBS GSP1000 group functional connectome.
 
@@ -67,9 +85,10 @@ Pipeline-specific dependencies (added incrementally):
 npm install
 bash web/setup.sh   # downloads ONNX Runtime WASM
 bash web/run.sh     # serves http://localhost:8080/
-npm test            # 10 Node-only suites: lint, tasks, manifest, parcel-overlap,
+npm test            # 11 Node-only suites: lint, tasks, manifest, parcel-overlap,
                     #                      overlap-export, volume-utils,
-                    #                      brain-extraction, worker, app, html
+                    #                      brain-extraction, registration, worker,
+                    #                      app, html
 ```
 
 ### Browser smoke tests
@@ -90,11 +109,12 @@ against a real MNI152 anatomical T1. Pipeline-correctness checks
 (plausibility, not Dice — see commit notes).
 
 ```sh
-npm run test:synthstrip-parity   # SynthStrip:    ~5 s
-npm run test:lesion-seg-parity   # Lesion seg:    ~5 s; Dice >= 0.50 vs ds004884 ground truth
+npm run test:synthstrip-parity     # SynthStrip:        ~5 s
+npm run test:lesion-seg-parity     # Lesion seg:        ~5 s; Dice >= 0.50 vs ds004884 ground truth
+npm run test:registration-parity   # SynthMorph:       ~37 s (CPU EP); self-pair near-identity
 ```
 
-Both fetch their respective ONNX models live from Hugging Face on first
+All fetch their respective ONNX models live from Hugging Face on first
 run (cached under `web/models/_dev_cache/`, gitignored). The
 lesion-segmentation parity uses one chronic-stroke subject from
 [OpenNeuro ds004884](https://openneuro.org/datasets/ds004884/versions/1.0.1)
