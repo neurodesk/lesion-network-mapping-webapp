@@ -53,6 +53,45 @@ export const LNM_PIPELINES = [
     ]
   },
   {
+    id: 'lnm-yeo-auto',
+    displayName: 'Auto Yeo overlap (T1 -> SynthStrip -> seg -> MNI -> Yeo)',
+    description:
+      'End-to-end automatic flow: drop a structural T1 (already at 160x160x192 1mm; ' +
+      'pre-process with FSL FLIRT to MNI152 + center-crop if needed), get brain ' +
+      'extraction + lesion segmentation in native space, then SynthMorph deformable ' +
+      'registration warps the lesion mask onto MNI152NLin2009cAsym, after which the ' +
+      'Yeo 7-network overlap runs on the warped mask. *Experimental*: requires ' +
+      'pre-aligned input; deformable registration without affine pre-alignment may ' +
+      'not converge well.',
+    stages: [
+      {
+        id: 'brainmask',
+        module: 'brain-extraction',
+        modelAssetId: 'lnm-synthstrip',
+        required: true
+      },
+      {
+        id: 'segment',
+        module: 'inference-pipeline',
+        modelAssetId: 'lnm-stroke-lesion',
+        required: true
+      },
+      {
+        id: 'register',
+        module: 'registration',
+        modelAssetId: 'lnm-synthmorph-mni',
+        atlasAssetId: 'lnm-mni160',
+        required: true
+      },
+      {
+        id: 'overlap',
+        module: 'parcel-overlap',
+        atlasAssetId: 'yeo7-2mm',
+        required: true
+      }
+    ]
+  },
+  {
     id: 'lnm-default',
     displayName: 'Lesion Network Mapping (Schaefer400 / GSP1000)',
     description:
@@ -109,7 +148,10 @@ const IMPLEMENTED_MODULES = new Set([
   'brain-extraction',
   // Phase 2a.2: SynthStroke baseline in web/js/inference-pipeline.js
   // (sliding-window patches), dispatched by the worker's 'run-inference' op.
-  'inference-pipeline'
+  'inference-pipeline',
+  // Phase 3: SynthMorph SVF in web/js/modules/registration.js + integrate /
+  // upsample / warp helpers, dispatched by the worker's 'run-register' op.
+  'registration'
 ]);
 
 export function getPipelineById(id) {

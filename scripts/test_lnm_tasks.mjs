@@ -68,6 +68,25 @@ assert.equal(
   'a stage missing its required assets must be flagged not-runnable'
 );
 
+// Phase 3: lnm-yeo-auto pipeline (T1 -> SynthStrip -> seg -> register ->
+// warp lesion to MNI -> Yeo 7-network overlap). Declaring the structure;
+// individual stage runnability requires the matching modules to be in
+// IMPLEMENTED_MODULES.
+const yeoAuto = getPipelineById('lnm-yeo-auto');
+assert.ok(yeoAuto, "Phase 3 must define an 'lnm-yeo-auto' pipeline");
+const ynStages = yeoAuto.stages.map(s => s.id);
+for (const required of ['brainmask', 'segment', 'register', 'overlap']) {
+  assert.ok(ynStages.includes(required),
+    `lnm-yeo-auto must declare stage ${required}; got ${ynStages.join(',')}`);
+}
+const regStage = yeoAuto.stages.find(s => s.id === 'register');
+assert.equal(regStage.module, 'registration',
+  'register stage must reference the registration module');
+assert.equal(regStage.modelAssetId, 'lnm-synthmorph-mni',
+  'register stage must reference the lnm-synthmorph-mni model');
+assert.equal(isStageRunnable(regStage), true,
+  'register stage must be runnable (Phase 3.4 module + asset are wired)');
+
 // Phase 2a.2: lnm-segment-only pipeline (T1 -> SynthStrip -> lesion seg ->
 // display + download). No registration / no atlas overlap until Phase 3.
 const segOnly = getPipelineById('lnm-segment-only');

@@ -18,6 +18,16 @@
       ]
     },
     {
+      "id": "lnm-yeo-auto",
+      "displayName": "Auto Yeo overlap (T1 -> SynthStrip -> seg -> MNI -> Yeo)",
+      "stages": [
+        { "id": "brainmask", "module": "brain-extraction",   "modelAssetId": "lnm-synthstrip",      "required": true },
+        { "id": "segment",   "module": "inference-pipeline", "modelAssetId": "lnm-stroke-lesion",  "required": true },
+        { "id": "register",  "module": "registration",       "modelAssetId": "lnm-synthmorph-mni", "atlasAssetId": "lnm-mni160", "required": true },
+        { "id": "overlap",   "module": "parcel-overlap",     "atlasAssetId": "yeo7-2mm",           "required": true }
+      ]
+    },
+    {
       "id": "lnm-default",
       "displayName": "Lesion Network Mapping (Schaefer400 / GSP1000)",
       "stages": [
