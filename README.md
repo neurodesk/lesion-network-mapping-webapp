@@ -72,6 +72,26 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 25 complete (v0.13.2)** — manifest checksum verifier.
+
+`scripts/test_manifest_checksums.cjs` walks every supported asset in
+`web/models/manifest.json`, locates its bytes in either
+`web/models/_dev_cache/` (developer machine) or
+`tests/fixtures/yeo7-mini/atlas.nii.gz` (committed copy), and asserts
+the actual sha256 matches the manifest's declared one. Catches:
+
+1. The committed Yeo7 fixture drifting from the runtime asset.
+2. A model rebuild landing in `_dev_cache` without a matching manifest
+   bump (cacheKey collision → browser serves stale cached bytes).
+3. A manifest typo where `filename` / `sourceUrl` doesn't match the
+   actual asset id.
+
+Skips assets without a local copy (most CI runners don't fetch the
+~200 MB of weights), but requires ≥ 1 verified asset so the gate
+doesn't silently no-op. Currently verifies 7 / 7 supported assets
+(including independent verification of the committed Yeo7 fixture)
+on a developer machine.
+
 **Phase 24 complete (v0.13.1)** — real-data Yeo overlap in `npm test`.
 
 `tests/fixtures/yeo7-mini/atlas.nii.gz` (73 KB, identical bytes to the
