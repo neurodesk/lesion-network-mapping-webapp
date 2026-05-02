@@ -27,7 +27,7 @@ Common issues it catches:
 
 ## Architecture
 
-- `web/js/lnm-app.js` — Main Lesion Network Mapping app class, orchestrates Phase 1 file loading, viewer display, and overlap stubs
+- `web/js/lnm-app.js` — Main Lesion Network Mapping app class. Owns the full chain: file load, brain extraction, lesion segmentation, MNI registration, warp+resample bridge, Yeo overlap, FC network map, thresholding, and the one-click `runFullPipeline()`
 - `web/js/app/config.js` — Model config, version (bumped by the manual release workflow)
 - `web/js/app/lnm-tasks.js` — LNM pipeline inventory and stage status helpers
 - `web/js/app/lnm-labels.js` — Yeo 7-network label table and NiiVue colormap

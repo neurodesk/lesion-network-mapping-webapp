@@ -293,8 +293,8 @@
           <p>Browser-based lesion atlas overlap for neuroimaging workflows.</p>
         </div>
       </div>
-      <p>This app loads a structural image and lesion mask locally, displays them in NiiVue, and prepares network-overlap summaries against atlas assets.</p>
-      <p>Phase 1 supports the manual-mask Yeo 7-network overlap workflow. Later phases will add segmentation, registration, and connectivity-weighted mapping.</p>
+      <p>This app loads a structural T1 (or a manual MNI-aligned lesion mask) locally, runs the full lesion-network-mapping chain in the browser, and never uploads patient data.</p>
+      <p>The pipeline: SynthStrip brain extraction &rarr; SynthStroke baseline lesion segmentation &rarr; SynthMorph deformable registration to MNI152 (160<sup>3</sup> 1mm) &rarr; affine-aware resample to the Yeo7 grid (99&times;117&times;95 2mm) &rarr; Yeo7 parcel overlap &rarr; Yeo7 group-FC weighted-sum (ADHD-200 N=30) &rarr; threshold + cluster cleanup. All stages are exposed as individual buttons; "Run full pipeline" chains them in one click.</p>
       <h4>Version</h4>
       <div class="about-version-table">
         <div class="about-version-row">
