@@ -1,21 +1,31 @@
 /**
- * SpinalCordToolbox Inference Worker
+ * LNM Inference Worker (module worker).
  *
- * Runs ONNX model inference for 3D patch-based SCT segmentation.
- * Pipeline is split into interactive steps:
- *   1. Load (NIfTI parse + orient to RAS)
- *   2. Inference (resample → normalize → crop → sliding window → threshold → CC → inverse)
+ * Runs ONNX model inference for the Lesion Network Mapping pipeline:
+ *   1. Load            — NIfTI parse + orient to RAS
+ *   2. SynthStrip      — brain extraction (Phase 2a.1; ported from
+ *                        neurodesk/vesselboost-webapp). Single-pass full-volume
+ *                        inference; WASM execution provider only.
+ *   3. (Phase 2a.2)    — lesion segmentation via patch-based sliding-window
+ *                        inference (reuses inference-pipeline.js).
+ *
+ * Model bytes are cached in the Cache Storage API under MODEL_CACHE_NAME so
+ * subsequent runs avoid the network round-trip.
  */
 
-/* global importScripts, ort, localforage, nifti, SCTInferencePipeline */
+import * as ort from '../wasm/ort.webgpu.bundle.min.mjs';
+import * as InferencePipeline from './inference-pipeline.js';
+import { runSynthStrip } from './modules/brain-extraction.js';
 
-importScripts('../wasm/ort.webgpu.min.js');
-importScripts('https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js');
-importScripts('../nifti-js/index.js');
-importScripts('./inference-pipeline.js');
-importScripts('./modules/vertebrae.js');
+// nifti-reader-js is shipped as a UMD bundle that installs `self.nifti` as a
+// side-effect. Top-level await loads it once at worker boot.
+await import('../nifti-js/index.js');
+const nifti = globalThis.nifti;
+if (!nifti) {
+  throw new Error('nifti-reader-js failed to install globalThis.nifti at worker boot');
+}
 
-const FIXED_TARGET_SPACING = [0.3, 0.3, 0.3];
+const MODEL_CACHE_NAME = 'lnm-models-v1';
 const MAX_PROCESSING_VOXELS = 100 * 1024 * 1024;
 
 // ==================== Shared Worker State ====================
@@ -73,7 +83,7 @@ function postComplete() {
 
 function postStageData(stage, niftiData, description) {
   self.postMessage(
-    { type: 'stageData', stage, niftiData, description, taskId: self._currentTaskId || 'spinalcord' },
+    { type: 'stageData', stage, niftiData, description, taskId: self._currentTaskId || null },
     [niftiData]
   );
 }
@@ -798,18 +808,35 @@ function shouldUseZYXModelAxisOrder(preprocessing, dims, patchSize) {
 
 // ==================== Model Loading ====================
 
+// Model byte cache backed by the Cache Storage API.
+// Stored as Response objects keyed by the manifest entry's cacheKey (or by
+// URL when no key is configured). Retrieving avoids re-downloading and is
+// shared with web/js/modules/atlas-loader.js so the same cache works for
+// atlases and connectomes too (different cache name there).
+async function _openModelCache() {
+  if (typeof caches === 'undefined') return null;
+  return caches.open(MODEL_CACHE_NAME);
+}
+
 async function fetchModel(url, modelName, progressBase, progressSpan) {
   const displayName = modelName || url.split('/').pop();
   const cacheKey = self._modelCacheKey || `${url}?v=${self._appVersion || ''}`;
 
-  try {
-    const cached = await localforage.getItem(cacheKey);
-    if (cached && cached.byteLength > 100000) {
-      postLog(`Model loaded from cache: ${displayName}`);
-      postProgress(progressBase + progressSpan, `Cached: ${displayName}`);
-      return cached;
-    }
-  } catch (e) { /* cache miss */ }
+  const cache = await _openModelCache();
+  if (cache) {
+    try {
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        const buf = await cached.arrayBuffer();
+        if (buf.byteLength > 100000) {
+          postLog(`Model loaded from cache: ${displayName}`);
+          postProgress(progressBase + progressSpan, `Cached: ${displayName}`);
+          return buf;
+        }
+        await cache.delete(cacheKey);
+      }
+    } catch (e) { /* cache miss; fall through to network */ }
+  }
 
   let response = null;
   let lastError = null;
@@ -827,8 +854,12 @@ async function fetchModel(url, modelName, progressBase, progressSpan) {
     throw lastError || new Error(`Failed to fetch model: ${displayName}`);
   }
 
+  // Tee the response so we can stream-read for progress AND cache the
+  // original Response object (Cache Storage requires a fresh Response).
+  const [progressStream, cacheStream] = response.body.tee();
+
   const contentLength = parseInt(response.headers.get('content-length'), 10);
-  const reader = response.body.getReader();
+  const reader = progressStream.getReader();
   const chunks = [];
   let received = 0;
 
@@ -849,16 +880,20 @@ async function fetchModel(url, modelName, progressBase, progressSpan) {
   let offset = 0;
   for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.length; }
   if (data.byteLength <= 100000) {
-    try {
-      await localforage.removeItem(cacheKey);
-    } catch (e) { /* ignore cleanup failure */ }
     throw new Error(`Downloaded model asset is unexpectedly small: ${displayName}`);
   }
 
-  try {
-    await localforage.setItem(cacheKey, data.buffer);
-  } catch (e) {
-    postLog('Warning: Could not cache model (storage full?)');
+  if (cache) {
+    try {
+      const cachedResponse = new Response(cacheStream, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText
+      });
+      await cache.put(cacheKey, cachedResponse);
+    } catch (e) {
+      postLog(`Warning: could not cache model: ${e.message}`);
+    }
   }
 
   postLog(`Downloaded: ${displayName} (${(received / 1048576).toFixed(1)} MB)`);
@@ -989,9 +1024,9 @@ async function stepInference(params) {
     overlap = 0,
     threshold = 0.1,
     minComponentSize = 10,
-    taskId = 'spinalcord',
-    modelAssetId = 'sct-spinalcord',
-    modelName = 'sct-spinalcord.onnx',
+    taskId,
+    modelAssetId,
+    modelName,
     patchSize = [64, 64, 64],
     modelBaseUrl,
     supportStatus = 'unvalidated',
@@ -1001,8 +1036,11 @@ async function stepInference(params) {
     preprocessing = {}
   } = params;
 
+  if (!taskId || !modelAssetId || !modelName) {
+    throw new Error('run-inference requires taskId, modelAssetId, and modelName.');
+  }
   if (supportStatus !== 'supported') {
-    throw new Error(`SCT task "${taskId}" is ${supportStatus}. Convert and validate model asset "${modelAssetId}" before running inference.`);
+    throw new Error(`Task "${taskId}" is ${supportStatus}. Convert and validate model asset "${modelAssetId}" before running inference.`);
   }
   self._currentTaskId = taskId;
 
@@ -1061,7 +1099,7 @@ async function stepInference(params) {
 
   // Delegate the per-patch inference + sliding-window orchestration to the
   // shared pipeline module, injecting an ORT-backed runPatch callback.
-  const result = await SCTInferencePipeline.runInferencePipeline(
+  const result = await InferencePipeline.runInferencePipeline(
     {
       data: modelInputData,
       dims: modelInputDims,
@@ -1108,7 +1146,7 @@ async function stepInference(params) {
 
   // Create output NIfTI
   const outputNifti = createOutputNifti(outputLabels, workerState.origHeaderBytes, workerState.origDims);
-  postStageData('segmentation', outputNifti, 'SCT segmentation');
+  postStageData('segmentation', outputNifti, 'Lesion segmentation');
 
   let finalVoxels = 0;
   for (let i = 0; i < outputLabels.length; i++) {
@@ -1124,45 +1162,70 @@ async function stepInference(params) {
   postComplete();
 }
 
-async function stepVertebralLabeling(params = {}) {
+// Phase 2a.1 brain extraction. The orchestration lives in
+// web/js/modules/brain-extraction.js (a 1:1 port of vesselboost-webapp's
+// stepSynthStrip); this adapter wires it into the worker protocol: pulls
+// the RAS volume off workerState, fetches the SynthStrip model bytes via
+// the shared Cache-Storage-backed fetchModel, runs the pipeline, and
+// emits a `brainmask` stageData NIfTI to the orchestrator.
+async function stepSynthStrip(params = {}) {
   if (!workerState.rasData) {
     throw new Error('No volume loaded. Run Load first.');
   }
-  if (!workerState.segLabelsRAS) {
-    throw new Error('No spinal cord segmentation is available. Run segmentation first.');
-  }
-  if (!self.SCTVertebrae) {
-    throw new Error('Vertebral labeling module is not available.');
+
+  const {
+    modelAssetId = 'lnm-synthstrip',
+    modelName = 'synthstrip.onnx',
+    modelBaseUrl,
+    cacheKey,
+    fast = false,
+    dilate = false
+  } = params;
+
+  if (!modelBaseUrl) {
+    throw new Error('run-synthstrip requires modelBaseUrl.');
   }
 
-  self._currentTaskId = 'vertebrae';
-  postProgress(0.05, 'Loading vertebral labeling assets...');
-  const modelBaseUrl = params.modelBaseUrl || '../models';
-  const result = await self.SCTVertebrae.labelVertebrae({
-    anatomy: workerState.rasData,
-    segmentation: workerState.segLabelsRAS,
-    dims: workerState.rasDims,
-    spacing: workerState.rasSpacing,
-    c2c3ModelUrl: `${modelBaseUrl}/c2c3_disc_models/t2_model.yml`,
-    pam50LevelsUrl: `${modelBaseUrl}/templates/PAM50/PAM50_levels.nii.gz`,
-    scaleDist: params.scaleDist ?? 0.55,
-    detectorMinScore: params.detectorMinScore ?? 0.1
+  self._currentTaskId = modelAssetId;
+  self._modelCacheKey = cacheKey || `${modelAssetId}:${self._appVersion || ''}`;
+  const modelUrl = `${modelBaseUrl}/${modelName}`;
+  const modelArrayBuffer = await fetchModel(modelUrl, modelName, 0.02, 0.10);
+
+  const { mask, voxelCount, coveragePct } = await runSynthStrip({
+    rasData: workerState.rasData,
+    rasDims: workerState.rasDims,
+    rasSpacing: workerState.rasSpacing,
+    modelArrayBuffer,
+    ort,
+    fast,
+    dilate,
+    onProgress: (frac, label) => postProgress(0.12 + 0.85 * frac, label),
+    onLog: (msg) => postLog(msg)
   });
 
-  postProgress(0.85, 'Writing vertebral labels...');
-  postLog(`C2-C3 detector: z=${result.detected.z}, score=${Number.isFinite(result.detected.score) ? result.detected.score.toFixed(4) : 'n/a'}, fallback=${!!result.detected.fallback}`);
-  postLog(`Vertebral boundaries: ${result.boundaries.map(boundary => boundary.z).join(', ')}`);
-
-  let outputLabels = result.labels;
+  // The mask comes back in RAS at workerState.rasDims; apply the inverse
+  // RAS->native orientation so the saved NIfTI is in the input image's
+  // original orientation (matches the segmentation stage).
+  let outputMask = mask;
   if (!workerState.isIdentity) {
-    outputLabels = inverseOrient(outputLabels, workerState.rasDims, workerState.perm, workerState.flip, workerState.origDims);
+    outputMask = inverseOrient(
+      outputMask,
+      workerState.rasDims,
+      workerState.perm,
+      workerState.flip,
+      workerState.origDims
+    );
   }
+  const outputNifti = createOutputNifti(
+    outputMask,
+    workerState.origHeaderBytes,
+    workerState.origDims
+  );
+  postStageData('brainmask', outputNifti, 'SynthStrip brain mask');
 
-  const outputNifti = createOutputNifti(outputLabels, workerState.origHeaderBytes, workerState.origDims);
-  postStageData('vertebrae', outputNifti, 'SCT vertebral labeling');
-
-  postProgress(1.0, 'Vertebral labeling complete');
-  postStepComplete('processing');
+  postLog(`SynthStrip brain mask: ${voxelCount} voxels (${coveragePct.toFixed(1)}% coverage)`);
+  postProgress(1.0, 'Brain extraction complete');
+  postStepComplete('brainmask');
 }
 
 // ==================== Message Handler ====================
@@ -1176,14 +1239,7 @@ self.onmessage = async (e) => {
         self._appVersion = e.data.version || '';
         ort.env.wasm.numThreads = getOptimalWasmThreads();
         ort.env.wasm.wasmPaths = '../wasm/';
-
-        postLog(`Using WASM backend (${ort.env.wasm.numThreads} threads)`);
-
-        localforage.config({
-          name: 'SCTModelCache',
-          storeName: 'models'
-        });
-
+        postLog(`ORT WASM backend ready (${ort.env.wasm.numThreads} threads)`);
         self.postMessage({ type: 'initialized' });
       } catch (error) {
         postError(`Initialization failed: ${error.message}`);
@@ -1208,11 +1264,11 @@ self.onmessage = async (e) => {
       }
       break;
 
-    case 'run-vertebral-labeling':
+    case 'run-synthstrip':
       try {
-        await stepVertebralLabeling(data || {});
+        await stepSynthStrip(data || {});
       } catch (error) {
-        console.error('Vertebral labeling error:', error);
+        console.error('SynthStrip error:', error);
         postError(error?.message || String(error));
       }
       break;
@@ -1227,33 +1283,6 @@ self.onmessage = async (e) => {
         await restoreWorkerState(data || {});
       } catch (error) {
         console.error('Restore error:', error);
-        postError(error?.message || String(error));
-      }
-      break;
-
-    // Legacy support for old 'run' message
-    case 'run':
-      try {
-        // Decompose the old single-run into steps for backwards compat
-        const { inputData, settings } = data;
-        stepLoad(inputData);
-        await stepInference({
-          overlap: settings.overlap,
-          taskId: settings.taskId,
-          modelAssetId: settings.modelAssetId,
-          supportStatus: settings.supportStatus,
-          cacheKey: settings.cacheKey,
-          provenance: settings.provenance,
-          threshold: settings.probabilityThreshold,
-          minComponentSize: settings.minComponentSize,
-          modelName: settings.modelName,
-          patchSize: settings.patchSize,
-          preprocessing: settings.preprocessing,
-          testTimeAugmentation: settings.testTimeAugmentation,
-          modelBaseUrl: settings.modelBaseUrl
-        });
-      } catch (error) {
-        console.error('Inference error:', error);
         postError(error?.message || String(error));
       }
       break;

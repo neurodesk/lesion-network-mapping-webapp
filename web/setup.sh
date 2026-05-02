@@ -1,17 +1,20 @@
 #!/bin/bash
-# One-time setup: download ONNX Runtime Web WASM files
+# One-time setup: download ONNX Runtime Web WASM files for the LNM webapp.
+# Run from anywhere: `bash web/setup.sh`.
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$SCRIPT_DIR/wasm"
 
-# ONNX Runtime Web
+# ONNX Runtime Web. The module-worker (web/js/inference-worker.js) imports
+# the ESM bundle (.mjs); the sibling .wasm and .jsep.mjs/.wasm files are
+# loaded on demand by the bundle.
 ORT_VERSION="1.21.0"
 ORT_BASE="https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist"
 
 echo "Downloading ONNX Runtime Web v${ORT_VERSION}..."
 
 ORT_FILES=(
-  ort.webgpu.min.js
+  ort.webgpu.bundle.min.mjs
   ort-wasm-simd-threaded.mjs
   ort-wasm-simd-threaded.wasm
   ort-wasm-simd-threaded.jsep.mjs
@@ -23,24 +26,7 @@ for f in "${ORT_FILES[@]}"; do
   curl -sL -o "$SCRIPT_DIR/wasm/$f" "$ORT_BASE/$f"
 done
 
-echo "Done. Files saved to wasm/"
-
-# Vertebral labeling assets
-PAM50_BASE="https://raw.githubusercontent.com/spinalcordtoolbox/PAM50/master/template"
-mkdir -p "$SCRIPT_DIR/models/templates/PAM50"
-echo "Downloading PAM50 vertebral labeling assets..."
-for f in PAM50_t2.nii.gz PAM50_levels.nii.gz info_label.txt; do
-  echo "  $f"
-  curl -sL -o "$SCRIPT_DIR/models/templates/PAM50/$f" "$PAM50_BASE/$f"
-done
-
-mkdir -p "$SCRIPT_DIR/models/c2c3_disc_models"
-SCT_DATA_BASE="https://raw.githubusercontent.com/spinalcordtoolbox/spinalcordtoolbox/master/data/c2c3_disc_models"
-for f in t1_model.yml t2_model.yml; do
-  echo "  $f"
-  curl -sL -o "$SCRIPT_DIR/models/c2c3_disc_models/$f" "$SCT_DATA_BASE/$f"
-done
-
 echo ""
-echo "Note: SCT task metadata is recorded in: $SCRIPT_DIR/models/manifest.json"
-echo "      Browser-runnable SCT model assets must be converted and validated before tasks are enabled."
+echo "Done. ORT files saved to wasm/."
+echo "LNM model assets (SynthStrip, atlases, connectomes) are fetched at"
+echo "runtime from the manifest URLs (see web/models/manifest.json)."

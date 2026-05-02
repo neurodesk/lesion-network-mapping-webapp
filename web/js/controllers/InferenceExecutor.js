@@ -137,7 +137,7 @@ export class InferenceExecutor {
   _setupWorker() {
     if (this.worker) return;
 
-    this.worker = new Worker(`js/inference-worker.js?v=${VERSION}`);
+    this.worker = new Worker(`js/inference-worker.js?v=${VERSION}`, { type: 'module' });
 
     this.worker.onmessage = (e) => {
       const { type, ...data } = e.data;

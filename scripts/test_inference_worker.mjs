@@ -1,0 +1,183 @@
+#!/usr/bin/env node --no-warnings
+// Source-grep contract for the LNM module worker (Phase 2a.1.4a).
+//
+// We can't easily exercise the worker end-to-end in Node (it imports the ORT
+// WebGPU/WASM bundle that has no Node entry point); instead we pin the
+// migration's invariants at the source level:
+//
+//   - module-worker idiom: no importScripts, top-level ES imports
+//   - dead SCT code stripped (vertebrae, legacy 'run' shim, SCT branding)
+//   - localforage dropped, Cache Storage used instead
+//   - 'run-synthstrip' op is dispatched, calls stepSynthStrip -> runSynthStrip
+//   - inference-pipeline.js is a real ES module
+//   - InferenceExecutor spawns the worker with { type: 'module' }
+//
+// End-to-end validation happens in the 2a.1.4c onnxruntime-node parity test
+// and the 2a.1.5 browser smoke test.
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parse } from 'acorn';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const WORKER_PATH = path.join(ROOT, 'web/js/inference-worker.js');
+const PIPELINE_PATH = path.join(ROOT, 'web/js/inference-pipeline.js');
+const EXECUTOR_PATH = path.join(ROOT, 'web/js/controllers/InferenceExecutor.js');
+
+for (const p of [WORKER_PATH, PIPELINE_PATH, EXECUTOR_PATH]) {
+  assert.ok(fs.existsSync(p), `${path.relative(ROOT, p)} must exist`);
+}
+
+const worker = fs.readFileSync(WORKER_PATH, 'utf8');
+const pipeline = fs.readFileSync(PIPELINE_PATH, 'utf8');
+const executor = fs.readFileSync(EXECUTOR_PATH, 'utf8');
+
+// Acorn parse — catches syntax errors that would only surface when the
+// browser tries to load the module worker.
+parse(worker, { ecmaVersion: 'latest', sourceType: 'module' });
+parse(pipeline, { ecmaVersion: 'latest', sourceType: 'module' });
+parse(executor, { ecmaVersion: 'latest', sourceType: 'module' });
+
+// ---- (1) module-worker idiom ----
+assert.doesNotMatch(
+  worker,
+  /\bimportScripts\s*\(/,
+  'module worker must not use importScripts'
+);
+assert.match(
+  worker,
+  /^\s*import\s/m,
+  'module worker must have at least one top-level import statement'
+);
+// ORT must come from the local ESM bundle setup.sh fetches.
+assert.match(
+  worker,
+  /from\s+['"][^'"]*\.mjs['"]/,
+  'module worker must import ORT from a .mjs (ESM) file'
+);
+assert.match(
+  worker,
+  /from\s+['"]\.\/inference-pipeline\.js['"]/,
+  "must import './inference-pipeline.js' as a module"
+);
+assert.match(
+  worker,
+  /from\s+['"]\.\/modules\/brain-extraction\.js['"]/,
+  'must import brain-extraction.js'
+);
+
+// ---- (2) dead SCT code stripped ----
+assert.doesNotMatch(
+  worker,
+  /\bvertebrae\b|\bvertebral\b/i,
+  'no vertebrae / vertebral references in worker'
+);
+assert.doesNotMatch(
+  worker,
+  /SpinalCordToolbox/i,
+  'no SCT product branding in worker (banner included)'
+);
+assert.doesNotMatch(
+  worker,
+  /SCTModelCache/,
+  "no SCTModelCache string (rename to lnm-models cache)"
+);
+assert.doesNotMatch(
+  worker,
+  /['"]spinalcord['"]/,
+  "no 'spinalcord' taskId default fallback"
+);
+assert.doesNotMatch(
+  worker,
+  /\blocalforage\b/i,
+  'localforage must be removed entirely (Cache Storage replaces it)'
+);
+assert.doesNotMatch(
+  worker,
+  /case\s+['"]run-vertebral-labeling['"]/,
+  "dead 'run-vertebral-labeling' case must be gone"
+);
+// The legacy single-shot 'run' message handler must also be gone (it baked
+// in SCT settings shapes).
+assert.doesNotMatch(
+  worker,
+  /case\s+['"]run['"]\s*:/,
+  "legacy 'run' shim must be gone"
+);
+
+// ---- (3) Cache Storage replacement ----
+assert.match(
+  worker,
+  /\bcaches\.open\s*\(/,
+  "fetchModel must use Cache Storage (caches.open)"
+);
+assert.match(
+  worker,
+  /['"]lnm-models[-_a-z0-9]*['"]/i,
+  "cache name must include 'lnm-models'"
+);
+
+// ---- (4) run-synthstrip op + stepSynthStrip adapter ----
+assert.match(
+  worker,
+  /case\s+['"]run-synthstrip['"]/,
+  "worker dispatch must handle 'run-synthstrip'"
+);
+assert.match(
+  worker,
+  /\bstepSynthStrip\s*\(/,
+  "worker must define / call stepSynthStrip(...)"
+);
+assert.match(
+  worker,
+  /\brunSynthStrip\s*\(/,
+  'stepSynthStrip must invoke runSynthStrip from brain-extraction.js'
+);
+assert.match(
+  worker,
+  /['"]brainmask['"]/,
+  "stepSynthStrip must emit a 'brainmask' stage"
+);
+assert.match(
+  worker,
+  /['"]lnm-synthstrip['"]/,
+  "stepSynthStrip must reference the 'lnm-synthstrip' modelAssetId"
+);
+
+// ---- (5) inference-pipeline is a real ES module ----
+assert.match(
+  pipeline,
+  /^export\s/m,
+  'inference-pipeline.js must use top-level ES exports'
+);
+assert.doesNotMatch(
+  pipeline,
+  /SCTInferencePipeline/,
+  'no SCTInferencePipeline global (replaced by named ESM exports)'
+);
+assert.doesNotMatch(
+  pipeline,
+  /^\s*\(function\b/m,
+  'no UMD IIFE wrapper (use ESM)'
+);
+
+// ---- (6) InferenceExecutor spawns module worker ----
+assert.match(
+  executor,
+  /new\s+Worker\s*\([^)]*type:\s*['"]module['"]/,
+  "InferenceExecutor must spawn the worker with { type: 'module' }"
+);
+
+// ---- (7) sanity: known-good banner / cache name ----
+assert.match(
+  worker,
+  /(LNM|Lesion Network Mapping)/,
+  'worker file should mention LNM in the banner / comments'
+);
+
+console.log(
+  'inference-worker module-worker migration OK: 7 invariants, ' +
+  '20+ source-grep assertions.'
+);

@@ -1,25 +1,14 @@
 /*
- * Shared inference pipeline used by both the browser worker
- * (web/js/inference-worker.js) and the Node fixture script
- * (scripts/run_browser_fixture_outputs.cjs).
+ * Shared inference pipeline used by the LNM module worker
+ * (web/js/inference-worker.js) and any future Node-side fixture scripts.
  *
  * Pure JS, no I/O, no globals. Orchestrates: zero-pad -> sliding-window patch
  * inference (with optional TTA) -> threshold -> connected-component cleanup ->
  * crop back. The caller injects a `runPatch` callback that owns the ONNX
  * session, so this module is runtime-agnostic.
- *
- * Loadable as a CommonJS module (Node) or via importScripts/global (worker).
  */
-(function (root, factory) {
-  if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
-  } else {
-    root.SCTInferencePipeline = factory();
-  }
-}(typeof self !== 'undefined' ? self : this, function () {
-  'use strict';
 
-  const TTA_AXES = [[0], [1], [2], [0, 1], [0, 2], [1, 2], [0, 1, 2]];
+const TTA_AXES = [[0], [1], [2], [0, 1], [0, 2], [1, 2], [0, 1, 2]];
 
   function zScoreNormalize(data) {
     const n = data.length;
@@ -441,19 +430,18 @@
     return { labels: outputLabels, preCleanupLabels, dims: prePadDims, probStats };
   }
 
-  return {
-    runInferencePipeline,
-    zScoreNormalize,
-    zeroPadToPatchMultiple,
-    unpadVolume,
-    computeGaussianWeightMap3D,
-    computePatchPositions3D,
-    extractPatch3D,
-    flipPatch3D,
-    accumulatePatch3D,
-    sigmoid,
-    connectedComponents3D,
-    removeSmallComponents,
-    TTA_AXES
-  };
-}));
+export {
+  runInferencePipeline,
+  zScoreNormalize,
+  zeroPadToPatchMultiple,
+  unpadVolume,
+  computeGaussianWeightMap3D,
+  computePatchPositions3D,
+  extractPatch3D,
+  flipPatch3D,
+  accumulatePatch3D,
+  sigmoid,
+  connectedComponents3D,
+  removeSmallComponents,
+  TTA_AXES
+};
