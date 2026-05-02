@@ -72,6 +72,25 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 15 complete (v0.10.0)** — pipeline-driven `runFullPipeline`.
+
+- `runFullPipeline()` now iterates `selectedPipeline.stages` instead of
+  hard-coding the chain. Selecting a different pipeline truncates or
+  extends what runs:
+  - **lnm-yeo-only**: overlap (manual mask).
+  - **lnm-segment-only**: brain extraction → lesion seg.
+  - **lnm-network-map**: overlap → FC → threshold (manual mask).
+  - **lnm-yeo-auto**: brain extraction → seg → register → overlap →
+    FC → threshold.
+- New `_runStage(stage)` dispatches on `stage.module`. Unknown modules
+  throw so a manifest typo surfaces immediately.
+- Threshold module added to `IMPLEMENTED_MODULES`. Stage-level
+  `defaults` are pushed into the threshold UI controls before
+  `applyNetworkThreshold()` runs, so each pipeline can ship its own
+  threshold preset.
+- Test contract pinned: `_runStage` must have a case for every
+  implemented module; `runFullPipeline` must iterate `pipeline.stages`.
+
 **Phase 14 complete (v0.9.1)** — cancel-button wiring. The
 `#cancelButton` next to the status line now actually terminates the
 worker via `executor.cancel()`. Disabled state is driven from

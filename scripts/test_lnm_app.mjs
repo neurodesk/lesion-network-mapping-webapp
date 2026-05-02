@@ -47,7 +47,9 @@ for (const method of [
   // Phase 6 additions: warp+resample bridge + one-click full chain.
   'applyRegistrationToLesion', 'runFullPipeline',
   // Phase 13 additions: dropdown surface + about-modal version wiring.
-  'populatePipelineSelect', 'populateVersionLabel'
+  'populatePipelineSelect', 'populateVersionLabel',
+  // Phase 15 additions: stage dispatch + threshold-default helper.
+  '_runStage', '_applyThresholdDefaults'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -161,6 +163,19 @@ assert.match(src, /populateVersionLabel\s*\(/,
   'populateVersionLabel must be defined');
 assert.match(src, /aboutAppVersion/,
   'populateVersionLabel must reference the #aboutAppVersion DOM id');
+
+// Phase 15: _runStage must dispatch on stage.module and cover every
+// implemented module. Source-grep that each module's case-clause exists
+// (a typo or missing branch would silently fall through to the throw).
+for (const m of ['brain-extraction', 'inference-pipeline', 'registration',
+                 'parcel-overlap', 'fc-weighted-sum', 'threshold']) {
+  const re = new RegExp(`case\\s+['"]${m}['"]`);
+  assert.match(src, re, `_runStage must handle module '${m}'`);
+}
+assert.match(src, /this\.selectedPipeline/,
+  'runFullPipeline must read from this.selectedPipeline');
+assert.match(src, /for\s*\(\s*const\s+stage\s+of\s+pipeline\.stages\s*\)/,
+  'runFullPipeline must iterate pipeline.stages');
 
 // Phase 14: cancel button must be wired to executor.cancel(). Source-grep
 // for the cancel-button id + an executor.cancel call so a regression that

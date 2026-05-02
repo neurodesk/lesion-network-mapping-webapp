@@ -884,40 +884,121 @@ export class LesionNetworkMappingApp {
     return yeoFile;
   }
 
-  // Phase 6.2: one-click chain of all stages currently wired in the
-  // orchestrator. Each step short-circuits with a user-facing message if a
-  // prerequisite is missing. Catches at the call site already log failures
-  // — propagating here ensures a downstream stage is never skipped silently.
+  // Phase 15: pipeline-driven runFullPipeline. Iterates the selected
+  // pipeline's stages and dispatches each via _runStage. The auto-detect
+  // shortcut for manually-dropped Yeo-grid lesion masks survives as a
+  // precondition gate when the pipeline starts with parcel-overlap.
   //
-  // Manual-mask shortcut: if the user has already dropped a lesion mask at
-  // the Yeo grid (99x117x95), skip segmentation/registration/bridge and go
-  // straight to the overlap+FC chain. The Yeo overlap reducer will reject
-  // any other size, so this gate matches the downstream contract exactly.
+  // Stages declared as required:false are still run when their module is
+  // implemented (e.g. threshold runs with the pipeline's `defaults` if
+  // present, falling back to whatever the UI has set).
   async runFullPipeline() {
-    this.updateOutput('=== Run full pipeline ===');
-    const manualMaskOnYeoGrid = this.lesionFile
-      && !this.lesionMaskFile
-      && await this._lesionFileMatchesYeoGrid();
-    if (manualMaskOnYeoGrid) {
-      this.updateOutput('Manual lesion mask detected on Yeo grid — skipping segmentation/registration.');
-    } else {
-      if (!this.structuralFile) {
-        this.updateOutput('Drop a structural T1 first (or a Yeo-grid lesion mask).');
+    const pipeline = this.selectedPipeline;
+    if (!pipeline || !Array.isArray(pipeline.stages) || pipeline.stages.length === 0) {
+      this.updateOutput('No pipeline selected.');
+      return;
+    }
+    this.updateOutput(`=== Running ${pipeline.displayName} ===`);
+
+    // Precondition gate based on the first stage's input expectation.
+    const firstModule = pipeline.stages[0]?.module;
+    if (firstModule === 'parcel-overlap') {
+      // Manual-mask path — needs a Yeo-grid lesion already loaded.
+      if (!this.lesionFile) {
+        this.updateOutput('Drop a Yeo-grid lesion mask first.');
         return;
       }
-      if (!this.brainmaskFile) {
-        await this.runBrainExtraction();
+      const onYeoGrid = await this._lesionFileMatchesYeoGrid();
+      if (!onYeoGrid) {
+        this.updateOutput(
+          'Lesion mask is not on the Yeo7 grid (99x117x95). Use a pipeline ' +
+          'that includes registration, or pre-register the mask externally.'
+        );
+        return;
       }
-      if (!this.lesionMaskFile) {
-        await this.runLesionSegmentation();
+    } else if (firstModule === 'brain-extraction' || firstModule === 'inference-pipeline') {
+      // Auto path — needs a structural T1.
+      if (!this.structuralFile) {
+        this.updateOutput('Drop a structural T1 first.');
+        return;
       }
-      await this.runRegistration();
-      await this.applyRegistrationToLesion();
     }
-    await this.runYeoOverlap();
-    await this.runFcNetworkMap();
-    this.applyNetworkThreshold();
-    this.updateOutput('=== Full pipeline complete ===');
+
+    for (const stage of pipeline.stages) {
+      try {
+        await this._runStage(stage);
+      } catch (err) {
+        this.updateOutput(`Stage '${stage.id}' (${stage.module}) failed: ${err.message}`);
+        return;
+      }
+    }
+    this.updateOutput('=== Pipeline complete ===');
+  }
+
+  // Phase 15: stage dispatch. Maps a pipeline stage's `module` to the
+  // existing orchestrator method. Unknown modules throw so a manifest
+  // typo surfaces immediately rather than silently skipping.
+  async _runStage(stage) {
+    if (!stage || !stage.module) {
+      throw new Error('_runStage: stage must declare a module');
+    }
+    switch (stage.module) {
+      case 'brain-extraction':
+        if (this.brainmaskFile) {
+          this.updateOutput('Brain mask already present, skipping brain-extraction.');
+          return;
+        }
+        return this.runBrainExtraction();
+      case 'inference-pipeline':
+        if (this.lesionMaskFile) {
+          this.updateOutput('Lesion mask already present, skipping segmentation.');
+          return;
+        }
+        return this.runLesionSegmentation();
+      case 'registration':
+        // The bridge (apply-warp + Yeo-grid resample) is the natural
+        // companion of the SynthMorph registration step. We chain them
+        // here so a pipeline doesn't have to declare the bridge as a
+        // separate stage.
+        await this.runRegistration();
+        return this.applyRegistrationToLesion();
+      case 'parcel-overlap':
+        return this.runYeoOverlap();
+      case 'fc-weighted-sum':
+        return this.runFcNetworkMap();
+      case 'threshold':
+        // applyNetworkThreshold is sync and reads UI controls. If the
+        // stage carries `defaults`, push them into the controls before
+        // computing so the dropdown's choice is honoured even when the
+        // user hasn't touched the threshold UI.
+        this._applyThresholdDefaults(stage.defaults);
+        this.applyNetworkThreshold();
+        return;
+      default:
+        throw new Error(`_runStage: unknown module '${stage.module}'`);
+    }
+  }
+
+  // Phase 15: copy the pipeline stage's threshold defaults into the live
+  // UI controls so applyNetworkThreshold (which reads from the DOM) honours
+  // them.  No-op if the controls are missing.
+  _applyThresholdDefaults(defaults) {
+    if (!defaults || typeof defaults !== 'object') return;
+    const modeEl = document.getElementById('networkThresholdMode');
+    const valueEl = document.getElementById('networkThresholdValue');
+    const symEl = document.getElementById('networkThresholdSymmetric');
+    const minClEl = document.getElementById('networkThresholdMinCluster');
+    if (modeEl && defaults.mode) modeEl.value = defaults.mode;
+    if (valueEl && typeof defaults.value === 'number') {
+      // Slider stores the raw value; percentile mode interprets [0,100],
+      // absolute mode interprets the value directly. Keep the manifest's
+      // convention (percentile = 0..100) consistent.
+      valueEl.value = String(defaults.value);
+    }
+    if (symEl && typeof defaults.symmetric === 'boolean') symEl.checked = defaults.symmetric;
+    if (minClEl && typeof defaults.minClusterVoxels === 'number') {
+      minClEl.value = String(defaults.minClusterVoxels);
+    }
   }
 
   async _lesionFileMatchesYeoGrid() {

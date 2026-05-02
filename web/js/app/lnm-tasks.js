@@ -73,6 +73,12 @@ export const LNM_PIPELINES = [
         module: 'fc-weighted-sum',
         connectomeAssetId: 'yeo7-fc-pack',
         required: true
+      },
+      {
+        id: 'threshold',
+        module: 'threshold',
+        required: false,
+        defaults: { mode: 'percentile', value: 95, symmetric: true, minClusterVoxels: 0 }
       }
     ]
   },
@@ -112,6 +118,18 @@ export const LNM_PIPELINES = [
         module: 'parcel-overlap',
         atlasAssetId: 'yeo7-2mm',
         required: true
+      },
+      {
+        id: 'fc',
+        module: 'fc-weighted-sum',
+        connectomeAssetId: 'yeo7-fc-pack',
+        required: true
+      },
+      {
+        id: 'threshold',
+        module: 'threshold',
+        required: false,
+        defaults: { mode: 'percentile', value: 95, symmetric: true, minClusterVoxels: 0 }
       }
     ]
   },
@@ -182,7 +200,10 @@ const IMPLEMENTED_MODULES = new Set([
   'registration',
   // Phase 4: Yeo7 group-FC weighted sum in web/js/modules/fc-weighted-sum.js,
   // dispatched by the worker's 'run-fc-weighted-sum' op.
-  'fc-weighted-sum'
+  'fc-weighted-sum',
+  // Phase 5: applyThreshold in web/js/modules/threshold.js, driven by
+  // the orchestrator's applyNetworkThreshold().
+  'threshold'
 ]);
 
 export function getPipelineById(id) {
