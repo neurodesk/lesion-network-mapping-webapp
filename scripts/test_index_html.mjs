@@ -54,7 +54,9 @@ const requiredIds = [
   '#downloadThresholdedNetworkMapButton',
   // Phase 6 additions: warp+resample bridge button + one-click full chain.
   '#applyRegistrationToLesionButton',
-  '#runFullPipelineButton'
+  '#runFullPipelineButton',
+  // Phase 16 addition: in-browser affine pre-registration.
+  '#prealignToMniButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);

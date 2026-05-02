@@ -8,6 +8,7 @@ import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } 
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
 import { applyThreshold } from './modules/threshold.js';
 import { affineFromHeader, resampleAffine } from './modules/resample.js';
+import { centroidOfMask, applyAffineToVoxel, computePrealignAffine } from './modules/prealign.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
@@ -196,6 +197,15 @@ export class LesionNetworkMappingApp {
       applyRegBtn.addEventListener('click', () => {
         this.applyRegistrationToLesion().catch(
           err => this.updateOutput(`Apply registration failed: ${err.message}`)
+        );
+      });
+    }
+
+    const prealignBtn = document.getElementById('prealignToMniButton');
+    if (prealignBtn) {
+      prealignBtn.addEventListener('click', () => {
+        this.prealignToMni160().catch(
+          err => this.updateOutput(`Prealign failed: ${err.message}`)
         );
       });
     }
@@ -814,6 +824,98 @@ export class LesionNetworkMappingApp {
       referenceCacheKey: ref.cacheKey,
       nbSteps: 7
     });
+  }
+
+  // Phase 16.2: in-browser affine pre-registration (centroid match) so
+  // arbitrary clinical T1s can flow into the SynthMorph deformable
+  // stage, which hard-requires 160x160x192 1mm input. Runs SynthStrip
+  // first if no brainmask is present, computes the brain centroid in
+  // source world coords, then resamples the T1 + brainmask onto the
+  // MNI160 1mm grid with the centroid placed at MNI voxel (80, 80, 96).
+  // The lesion seg + lesion file are cleared because they were
+  // computed in the old space; user re-runs them on the aligned grid.
+  async prealignToMni160() {
+    if (!this.structuralFile) {
+      this.updateOutput('Drop a structural T1 first.');
+      return;
+    }
+    if (!this.brainmaskFile) {
+      this.updateOutput('Running brain extraction (prealign needs the brain mask)...');
+      await this.runBrainExtraction();
+      if (!this.brainmaskFile) {
+        throw new Error('Brain extraction did not produce a mask; prealign aborted.');
+      }
+    }
+
+    this.updateOutput('Decoding T1 + brainmask for prealign...');
+    const t1Buf = await this.structuralFile.arrayBuffer();
+    const t1 = await decodeNiftiBuffer(t1Buf);
+    const t1Affine = affineFromHeader(t1.header);
+
+    const maskBuf = await this.brainmaskFile.arrayBuffer();
+    const mask = await decodeNiftiBuffer(maskBuf);
+    if (!dimsEqual(mask.dims, t1.dims)) {
+      throw new Error(
+        `prealign: brain mask dims ${mask.dims.join('x')} != T1 dims ${t1.dims.join('x')}`
+      );
+    }
+
+    // Centroid math (pure JS).
+    const cVox = centroidOfMask(mask.data, t1.dims);
+    const cWorld = applyAffineToVoxel(t1Affine, cVox);
+    const mniDims = [160, 160, 192];
+    const dstAffine = computePrealignAffine(cWorld);
+    this.updateOutput(
+      `Prealign centroid: src voxel (${cVox.map(v => v.toFixed(1)).join(', ')}) ` +
+      `-> world (${cWorld.map(v => v.toFixed(1)).join(', ')}) mm; ` +
+      `placing at MNI160 voxel (80, 80, 96).`
+    );
+
+    // Resample T1 (trilinear) and brainmask (nearest, binary).
+    const t1Resampled = resampleAffine(
+      t1.data, t1.dims, t1Affine, mniDims, dstAffine, 'trilinear'
+    );
+    const maskResampled = resampleAffine(
+      mask.data, t1.dims, t1Affine, mniDims, dstAffine, 'nearest'
+    );
+    const maskBin = new Uint8Array(maskResampled.length);
+    for (let i = 0; i < maskResampled.length; i++) maskBin[i] = maskResampled[i] > 0.5 ? 1 : 0;
+
+    const flatAff = [
+      dstAffine[0][0], dstAffine[0][1], dstAffine[0][2], dstAffine[0][3],
+      dstAffine[1][0], dstAffine[1][1], dstAffine[1][2], dstAffine[1][3],
+      dstAffine[2][0], dstAffine[2][1], dstAffine[2][2], dstAffine[2][3]
+    ];
+    const t1Nifti = writeNifti1(t1Resampled, {
+      dims: mniDims, spacing: [1, 1, 1], affine: flatAff,
+      description: 'LNM prealign: centroid match to MNI160 1mm'
+    });
+    const maskNifti = writeNifti1(maskBin, {
+      dims: mniDims, spacing: [1, 1, 1], affine: flatAff,
+      description: 'LNM prealign brainmask resampled to MNI160 1mm'
+    });
+
+    this.structuralFile = arrayBufferToFile(t1Nifti, 'lnm-prealign-t1.nii');
+    this.brainmaskFile = arrayBufferToFile(maskNifti, 'lnm-prealign-brainmask.nii');
+    // Stale results from the pre-prealign space.
+    this.lesionMaskFile = null;
+    this.lesionFile = null;
+    this.mniLesionFile = null;
+    this.overlapResult = null;
+    this.networkMapFile = null;
+    this.networkMapData = null;
+    this.thresholdedMaskFile = null;
+
+    // Refresh viewer with the aligned T1 + brainmask overlay.
+    await this.viewerController.loadBaseVolume(this.structuralFile, { stage: 'structural' });
+    try {
+      await this.viewerController.loadOverlay(this.brainmaskFile, 'green', 0.4, { stage: 'brainmask' });
+    } catch (err) {
+      // Non-fatal: the overlay is cosmetic.
+      this.updateOutput(`Brainmask overlay re-render warning: ${err.message}`);
+    }
+    this.updateOutput('Prealign complete: T1 + brainmask resampled to 160x160x192 1mm.');
+    return this.structuralFile;
   }
 
   // Phase 6.2: bridge Register -> Yeo overlap. Decodes the segmentation NIfTI

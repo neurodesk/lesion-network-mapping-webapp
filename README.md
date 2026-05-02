@@ -72,6 +72,33 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 16 complete (v0.12.0)** — in-browser affine pre-registration.
+
+The SynthMorph deformable head requires its input at exactly 160×160×192
+1mm AND roughly MNI-aligned. Real clinical T1s come in arbitrary dims,
+voxel sizes, and ACPC orientations, which previously meant external
+prep (FSL FLIRT / ANTs) before the auto chain could run. This phase
+ships a centroid-match prealigner in pure JS:
+
+- New module [`web/js/modules/prealign.js`](web/js/modules/prealign.js)
+  exports `centroidOfMask`, `applyAffineToVoxel`, and
+  `computePrealignAffine`. The destination affine places the source
+  brain centroid at MNI160 voxel (80, 80, 96) under canonical FSL
+  orientation (-x, +y, +z); when fed to `resampleAffine(..., 'trilinear')`
+  it produces a 160³ 1mm prealigned T1 + brainmask in one pass.
+- New orchestrator method `prealignToMni160()` and a new "Pre-align to
+  MNI 160³ 1mm" button in the Lesion section. Runs SynthStrip first
+  if the brainmask is absent, then resamples T1 + brainmask in pure JS,
+  clears stale downstream state, and rerenders the viewer.
+- Test suite: `scripts/test_prealign.cjs` covers the math (cube
+  centroid, identity / scaled+translated affines, round-trip from MNI
+  voxel back to source world centroid). Wired into `npm test`.
+
+Limitations: centroid match only — no rotation correction, no
+intensity-based optimisation. Works well for ACPC-aligned scans
+(modern T1s); rotated clinical acquisitions or scans with severe
+pathology may need a follow-up rigid pass (Phase 16 v2).
+
 **Phase 20 complete (v0.11.1)** — CI/CD lock-down. Both
 `.github/workflows/deploy-pages.yml` and `.github/workflows/release.yml`
 were carried over from the SCT scaffold and broken on this fork

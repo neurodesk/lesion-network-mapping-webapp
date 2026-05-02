@@ -51,7 +51,9 @@ for (const method of [
   // Phase 15 additions: stage dispatch + threshold-default helper.
   '_runStage', '_applyThresholdDefaults',
   // Phase 19 additions: per-stage perf instrumentation helpers.
-  '_now', '_formatMs'
+  '_now', '_formatMs',
+  // Phase 16 additions: in-browser affine pre-registration to MNI160 1mm.
+  'prealignToMni160'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -165,6 +167,18 @@ assert.match(src, /populateVersionLabel\s*\(/,
   'populateVersionLabel must be defined');
 assert.match(src, /aboutAppVersion/,
   'populateVersionLabel must reference the #aboutAppVersion DOM id');
+
+// Phase 16: in-browser affine pre-registration. The orchestrator must
+// import the centroid + affine helpers from prealign.js and surface a
+// 'Pre-align to MNI' button.
+assert.match(src, /from\s+['"]\.\/modules\/prealign\.js['"]/,
+  'lnm-app.js must import prealign.js');
+assert.match(src, /\bcentroidOfMask\s*\(/,
+  'prealignToMni160 must call centroidOfMask');
+assert.match(src, /\bcomputePrealignAffine\s*\(/,
+  'prealignToMni160 must call computePrealignAffine');
+assert.match(src, /['"]prealignToMniButton['"]/,
+  '#prealignToMniButton must be referenced for the click binding');
 
 // Phase 19: per-stage perf instrumentation. runFullPipeline must collect
 // stage timings into _perfStats and log a [perf] line per stage. Source-
