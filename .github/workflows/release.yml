@@ -11,19 +11,19 @@ concurrency:
   group: release-production
   cancel-in-progress: true
 
+# Manual-only release. Bumps the patch version + tags + creates a
+# GitHub release; the Pages deploy workflow then redeploys production
+# from the new tag. Tests must be green before the bump runs.
+
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
-    outputs:
-      failed_tests: ${{ steps.test_failure_summary.outputs.failed_tests }}
-      failure_count: ${{ steps.test_failure_summary.outputs.failure_count }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
-          lfs: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -40,24 +40,18 @@ jobs:
           cd web
           bash setup.sh
 
-      - name: Run full test suite (lint, parity, controllers, UI, worker e2e + protocol)
-        id: full_test_suite
-        shell: bash
+      - name: Run full test suite
         run: |
-          set +e
+          set -e
           npm test 2>&1 | tee "${RUNNER_TEMP}/npm-test.log"
-          status="${PIPESTATUS[0]}"
-          echo "log_path=${RUNNER_TEMP}/npm-test.log" >> "$GITHUB_OUTPUT"
-          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
-          exit "$status"
 
-      - name: Summarize failed tests
-        id: test_failure_summary
-        if: failure() && steps.full_test_suite.outcome == 'failure'
-        env:
-          TEST_EXIT_CODE: ${{ steps.full_test_suite.outputs.exit_code }}
-          TEST_LOG_PATH: ${{ steps.full_test_suite.outputs.log_path }}
-        run: node scripts/summarize_test_failures.cjs "$TEST_LOG_PATH" | tee "$GITHUB_STEP_SUMMARY"
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-test-log
+          path: ${{ runner.temp }}/npm-test.log
+          retention-days: 7
 
   release:
     needs: validate

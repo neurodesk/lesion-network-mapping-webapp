@@ -72,6 +72,23 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 20 complete (v0.11.1)** — CI/CD lock-down. Both
+`.github/workflows/deploy-pages.yml` and `.github/workflows/release.yml`
+were carried over from the SCT scaffold and broken on this fork
+(referenced Git LFS we don't use, `web/models/*.onnx` files that don't
+exist, and missing helper scripts `get_version.sh` /
+`summarize_test_failures.cjs`). Rewritten:
+
+- LFS removed throughout (we fetch ONNX from Hugging Face at runtime).
+- Deploy verification now checks `web/wasm/ort-wasm*.wasm` (the only
+  weight-class artifact we actually ship).
+- New `scripts/get_version.sh` parses `VERSION` out of
+  `web/js/app/config.js` for the release-tag bump step.
+- Release workflow simplified — runs `npm test`, uploads the log on
+  failure, computes the next patch version, tags + creates the GitHub
+  release, then the deploy workflow's `workflow_run` trigger redeploys
+  production from the new tag.
+
 **Phase 19 complete (v0.11.0)** — per-stage perf instrumentation.
 
 `runFullPipeline()` now wraps each stage in `performance.now()` markers,
