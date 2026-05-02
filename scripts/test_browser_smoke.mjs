@@ -265,6 +265,92 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
   }
 });
 
+// Phase 8: Run full pipeline button on the manual-mask branch. Same phantom
+// as Phase 1c.4, but a single click should drive overlap + FC network map +
+// threshold (defaults) end to end. Stays on the manual-mask branch so we
+// don't need a structural T1 fixture.
+test('Phase 8 browser smoke: phantom -> Run full pipeline (manual branch)', { timeout: 120000 }, async (t) => {
+  await fs.access(PHANTOM_PATH);
+
+  // Use a different port so a leftover server from the previous test
+  // (in case its teardown lagged) cannot collide.
+  const port = BASE_PORT + 5;
+  const URL = `http://localhost:${port}/`;
+  const { server, getStdout, getStderr, close } = await spawnServer(port);
+  try {
+    await waitForServer(URL);
+
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext({ acceptDownloads: true });
+      const page = await context.newPage();
+      const consoleMessages = [];
+      page.on('console', msg => consoleMessages.push(`[${msg.type()}] ${msg.text()}`));
+      page.on('pageerror', err => consoleMessages.push(`[pageerror] ${err.message}`));
+
+      await page.goto(URL, { waitUntil: 'load' });
+      await page.waitForFunction(() => Boolean(window.app && window.app.viewerController), { timeout: 15000 });
+
+      await page.setInputFiles('#lesionFileInput', PHANTOM_PATH);
+      await page.waitForFunction(() => Boolean(window.app.lesionFile), { timeout: 15000 });
+
+      // The button itself is the fast path for users who dropped a Yeo-grid
+      // mask manually. Internally: detect 99x117x95 -> skip seg+register ->
+      // runYeoOverlap -> runFcNetworkMap -> applyNetworkThreshold.
+      await page.click('#runFullPipelineButton');
+
+      // Wait until the overlap + FC + threshold side-effects have all
+      // landed: networkOverlapTable populated, networkMapFile present,
+      // thresholdedMaskFile present. Manual poll loop because nested
+      // promise chains can take ~10–60 s on cold HF cache.
+      const FULL_TIMEOUT = 120000;
+      const startedAt = Date.now();
+      let done = false;
+      while (Date.now() - startedAt < FULL_TIMEOUT) {
+        done = await page.evaluate(() => Boolean(
+          window.app
+          && window.app.overlapResult
+          && window.app.networkMapFile
+          && window.app.thresholdedMaskFile
+        ));
+        if (done) break;
+        await sleep(500);
+      }
+      if (!done) {
+        throw new Error(
+          `Full pipeline did not complete within ${FULL_TIMEOUT}ms\n` +
+          `console: ${consoleMessages.slice(-30).join('\n')}`
+        );
+      }
+
+      const overlapRowCount = await page.$$eval(
+        '#networkOverlapTable tbody tr',
+        rows => rows.length
+      );
+      assert.ok(overlapRowCount > 0, 'Overlap table should have at least one row after the chain.');
+
+      const fcEnabled = await page.$eval('#downloadNetworkMapButton', el => !el.disabled);
+      assert.ok(fcEnabled, 'Download network map button should be enabled.');
+
+      const threshEnabled = await page.$eval('#downloadThresholdedNetworkMapButton', el => !el.disabled);
+      assert.ok(threshEnabled, 'Download thresholded mask button should be enabled.');
+
+      const threshSummary = await page.$eval('#networkThresholdSummary', el => el.textContent);
+      assert.match(threshSummary, /voxels survive/i,
+        `threshold summary must show survivor count, got: ${JSON.stringify(threshSummary)}`);
+
+      t.diagnostic(`Run full pipeline OK: ${overlapRowCount} rows, summary="${threshSummary}".`);
+    } finally {
+      await browser.close();
+    }
+  } catch (err) {
+    err.message += `\n\n--- server stdout ---\n${getStdout()}\n--- server stderr ---\n${getStderr()}`;
+    throw err;
+  } finally {
+    await close();
+  }
+});
+
 test('Phase 2a.1.5 browser smoke: structural T1 -> SynthStrip -> brain mask download',
   { timeout: 240000 },
   async (t) => {
