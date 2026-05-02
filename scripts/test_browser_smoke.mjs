@@ -286,3 +286,113 @@ test('Phase 2a.1.5 browser smoke: structural T1 -> SynthStrip -> brain mask down
     }
   }
 );
+
+test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask download',
+  { timeout: 240000 },
+  async (t) => {
+    await fs.access(STRUCTURAL_PATH);
+
+    const port = BASE_PORT + 2;
+    const URL = `http://localhost:${port}/`;
+    const { getStdout, getStderr, close } = await spawnServer(port);
+
+    try {
+      await waitForServer(URL);
+
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const context = await browser.newContext({ acceptDownloads: true });
+        const page = await context.newPage();
+
+        const consoleMessages = [];
+        page.on('console', msg => consoleMessages.push(`[main:${msg.type()}] ${msg.text()}`));
+        page.on('pageerror', err => consoleMessages.push(`[main:pageerror] ${err.message}`));
+        page.on('worker', worker => {
+          worker.on('console', msg => consoleMessages.push(`[worker:${msg.type()}] ${msg.text()}`));
+        });
+
+        await page.goto(URL, { waitUntil: 'load' });
+        await page.waitForFunction(
+          () => Boolean(window.app && window.app.viewerController && window.app.executor),
+          { timeout: 15000 }
+        );
+
+        // Drop the structural; SynthStrip auto-fires. Wait for the brain
+        // mask to land before kicking off lesion seg (the SCT-derived
+        // worker state is single-tenant: a 'load' op overwrites
+        // workerState.rasData, so we must serialise the two stages).
+        await page.setInputFiles('#structuralFileInput', STRUCTURAL_PATH);
+        const SYNTH_TIMEOUT_MS = 180000;
+        const synthStart = Date.now();
+        let synthDone = false;
+        while (Date.now() - synthStart < SYNTH_TIMEOUT_MS) {
+          synthDone = await page.evaluate(() => Boolean(window.app && window.app.brainmaskFile));
+          if (synthDone) break;
+          await sleep(500);
+        }
+        if (!synthDone) {
+          throw new Error(
+            `SynthStrip never finished within ${SYNTH_TIMEOUT_MS}ms\n` +
+            `console: ${consoleMessages.slice(-30).join('\n')}`
+          );
+        }
+        t.diagnostic(`SynthStrip elapsed: ${((Date.now() - synthStart) / 1000).toFixed(1)}s`);
+
+        // Click 'Run lesion segmentation'. This calls executor.loadVolume +
+        // executor.runInference(...) under the hood.
+        await page.click('#runLesionSegmentationButton');
+        const SEG_TIMEOUT_MS = 180000;
+        const segStart = Date.now();
+        let segDone = false;
+        while (Date.now() - segStart < SEG_TIMEOUT_MS) {
+          segDone = await page.evaluate(() => Boolean(window.app && window.app.lesionMaskFile));
+          if (segDone) break;
+          await sleep(500);
+        }
+        if (!segDone) {
+          throw new Error(
+            `Lesion segmentation never finished within ${SEG_TIMEOUT_MS}ms\n` +
+            `console: ${consoleMessages.slice(-30).join('\n')}`
+          );
+        }
+        t.diagnostic(`Lesion seg elapsed: ${((Date.now() - segStart) / 1000).toFixed(1)}s`);
+
+        const downloadEnabled = await page.$eval('#downloadLesionMaskButton', el => !el.disabled);
+        assert.ok(downloadEnabled, '#downloadLesionMaskButton must enable after a successful run');
+
+        const [download] = await Promise.all([
+          page.waitForEvent('download', { timeout: 15000 }),
+          page.click('#downloadLesionMaskButton')
+        ]);
+        assert.match(
+          download.suggestedFilename(),
+          /\.nii(\.gz)?$/,
+          `download filename must end with .nii or .nii.gz (got ${download.suggestedFilename()})`
+        );
+        const downloadPath = await download.path();
+        assert.ok(downloadPath, 'playwright must materialise the download to a temp file');
+        const masked = await fs.readFile(downloadPath);
+        assert.ok(masked.length > 1000, `lesion mask download too small: ${masked.length} bytes`);
+        const isGzip = masked[0] === 0x1f && masked[1] === 0x8b;
+        const isNiftiHdr = masked[0] === 0x5c && masked[1] === 0x01;
+        assert.ok(
+          isGzip || isNiftiHdr,
+          `lesion mask download is neither gzip nor NIfTI-1 header; ` +
+          `got first bytes ${masked[0].toString(16)} ${masked[1].toString(16)}`
+        );
+
+        t.diagnostic(
+          `Lesion-seg smoke green; downloaded mask = ${masked.length} bytes ` +
+          `(suggested filename: ${download.suggestedFilename()}).`
+        );
+      } finally {
+        await browser.close();
+      }
+    } catch (err) {
+      err.message += `\n\n--- server stdout ---\n${getStdout()}\n--- server stderr ---\n${getStderr()}`;
+      throw err;
+    } finally {
+      await close();
+    }
+  }
+);
