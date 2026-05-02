@@ -72,6 +72,24 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 18 complete (v0.12.1)** — real-data bridge integration test.
+
+The unit suites covered the resample math on synthetic phantoms and
+the prealign math on synthetic centroids; this slice connects them on
+real anatomical shape so a regression that fires only on a real lesion
+surfaces in CI. New `scripts/test_real_data_bridge.mjs` runs in `npm
+test`:
+
+1. Decodes the committed `ds004884-mini` lesion mask (160×256×256 1mm
+   real chronic stroke, ~131k voxels).
+2. Runs `centroidOfMask` → `applyAffineToVoxel` → `computePrealignAffine`.
+3. Resamples the lesion onto MNI160 1mm via `resampleAffine(...)`.
+4. Resamples again onto the canonical Yeo7 99×117×95 2mm grid.
+5. Asserts: source 131k → MNI160 ~131k (within ±15% for a 1mm→1mm
+   shift+flip), MNI160 → Yeo7 within ±50% of the expected ⅛
+   downsample, and the MNI160 centroid lands at voxel (80, 80, 96)
+   within 1 voxel.
+
 **Phase 16 complete (v0.12.0)** — in-browser affine pre-registration.
 
 The SynthMorph deformable head requires its input at exactly 160×160×192
