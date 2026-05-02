@@ -28,6 +28,31 @@ export const LNM_PIPELINES = [
     ]
   },
   {
+    id: 'lnm-segment-only',
+    displayName: 'Auto-segment lesion (T1 + SynthStrip)',
+    description:
+      'Drop a structural T1. Brain extraction (SynthStrip) runs ' +
+      'automatically; the lesion-segmentation model (SynthStroke ' +
+      'baseline) operates on the brain-masked structural and produces a ' +
+      'binary lesion mask in the input image\'s native space, downloadable ' +
+      'as NIfTI. No MNI registration / no Yeo overlap (those land in ' +
+      'Phases 3-4).',
+    stages: [
+      {
+        id: 'brainmask',
+        module: 'brain-extraction',
+        modelAssetId: 'lnm-synthstrip',
+        required: true
+      },
+      {
+        id: 'segment',
+        module: 'inference-pipeline',
+        modelAssetId: 'lnm-stroke-lesion',
+        required: true
+      }
+    ]
+  },
+  {
     id: 'lnm-default',
     displayName: 'Lesion Network Mapping (Schaefer400 / GSP1000)',
     description:
@@ -78,7 +103,13 @@ export const LNM_PIPELINES = [
 // Modules that have a working JS implementation in this phase. A stage whose
 // module is not in this set is not runnable, even if its asset ID resolves.
 const IMPLEMENTED_MODULES = new Set([
-  'parcel-overlap'
+  'parcel-overlap',
+  // Phase 2a.1: SynthStrip in web/js/modules/brain-extraction.js, dispatched
+  // by the worker's 'run-synthstrip' op.
+  'brain-extraction',
+  // Phase 2a.2: SynthStroke baseline in web/js/inference-pipeline.js
+  // (sliding-window patches), dispatched by the worker's 'run-inference' op.
+  'inference-pipeline'
 ]);
 
 export function getPipelineById(id) {

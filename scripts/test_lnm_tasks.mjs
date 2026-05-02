@@ -68,4 +68,25 @@ assert.equal(
   'a stage missing its required assets must be flagged not-runnable'
 );
 
-console.log(`LNM tasks OK: ${LNM_PIPELINES.length} pipeline(s), Yeo overlap stage runnable.`);
+// Phase 2a.2: lnm-segment-only pipeline (T1 -> SynthStrip -> lesion seg ->
+// display + download). No registration / no atlas overlap until Phase 3.
+const segOnly = getPipelineById('lnm-segment-only');
+assert.ok(segOnly, "Phase 2a.2 must define an 'lnm-segment-only' pipeline");
+const brainmaskStage = segOnly.stages.find(s => s.id === 'brainmask');
+const segStage = segOnly.stages.find(s => s.id === 'segment');
+assert.ok(brainmaskStage, "lnm-segment-only must declare a 'brainmask' stage");
+assert.ok(segStage, "lnm-segment-only must declare a 'segment' stage");
+assert.equal(brainmaskStage.module, 'brain-extraction',
+  'brainmask stage must reference the brain-extraction module');
+assert.equal(brainmaskStage.modelAssetId, 'lnm-synthstrip',
+  'brainmask stage must reference the lnm-synthstrip model');
+assert.equal(segStage.module, 'inference-pipeline',
+  'segment stage must reference the inference-pipeline module');
+assert.equal(segStage.modelAssetId, 'lnm-stroke-lesion',
+  'segment stage must reference the lnm-stroke-lesion model');
+assert.equal(isStageRunnable(brainmaskStage), true,
+  'brainmask stage must be runnable (Phase 2a.1 module is implemented)');
+assert.equal(isStageRunnable(segStage), true,
+  'segment stage must be runnable (Phase 2a.2 module + asset are wired)');
+
+console.log(`LNM tasks OK: ${LNM_PIPELINES.length} pipeline(s); Yeo overlap + lnm-segment-only runnable.`);
