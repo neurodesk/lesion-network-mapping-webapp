@@ -111,6 +111,63 @@ async function fetchAtlasBuffer(manifestEntry) {
   return response.arrayBuffer();
 }
 
+// Phase 4: load a connectome pack (.bin + companion index.json) via the
+// same Cache Storage path the atlas-loader uses for atlases. Returns the
+// raw ArrayBuffer for the .bin plus the parsed index.
+export async function loadConnectomeFromManifest(connectomeAssetId, { manifest } = {}) {
+  const assetManifest = manifest || await loadManifest();
+  const manifestEntry = assetManifest.connectomeAssets?.find(
+    a => a.id === connectomeAssetId
+  );
+  if (!manifestEntry) {
+    throw new Error(`Connectome asset not found: ${connectomeAssetId}`);
+  }
+  if (manifestEntry.supportStatus !== 'supported') {
+    throw new Error(`Connectome asset is not supported: ${connectomeAssetId}`);
+  }
+
+  // Fetch + cache the .bin under the same lnm-assets-v1 cache used for atlases.
+  let cache = null;
+  if (typeof caches !== 'undefined') {
+    cache = await caches.open(ATLAS_CACHE);
+  }
+  const arrayBuffer = await fetchCacheFirst(
+    manifestEntry.sourceUrl,
+    manifestEntry.cacheKey,
+    cache
+  );
+
+  // The companion index.json is small (~hundreds of bytes); fetch fresh
+  // each time. Cache it under cacheKey + ':index' so the byte-offsets
+  // round-trip if the cache backend prefers one round-trip per key.
+  const indexCacheKey = manifestEntry.cacheKey
+    ? `${manifestEntry.cacheKey}:index`
+    : null;
+  const indexUrl = manifestEntry.indexSourceUrl;
+  if (!indexUrl) {
+    throw new Error(`Connectome ${connectomeAssetId} missing indexSourceUrl`);
+  }
+  const indexBuf = await fetchCacheFirst(indexUrl, indexCacheKey, cache);
+  const index = JSON.parse(new TextDecoder('utf-8').decode(indexBuf));
+
+  return { arrayBuffer, index, manifestEntry };
+}
+
+// Shared fetch+cache helper. Returns ArrayBuffer.
+async function fetchCacheFirst(url, cacheKey, cache) {
+  if (cache && cacheKey) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit.arrayBuffer();
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`fetch ${url} -> HTTP ${response.status}`);
+    await cache.put(cacheKey, response.clone());
+    return response.arrayBuffer();
+  }
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`fetch ${url} -> HTTP ${response.status}`);
+  return response.arrayBuffer();
+}
+
 export async function loadAtlasFromManifest(atlasAssetId, { manifest } = {}) {
   const assetManifest = manifest || await loadManifest();
   const manifestEntry = assetManifest.atlasAssets?.find(asset => asset.id === atlasAssetId);

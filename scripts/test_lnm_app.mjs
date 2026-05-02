@@ -39,7 +39,9 @@ for (const method of [
   // Phase 2a.2.3 additions:
   'runLesionSegmentation', 'downloadLesionMask',
   // Phase 3.4 additions:
-  'runRegistration'
+  'runRegistration',
+  // Phase 4.4 additions:
+  'runFcNetworkMap', 'downloadNetworkMap'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -119,6 +121,24 @@ assert.match(src, /['"]lnm-synthmorph-mni['"]/,
   'orchestrator must reference the lnm-synthmorph-mni asset id literal');
 assert.match(src, /['"]lnm-mni160['"]/,
   'orchestrator must reference the lnm-mni160 atlas asset id literal');
+
+// Phase 4.4: FC weighted-sum wiring. runFcNetworkMap loads the
+// yeo7-fc-pack via loadConnectomeFromManifest, calls fcWeightedSum,
+// wraps as NIfTI, enables #downloadNetworkMapButton.
+assert.match(src, /from\s+['"]\.\/modules\/fc-weighted-sum\.js['"]/,
+  'lnm-app.js must import fc-weighted-sum.js');
+assert.match(src, /\bfcWeightedSum\s*\(/,
+  'orchestrator must invoke fcWeightedSum(...)');
+assert.match(src, /\bdecodeFcPack\s*\(/,
+  'orchestrator must decode the FC pack via decodeFcPack');
+assert.match(src, /\bsummaryToNetworkWeights\s*\(/,
+  'orchestrator must convert overlap summary to network weights');
+assert.match(src, /['"]yeo7-fc-pack['"]/,
+  'orchestrator must reference the yeo7-fc-pack connectome asset id literal');
+assert.match(src, /\bloadConnectomeFromManifest\s*\(/,
+  'orchestrator must load the FC pack via loadConnectomeFromManifest');
+assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
+  'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

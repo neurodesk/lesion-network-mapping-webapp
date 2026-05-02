@@ -4,7 +4,9 @@ import { InferenceExecutor } from './controllers/InferenceExecutor.js';
 import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
 import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
-import { loadAtlasFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
+import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
+import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
+import { writeNifti1 } from './modules/nifti-writer.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
 import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
@@ -63,6 +65,7 @@ export class LesionNetworkMappingApp {
     this.overlapResult = null;
     this.brainmaskFile = null;     // populated by handleStageData('brainmask')
     this.lesionMaskFile = null;    // populated by handleStageData('segmentation')
+    this.networkMapFile = null;    // Phase 4: populated by runFcNetworkMap
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
 
@@ -175,6 +178,20 @@ export class LesionNetworkMappingApp {
           err => this.updateOutput(`Registration failed: ${err.message}`)
         );
       });
+    }
+
+    const runFcBtn = document.getElementById('computeNetworkMapButton');
+    if (runFcBtn) {
+      runFcBtn.addEventListener('click', () => {
+        this.runFcNetworkMap().catch(
+          err => this.updateOutput(`Network map failed: ${err.message}`)
+        );
+      });
+    }
+    const downloadFcBtn = document.getElementById('downloadNetworkMapButton');
+    if (downloadFcBtn) {
+      downloadFcBtn.disabled = true;
+      downloadFcBtn.addEventListener('click', () => this.downloadNetworkMap());
     }
 
     const copyConsole = document.getElementById('copyConsole');
@@ -481,6 +498,83 @@ export class LesionNetworkMappingApp {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'lnm-lesion.nii';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Phase 4.4: lesion network map via Yeo7 group-FC weighted sum. Pure
+  // main-thread (no worker) — the math is just a per-voxel linear combo
+  // of seven precomputed t-maps. Requires runYeoOverlap to have run first
+  // (we read the network-overlap result for the weights).
+  async runFcNetworkMap() {
+    if (!this.overlapResult) {
+      this.updateOutput('Run "Compute overlap" first to get network weights.');
+      return;
+    }
+    this.updateOutput('Loading Yeo7 group-FC pack...');
+    const { arrayBuffer, index, manifestEntry } =
+      await loadConnectomeFromManifest('yeo7-fc-pack');
+    const pack = decodeFcPack(arrayBuffer, index);
+
+    const NETWORK_ORDER = [
+      'Visual', 'Somatomotor', 'DorsalAttention', 'VentralAttention',
+      'Limbic', 'Frontoparietal', 'Default'
+    ];
+    const weights = summaryToNetworkWeights(this.overlapResult.summary, NETWORK_ORDER);
+    const dims = index.shape.slice(1);   // shape = [7, X, Y, Z]
+    this.updateOutput(
+      `Computing network map: weights=[${
+        Array.from(weights).map(w => w.toFixed(2)).join(', ')
+      }]`
+    );
+    const fcMap = fcWeightedSum(weights, pack.tMaps, dims);
+
+    // Wrap as a NIfTI for download / overlay. The Yeo atlas's spacing /
+    // affine is the canonical pose for the FC pack — manifestEntry from
+    // the connectome carries atlasResolutionMm; the Yeo atlas itself is
+    // the same grid (99x117x95 2mm).
+    const spacingMm = manifestEntry.atlasResolutionMm || 2;
+    const niftiBuffer = writeNifti1(fcMap, {
+      dims,
+      spacing: [spacingMm, spacingMm, spacingMm],
+      description: 'LNM Yeo7 FC weighted sum'
+    });
+    this.networkMapFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map.nii');
+
+    // Render as overlay on the structural / lesion view, blue-red diverging.
+    if (this.structuralFile || this.lesionFile) {
+      this.viewerController
+        .loadOverlay(this.networkMapFile, 'redyell', 0.5, { stage: 'network-map' })
+        .catch(err => this.updateOutput(`Network-map render error: ${err.message}`));
+    }
+    const dlBtn = document.getElementById('downloadNetworkMapButton');
+    if (dlBtn) dlBtn.disabled = false;
+
+    // Quick stats: range + voxels above |t| > 5 (rough significance bar).
+    let mn = Infinity, mx = -Infinity, above = 0;
+    for (let i = 0; i < fcMap.length; i++) {
+      const v = fcMap[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+      if (Math.abs(v) > 5) above += 1;
+    }
+    this.updateOutput(
+      `Network map ready: t-range [${mn.toFixed(1)}, ${mx.toFixed(1)}], ` +
+      `${above.toLocaleString()} voxels with |t|>5.`
+    );
+  }
+
+  downloadNetworkMap() {
+    if (!this.networkMapFile) {
+      this.updateOutput('No network map available yet.');
+      return;
+    }
+    const url = URL.createObjectURL(this.networkMapFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lnm-network-map.nii';
     document.body.appendChild(a);
     a.click();
     a.remove();

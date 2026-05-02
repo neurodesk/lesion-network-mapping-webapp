@@ -117,6 +117,17 @@
           <button class="btn btn-secondary btn-sm" id="downloadOverlapCsv" disabled>Download CSV</button>
           <button class="btn btn-secondary btn-sm" id="downloadBrainMaskButton" disabled>Download brain mask</button>
           <button class="btn btn-secondary btn-sm" id="downloadLesionMaskButton" disabled>Download lesion mask</button>
+          <hr style="border:0;border-top:1px solid var(--border, #2a2a2a);margin:12px 0">
+          <h3 style="font-size:12px;text-transform:uppercase;color:var(--muted,#888);margin:0 0 6px 0">Network map</h3>
+          <p class="param-help">
+            Yeo7 group-FC weighted sum. Computes a brain-wide t-map after
+            running "Compute overlap" — each Yeo network's group-level
+            connectivity map is weighted by the lesion's share of that network.
+          </p>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="computeNetworkMapButton">Compute network map</button>
+            <button class="btn btn-secondary btn-sm" id="downloadNetworkMapButton" disabled>Download network map</button>
+          </div>
         </div>
       </section>
     </div>

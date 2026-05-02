@@ -42,7 +42,10 @@ const requiredIds = [
   '#runLesionSegmentationButton',
   '#downloadLesionMaskButton',
   // Phase 3.4 additions: registration button.
-  '#runRegistrationButton'
+  '#runRegistrationButton',
+  // Phase 4.4 additions: Network map subsection.
+  '#computeNetworkMapButton',
+  '#downloadNetworkMapButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);
