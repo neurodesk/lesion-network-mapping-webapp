@@ -91,11 +91,16 @@ against a real MNI152 anatomical T1. Pipeline-correctness checks
 
 ```sh
 npm run test:synthstrip-parity   # SynthStrip:    ~5 s
-npm run test:lesion-seg-parity   # Lesion seg:    ~1 s
+npm run test:lesion-seg-parity   # Lesion seg:    ~5 s; Dice >= 0.50 vs ds004884 ground truth
 ```
 
 Both fetch their respective ONNX models live from Hugging Face on first
-run (cached under `web/models/_dev_cache/`, gitignored).
+run (cached under `web/models/_dev_cache/`, gitignored). The
+lesion-segmentation parity uses one chronic-stroke subject from
+[OpenNeuro ds004884](https://openneuro.org/datasets/ds004884/versions/1.0.1)
+(Aphasia Recovery Cohort, Roth et al. 2024 — CC0); see
+`tests/fixtures/ds004884-mini/SOURCE.md` for attribution. Observed Dice
+on `sub-M2051 ses-284`: 0.5325.
 
 ## License
 
