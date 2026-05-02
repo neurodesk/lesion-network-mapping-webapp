@@ -86,6 +86,19 @@
   ],
   "atlasAssets": [
     {
+      "id": "lnm-mni160",
+      "filename": "templates/lnm-mni160.nii.gz",
+      "sizeBytes": 8514318,
+      "checksum": "sha256:cb6119e9ef403301d4e687e3dcb8fad09ad27c3d6dd556a0c387d7ababb78ccd",
+      "cacheKey": "lnm-mni160-mni152nlin2009c-160x160x192-1mm-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/templates/lnm-mni160.nii.gz",
+      "sourceVersion": "MNI152NLin2009cAsym-160x160x192-1mm-minmax-normalized",
+      "resolutionMm": 1,
+      "dims": [160, 160, 192],
+      "supportStatus": "supported",
+      "_comment": "Phase 3 SynthMorph registration target. The 'brains' SynthMorph model was trained at 160x160x192 1mm; the orchestrator hands this reference + the source T1 to the model and gets back a stationary velocity field. Built by resampling nilearn's MNI152NLin2009cAsym 1mm template onto a 160x160x192 grid centred on the brain, then min-max normalised to [0,1]. Shares the lnm-models cache name space; lives under atlasAssets so it can use the existing atlas-loader path."
+    },
+    {
       "id": "yeo7-2mm",
       "filename": "Yeo7_LiberalMask_2mm.nii.gz",
       "sizeBytes": 73181,

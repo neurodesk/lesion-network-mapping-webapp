@@ -16,6 +16,11 @@
 import * as ort from '../wasm/ort.webgpu.bundle.min.mjs';
 import * as InferencePipeline from './inference-pipeline.js';
 import { runSynthStrip } from './modules/brain-extraction.js';
+import {
+  integrateSvf,
+  upsampleDisplacementField,
+  warpVolume
+} from './modules/registration.js';
 
 // nifti-reader-js is a UMD bundle that installs `self.nifti` as a side-
 // effect. We do NOT await its import at module top level: Chromium drops
@@ -51,6 +56,12 @@ let workerState = {
   // Unmasked segmentation labels in RAS space (before brain mask / CC cleanup)
   segLabelsRAS: null,
   segMinComponentSize: 10,
+  // Phase 3 SynthMorph: integrated full-resolution displacement field stored
+  // in workerState so a follow-up 'warp-mask' op can apply it to a mask
+  // without re-running the registration. Float32Array, length 160*160*192*3,
+  // NDHWC channel-last layout (matches the SynthMorph ONNX output).
+  displacementField: null,
+  displacementDims: null,
 };
 
 function resetState() {
@@ -67,6 +78,8 @@ function resetState() {
     rasSpacing: null,
     segLabelsRAS: null,
     segMinComponentSize: 10,
+    displacementField: null,
+    displacementDims: null,
   };
 }
 
@@ -1248,6 +1261,181 @@ async function stepSynthStrip(params = {}) {
   postStepComplete('brainmask');
 }
 
+// Phase 3.4 SynthMorph registration. Takes the patient T1 (already on
+// workerState.rasData; *must* be at 160x160x192 1mm — the model's training
+// resolution and the LNM webapp's MNI reference grid) and warps it into
+// alignment with the lnm-mni160 reference. The integrated displacement
+// field is stashed on workerState so a follow-up 'warp-mask' op can apply
+// it to lesion / structural masks without re-running the network.
+//
+// The orchestrator is responsible for resampling / padding the source T1
+// to 160x160x192 1mm BEFORE 'load' (e.g. via FSL FLIRT to MNI152 + crop).
+// Documented in the lnm-yeo-auto pipeline preconditions; the worker
+// surfaces a clear error if the source dims don't match.
+async function stepRegister(params = {}) {
+  if (!workerState.rasData) {
+    throw new Error('No volume loaded. Run Load first.');
+  }
+  const expected = [160, 160, 192];
+  const got = workerState.rasDims;
+  if (got[0] !== expected[0] || got[1] !== expected[1] || got[2] !== expected[2]) {
+    throw new Error(
+      `SynthMorph registration requires source at 160x160x192; got ${got.join('x')}. ` +
+      `Pre-process the T1 to this grid (e.g. FSL FLIRT to MNI152 + center-crop) before running.`
+    );
+  }
+
+  const {
+    modelAssetId = 'lnm-synthmorph-mni',
+    modelName = 'lnm-synthmorph-mni.onnx',
+    modelBaseUrl,
+    modelCacheKey,
+    referenceAssetId = 'lnm-mni160',
+    referenceUrl,
+    referenceCacheKey,
+    nbSteps = 7
+  } = params;
+  if (!modelBaseUrl) throw new Error('run-register requires modelBaseUrl');
+  if (!referenceUrl) throw new Error('run-register requires referenceUrl');
+
+  // Min-max normalise the source so its intensity range matches the
+  // lnm-mni160 reference (which was built min-max [0, 1]).
+  postProgress(0.05, 'Normalising source T1...');
+  let srcMin = Infinity, srcMax = -Infinity;
+  const src = workerState.rasData;
+  for (let i = 0; i < src.length; i++) {
+    const v = src[i];
+    if (v < srcMin) srcMin = v;
+    if (v > srcMax) srcMax = v;
+  }
+  const range = (srcMax - srcMin) || 1;
+  const sourceNormalized = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i++) sourceNormalized[i] = (src[i] - srcMin) / range;
+
+  // Fetch + decode the MNI reference target (cached).
+  postProgress(0.10, 'Fetching MNI reference...');
+  self._modelCacheKey = referenceCacheKey || `${referenceAssetId}:${self._appVersion || ''}`;
+  const refBytes = await fetchModel(referenceUrl, 'lnm-mni160.nii.gz', 0.10, 0.10);
+  const refUint8 = new Uint8Array(refBytes);
+  let refBuf = refBytes;
+  if (refUint8[0] === 0x1f && refUint8[1] === 0x8b) {
+    refBuf = nifti.decompress(refBytes);
+  }
+  if (!nifti.isNIFTI(refBuf)) {
+    throw new Error('MNI reference is not a valid NIfTI');
+  }
+  const refHeader = nifti.readHeader(refBuf);
+  const refImage = nifti.readImage(refHeader, refBuf);
+  // Reference was saved as float32 by the build pipeline.
+  const targetData = new Float32Array(refImage);
+  if (targetData.length !== 160 * 160 * 192) {
+    throw new Error(`MNI reference has ${targetData.length} voxels; expected ${160 * 160 * 192}`);
+  }
+
+  // Fetch the SynthMorph SVF ONNX.
+  postProgress(0.20, 'Fetching SynthMorph model...');
+  self._modelCacheKey = modelCacheKey || `${modelAssetId}:${self._appVersion || ''}`;
+  const modelArrayBuffer = await fetchModel(
+    `${modelBaseUrl}/${modelName}`, modelName, 0.20, 0.30
+  );
+
+  postProgress(0.55, 'Building SynthMorph session...');
+  const session = await ort.InferenceSession.create(modelArrayBuffer, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all'
+  });
+  const inputNames = session.inputNames;
+  const outputName = session.outputNames[0];
+  postLog(`SynthMorph session ready (inputs=${inputNames.join(',')}, output=${outputName})`);
+
+  // The model expects channel-last NDHWC: (1, 160, 160, 192, 1) per input.
+  // Our F-order data needs a one-pass repack into row-major NDHWC.
+  // F-order index: i_F = x + y*X + z*X*Y
+  // Row-major NDHWC (C=1): i_R = (x*Y + y)*Z + z
+  const X = 160, Y = 160, Z = 192;
+  function fOrderToNDHWC(fdata) {
+    const out = new Float32Array(X * Y * Z);
+    for (let z = 0; z < Z; z++) {
+      for (let y = 0; y < Y; y++) {
+        for (let x = 0; x < X; x++) {
+          out[(x * Y + y) * Z + z] = fdata[x + y * X + z * X * Y];
+        }
+      }
+    }
+    return out;
+  }
+  const sourceNHWC = fOrderToNDHWC(sourceNormalized);
+  const targetNHWC = fOrderToNDHWC(targetData);
+
+  postProgress(0.60, 'Running SynthMorph (single-pass, ~30 s)...');
+  const t0 = performance.now();
+  const sourceTensor = new ort.Tensor('float32', sourceNHWC, [1, X, Y, Z, 1]);
+  const targetTensor = new ort.Tensor('float32', targetNHWC, [1, X, Y, Z, 1]);
+  let svfFlat;
+  try {
+    const out = await session.run({
+      [inputNames[0]]: sourceTensor,
+      [inputNames[1]]: targetTensor
+    });
+    svfFlat = out[outputName].data;
+  } finally {
+    sourceTensor.dispose?.();
+    targetTensor.dispose?.();
+    session.release?.();
+  }
+  postLog(`SynthMorph forward in ${((performance.now() - t0) / 1000).toFixed(1)}s; SVF shape=80x80x96x3`);
+
+  // Integrate SVF (scaling-and-squaring) and upsample to full-res. Both
+  // run in pure JS — see web/js/modules/registration.js. svfFlat is
+  // already in row-major NDHWC, which is what registration.js expects.
+  postProgress(0.85, 'Integrating SVF (scaling-and-squaring)...');
+  const halfDims = [80, 80, 96];
+  const halfDisp = integrateSvf(svfFlat, halfDims, nbSteps);
+
+  postProgress(0.95, 'Upsampling displacement to full resolution...');
+  const fullDims = [X, Y, Z];
+  const fullDisp = upsampleDisplacementField(halfDisp, halfDims, fullDims);
+
+  workerState.displacementField = fullDisp;
+  workerState.displacementDims = fullDims;
+  postLog(`Displacement field: ${fullDisp.length.toLocaleString()} floats stored on worker state`);
+  postProgress(1.0, 'Registration complete');
+  postStepComplete('register');
+}
+
+// Phase 3.5 helper: apply the integrated displacement field (left on
+// workerState by stepRegister) to a binary mask and emit the warped result.
+// The mask is passed in as F-order voxel bytes via the message data; the
+// orchestrator decodes a NIfTI before posting.
+async function stepWarpMask(params = {}) {
+  if (!workerState.displacementField) {
+    throw new Error('No displacement available. Run Register first.');
+  }
+  const {
+    maskBuffer,        // Uint8Array of F-order voxels, length = 160*160*192
+    maskDims = [160, 160, 192]
+  } = params;
+  if (!maskBuffer) throw new Error('warp-mask requires maskBuffer');
+
+  postProgress(0.10, 'Warping mask...');
+  // warpVolume expects Float32Array; coerce.
+  const mask = new Uint8Array(maskBuffer);
+  const maskF32 = new Float32Array(mask.length);
+  for (let i = 0; i < mask.length; i++) maskF32[i] = mask[i];
+  const warped = warpVolume(maskF32, maskDims, workerState.displacementField, workerState.displacementDims);
+  const warpedBin = new Uint8Array(warped.length);
+  for (let i = 0; i < warped.length; i++) warpedBin[i] = warped[i] > 0.5 ? 1 : 0;
+
+  // Wrap as NIfTI sharing the source header (voxel grid + affine of the
+  // 160x160x192 1mm pose; orchestrator can resample to MNI 2mm later).
+  postProgress(0.85, 'Wrapping warped mask as NIfTI...');
+  const outNifti = createOutputNifti(warpedBin, workerState.origHeaderBytes, workerState.origDims);
+  postStageData('mni-lesion', outNifti, 'Lesion mask warped to MNI 1mm');
+
+  postProgress(1.0, 'Mask warp complete');
+  postStepComplete('warp-mask');
+}
+
 // ==================== Message Handler ====================
 
 self.onmessage = async (e) => {
@@ -1298,6 +1486,24 @@ self.onmessage = async (e) => {
         await stepSynthStrip(data || {});
       } catch (error) {
         console.error('SynthStrip error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'run-register':
+      try {
+        await stepRegister(data || {});
+      } catch (error) {
+        console.error('Register error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'warp-mask':
+      try {
+        await stepWarpMask(data || {});
+      } catch (error) {
+        console.error('Warp-mask error:', error);
         postError(error?.message || String(error));
       }
       break;

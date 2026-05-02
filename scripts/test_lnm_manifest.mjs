@@ -97,6 +97,17 @@ assert.ok(typeof stroke.probabilityThreshold === 'number',
 assert.ok(typeof stroke.minComponentSize === 'number',
   'lnm-stroke-lesion must declare a minComponentSize');
 
+// Phase 3: the SynthMorph registration target — an MNI152 brain at the
+// 160x160x192 1mm grid the model was trained against. Lives under
+// atlasAssets to share the same loader as Yeo / Schaefer.
+const mniRef = manifest.atlasAssets.find(a => a.id === 'lnm-mni160');
+assert.ok(mniRef, "Phase 3 manifest must register 'lnm-mni160' under atlasAssets");
+assert.equal(mniRef.supportStatus, 'supported',
+  'lnm-mni160 must be supported once the reference is uploaded');
+assert.deepEqual(mniRef.dims, [160, 160, 192], "lnm-mni160 dims must be [160, 160, 192]");
+assert.deepEqual(mniRef.spacingMm || mniRef.resolutionMm, 1,
+  "lnm-mni160 must be 1mm isotropic (resolutionMm=1 or spacingMm=1)");
+
 // Phase 1: the Yeo7 atlas must exist and have a sensible parcel count
 // (network labels 1..7 plus 0 background -> at least 7 nonzero networks).
 const yeoAtlas = manifest.atlasAssets.find(a => /yeo/i.test(a.id));

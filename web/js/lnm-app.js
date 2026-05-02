@@ -168,6 +168,15 @@ export class LesionNetworkMappingApp {
       downloadLesionBtn.addEventListener('click', () => this.downloadLesionMask());
     }
 
+    const runRegBtn = document.getElementById('runRegistrationButton');
+    if (runRegBtn) {
+      runRegBtn.addEventListener('click', () => {
+        this.runRegistration().catch(
+          err => this.updateOutput(`Registration failed: ${err.message}`)
+        );
+      });
+    }
+
     const copyConsole = document.getElementById('copyConsole');
     if (copyConsole) copyConsole.addEventListener('click', () => this.console.copyToClipboard());
 
@@ -476,6 +485,41 @@ export class LesionNetworkMappingApp {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  // Phase 3.4: SynthMorph MNI registration. Looks up the model + reference
+  // in the manifest, posts to the worker. The worker stashes the integrated
+  // displacement field on its state for the lnm-yeo-auto bridge (Phase 3.5)
+  // to apply via runWarpMask.
+  async runRegistration() {
+    if (!this.structuralFile) {
+      this.updateOutput('Drop a structural image first.');
+      return;
+    }
+    const manifest = await this.ensureManifest();
+    const model = manifest.modelAssets?.find(a => a.id === 'lnm-synthmorph-mni');
+    const ref = manifest.atlasAssets?.find(a => a.id === 'lnm-mni160');
+    if (!model || model.supportStatus !== 'supported') {
+      throw new Error("Manifest entry 'lnm-synthmorph-mni' is not supported.");
+    }
+    if (!ref || ref.supportStatus !== 'supported') {
+      throw new Error("Manifest entry 'lnm-mni160' is not supported.");
+    }
+    const m = splitModelUrl(model.sourceUrl);
+
+    this.updateOutput('Starting MNI registration (SynthMorph deformable)...');
+    const inputBuffer = await this.structuralFile.arrayBuffer();
+    await this.executor.loadVolume(inputBuffer);
+    await this.executor.runRegistration({
+      modelAssetId: model.id,
+      modelName: m.name || 'lnm-synthmorph-mni.onnx',
+      modelBaseUrl: m.base,
+      modelCacheKey: model.cacheKey,
+      referenceAssetId: ref.id,
+      referenceUrl: ref.sourceUrl,
+      referenceCacheKey: ref.cacheKey,
+      nbSteps: 7
+    });
   }
 
   showOutsideAtlasWarning(outside, total) {

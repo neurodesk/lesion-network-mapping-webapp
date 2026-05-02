@@ -40,7 +40,9 @@ const requiredIds = [
   // Phase 2a.2.3 additions: lesion-segmentation trigger button + mask
   // download button.
   '#runLesionSegmentationButton',
-  '#downloadLesionMaskButton'
+  '#downloadLesionMaskButton',
+  // Phase 3.4 additions: registration button.
+  '#runRegistrationButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);

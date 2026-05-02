@@ -37,7 +37,9 @@ for (const method of [
   // Phase 2a.1.4b additions:
   'runBrainExtraction', 'downloadBrainMask',
   // Phase 2a.2.3 additions:
-  'runLesionSegmentation', 'downloadLesionMask'
+  'runLesionSegmentation', 'downloadLesionMask',
+  // Phase 3.4 additions:
+  'runRegistration'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -107,6 +109,16 @@ assert.match(src, /['"]lnm-synthstrip['"]/,
   'orchestrator must reference the lnm-synthstrip asset id literal');
 assert.match(src, /['"]brainmask['"]/,
   'orchestrator must wire the brainmask stage');
+
+// Phase 3.4: SynthMorph MNI registration wiring. runRegistration reads the
+// lnm-synthmorph-mni manifest entry + the lnm-mni160 reference, calls
+// executor.runRegistration(...).
+assert.match(src, /\brunRegistration\s*\(/,
+  'orchestrator must call executor.runRegistration(...)');
+assert.match(src, /['"]lnm-synthmorph-mni['"]/,
+  'orchestrator must reference the lnm-synthmorph-mni asset id literal');
+assert.match(src, /['"]lnm-mni160['"]/,
+  'orchestrator must reference the lnm-mni160 atlas asset id literal');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

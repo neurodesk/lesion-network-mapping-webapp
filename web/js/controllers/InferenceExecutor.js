@@ -38,7 +38,9 @@ export class InferenceExecutor {
       load: 'pending',
       brainmask: 'pending',
       inference: 'pending',
-      processing: 'pending'
+      processing: 'pending',
+      register: 'pending',
+      'warp-mask': 'pending'
     };
     this.volumeInfo = null;
   }
@@ -346,6 +348,34 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'run-synthstrip', data: settings });
   }
 
+  // Phase 3.4: SynthMorph MNI registration stage. Posts to the worker's
+  // 'run-register' op. Settings shape:
+  //   { modelAssetId, modelName, modelBaseUrl, modelCacheKey,
+  //     referenceAssetId, referenceUrl, referenceCacheKey, nbSteps? }
+  async runRegistration(settings = {}) {
+    await this.initialize();
+    if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'register') {
+      this.captureCheckpoint('register');
+    }
+    this.running = true;
+    this.currentRunningStep = 'register';
+    this.currentTaskId = settings?.modelAssetId || null;
+    this.stepStatus.register = 'running';
+    this.worker.postMessage({ type: 'run-register', data: settings });
+  }
+
+  // Phase 3.5: warp a mask in F-order Uint8 voxel-bytes through the
+  // displacement left on workerState by runRegistration.
+  async runWarpMask(settings = {}) {
+    await this.initialize();
+    this.running = true;
+    this.currentRunningStep = 'warp-mask';
+    this.stepStatus['warp-mask'] = 'running';
+    const transferList = [];
+    if (settings.maskBuffer instanceof ArrayBuffer) transferList.push(settings.maskBuffer);
+    this.worker.postMessage({ type: 'warp-mask', data: settings }, transferList);
+  }
+
   async resetWorkerState() {
     await this.initialize();
     this.worker.postMessage({ type: 'reset-state' });
@@ -353,7 +383,9 @@ export class InferenceExecutor {
       load: 'pending',
       brainmask: 'pending',
       inference: 'pending',
-      processing: 'pending'
+      processing: 'pending',
+      register: 'pending',
+      'warp-mask': 'pending'
     };
     this.volumeInfo = null;
     this.results = {};
