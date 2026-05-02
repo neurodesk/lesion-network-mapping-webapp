@@ -36,7 +36,11 @@ const requiredIds = [
   // SynthStrip pass also auto-fires on a structural drop) and the
   // brain-mask download button.
   '#runBrainExtractionButton',
-  '#downloadBrainMaskButton'
+  '#downloadBrainMaskButton',
+  // Phase 2a.2.3 additions: lesion-segmentation trigger button + mask
+  // download button.
+  '#runLesionSegmentationButton',
+  '#downloadLesionMaskButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);

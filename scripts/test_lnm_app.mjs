@@ -35,7 +35,9 @@ assert.match(src, /export\s+class\s+LesionNetworkMappingApp\b/,
 for (const method of [
   'init', 'setStructural', 'setLesion', 'runYeoOverlap', 'exportCsv',
   // Phase 2a.1.4b additions:
-  'runBrainExtraction', 'downloadBrainMask'
+  'runBrainExtraction', 'downloadBrainMask',
+  // Phase 2a.2.3 additions:
+  'runLesionSegmentation', 'downloadLesionMask'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -105,6 +107,19 @@ assert.match(src, /['"]lnm-synthstrip['"]/,
   'orchestrator must reference the lnm-synthstrip asset id literal');
 assert.match(src, /['"]brainmask['"]/,
   'orchestrator must wire the brainmask stage');
+
+// Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
+// the lnm-stroke-lesion manifest entry, calls executor.runInference(...),
+// and listens for 'segmentation' stageData. downloadLesionMask emits a
+// .nii Blob just like downloadBrainMask did for the brain mask.
+assert.match(src, /\brunInference\s*\(/,
+  'runLesionSegmentation must call executor.runInference(...)');
+assert.match(src, /['"]lnm-stroke-lesion['"]/,
+  'orchestrator must reference the lnm-stroke-lesion asset id literal');
+assert.match(src, /['"]segmentation['"]/,
+  'orchestrator must wire the segmentation stage');
+assert.match(src, /downloadLesionMaskButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadLesionMaskButton|downloadLesionMaskButton[\s\S]*?removeAttribute\(['"]disabled/,
+  'lnm-app.js must enable #downloadLesionMaskButton after a successful run');
 
 // Phase 1c.3: runYeoOverlap must populate #networkOverlapTable via the new
 // renderer, and exportCsv must serialise via overlap-export and trigger a

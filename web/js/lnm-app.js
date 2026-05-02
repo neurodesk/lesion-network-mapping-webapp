@@ -62,6 +62,7 @@ export class LesionNetworkMappingApp {
     this.lesionFile = null;
     this.overlapResult = null;
     this.brainmaskFile = null;     // populated by handleStageData('brainmask')
+    this.lesionMaskFile = null;    // populated by handleStageData('segmentation')
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
 
@@ -151,6 +152,20 @@ export class LesionNetworkMappingApp {
     if (downloadBrainBtn) {
       downloadBrainBtn.disabled = true;
       downloadBrainBtn.addEventListener('click', () => this.downloadBrainMask());
+    }
+
+    const runLesionBtn = document.getElementById('runLesionSegmentationButton');
+    if (runLesionBtn) {
+      runLesionBtn.addEventListener('click', () => {
+        this.runLesionSegmentation().catch(
+          err => this.updateOutput(`Lesion segmentation failed: ${err.message}`)
+        );
+      });
+    }
+    const downloadLesionBtn = document.getElementById('downloadLesionMaskButton');
+    if (downloadLesionBtn) {
+      downloadLesionBtn.disabled = true;
+      downloadLesionBtn.addEventListener('click', () => this.downloadLesionMask());
     }
 
     const copyConsole = document.getElementById('copyConsole');
@@ -377,6 +392,19 @@ export class LesionNetworkMappingApp {
       const btn = document.getElementById('downloadBrainMaskButton');
       if (btn) btn.disabled = false;
       this.updateOutput('Brain mask ready.');
+      return;
+    }
+    if (data.stage === 'segmentation' && data.niftiData) {
+      const file = arrayBufferToFile(data.niftiData, 'lesion.nii');
+      this.lesionMaskFile = file;
+      if (this.structuralFile) {
+        this.viewerController
+          .loadOverlay(file, 'red', 0.5, { stage: 'segmentation' })
+          .catch(err => this.updateOutput(`Lesion mask render error: ${err.message}`));
+      }
+      const btn = document.getElementById('downloadLesionMaskButton');
+      if (btn) btn.disabled = false;
+      this.updateOutput('Lesion segmentation ready.');
     }
   }
 
@@ -389,6 +417,61 @@ export class LesionNetworkMappingApp {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'lnm-brainmask.nii';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Phase 2a.2.3: lesion-segmentation entry point. Reads the manifest
+  // entry for 'lnm-stroke-lesion', dispatches the SCT-derived
+  // run-inference op (see web/js/inference-worker.js stepInference). The
+  // worker fetches + runs the SynthStroke baseline ONNX, applies the
+  // sliding-window pipeline, and emits a 'segmentation' stageData NIfTI.
+  async runLesionSegmentation() {
+    if (!this.structuralFile) {
+      this.updateOutput('Drop a structural image first.');
+      return;
+    }
+    const manifest = await this.ensureManifest();
+    const entry = manifest.modelAssets?.find(a => a.id === 'lnm-stroke-lesion');
+    if (!entry) throw new Error("Manifest is missing the 'lnm-stroke-lesion' model asset.");
+    if (entry.supportStatus !== 'supported') {
+      throw new Error(`'lnm-stroke-lesion' is ${entry.supportStatus}; cannot run lesion segmentation.`);
+    }
+    const { base, name } = splitModelUrl(entry.sourceUrl);
+
+    this.updateOutput('Starting lesion segmentation...');
+    const inputBuffer = await this.structuralFile.arrayBuffer();
+    await this.executor.loadVolume(inputBuffer);
+    await this.executor.runInference({
+      taskId: 'lnm-segment-only',
+      modelAssetId: entry.id,
+      modelName: name || 'lnm-stroke-lesion.onnx',
+      modelBaseUrl: base,
+      cacheKey: entry.cacheKey,
+      supportStatus: entry.supportStatus,
+      patchSize: entry.patchSize || [128, 128, 128],
+      threshold: entry.probabilityThreshold ?? 0.4,
+      minComponentSize: entry.minComponentSize ?? 30,
+      preprocessing: entry.preprocessing || {},
+      // Sliding-window overlap and TTA defaults per the locked Phase 2a.2
+      // plan: lighter than nnU-Net's 0.5 + 8-axis to keep browser inference
+      // bounded; quality toggle is a future polish item.
+      overlap: 0.25,
+      testTimeAugmentation: false
+    });
+  }
+
+  downloadLesionMask() {
+    if (!this.lesionMaskFile) {
+      this.updateOutput('No lesion segmentation available yet.');
+      return;
+    }
+    const url = URL.createObjectURL(this.lesionMaskFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lnm-lesion.nii';
     document.body.appendChild(a);
     a.click();
     a.remove();
