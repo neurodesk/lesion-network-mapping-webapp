@@ -853,24 +853,51 @@ export class LesionNetworkMappingApp {
   // orchestrator. Each step short-circuits with a user-facing message if a
   // prerequisite is missing. Catches at the call site already log failures
   // — propagating here ensures a downstream stage is never skipped silently.
+  //
+  // Manual-mask shortcut: if the user has already dropped a lesion mask at
+  // the Yeo grid (99x117x95), skip segmentation/registration/bridge and go
+  // straight to the overlap+FC chain. The Yeo overlap reducer will reject
+  // any other size, so this gate matches the downstream contract exactly.
   async runFullPipeline() {
-    if (!this.structuralFile) {
-      this.updateOutput('Drop a structural T1 first.');
-      return;
-    }
     this.updateOutput('=== Run full pipeline ===');
-    if (!this.brainmaskFile) {
-      await this.runBrainExtraction();
+    const manualMaskOnYeoGrid = this.lesionFile
+      && !this.lesionMaskFile
+      && await this._lesionFileMatchesYeoGrid();
+    if (manualMaskOnYeoGrid) {
+      this.updateOutput('Manual lesion mask detected on Yeo grid — skipping segmentation/registration.');
+    } else {
+      if (!this.structuralFile) {
+        this.updateOutput('Drop a structural T1 first (or a Yeo-grid lesion mask).');
+        return;
+      }
+      if (!this.brainmaskFile) {
+        await this.runBrainExtraction();
+      }
+      if (!this.lesionMaskFile) {
+        await this.runLesionSegmentation();
+      }
+      await this.runRegistration();
+      await this.applyRegistrationToLesion();
     }
-    if (!this.lesionMaskFile) {
-      await this.runLesionSegmentation();
-    }
-    await this.runRegistration();
-    await this.applyRegistrationToLesion();
     await this.runYeoOverlap();
     await this.runFcNetworkMap();
     this.applyNetworkThreshold();
     this.updateOutput('=== Full pipeline complete ===');
+  }
+
+  async _lesionFileMatchesYeoGrid() {
+    if (!this.lesionFile) return false;
+    try {
+      const buf = await this.lesionFile.arrayBuffer();
+      const decoded = await decodeNiftiBuffer(buf);
+      // Yeo7 atlas is 99x117x95 (MNI152NLin2009cAsym 2mm). The overlap
+      // reducer enforces this dim-match anyway; this gate is just for
+      // routing.
+      return decoded.dims[0] === 99 && decoded.dims[1] === 117 && decoded.dims[2] === 95;
+    } catch (err) {
+      this.updateOutput(`Could not inspect lesion file: ${err.message}`);
+      return false;
+    }
   }
 
   showOutsideAtlasWarning(outside, total) {

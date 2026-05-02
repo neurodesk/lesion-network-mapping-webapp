@@ -72,6 +72,20 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 7 complete (v0.7.0)** — polish + parity guard.
+
+- Citations modal updated with Yeo, SynthStrip (Hoopes 2022),
+  SynthStroke (Chalcroft 2025), ATLAS v2.0 (Liew 2022), SynthMorph
+  (Hoffmann 2022), ADHD-200, and the canonical lesion-network-mapping
+  paper (Boes 2015).
+- `runFullPipeline()` now detects a manually-loaded Yeo-grid lesion mask
+  and skips segmentation/registration/bridge — going straight to
+  overlap → FC → threshold so the manual flow is one click too.
+- New `test:resample-parity` suite asserts a Yeo→MNI160→Yeo
+  nearest-neighbor roundtrip preserves a 6³ phantom at Dice = 1.0 with
+  no centroid drift, locking down the bridge math against future
+  changes.
+
 **Phase 6 complete (v0.6.0)** — end-to-end auto-pipeline. The native lesion
 mask produced by SynthStroke is now bridged onto the Yeo7 MNI 2 mm grid in
 two steps the orchestrator chains internally:
