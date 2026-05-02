@@ -22,17 +22,29 @@ are surfaced as a warning. The Yeo7 atlas is fetched live from
 [`sbollmann/lnm-webapp-models`](https://huggingface.co/datasets/sbollmann/lnm-webapp-models)
 on Hugging Face and cached client-side.
 
-**Phase 2a.1 complete (v0.2.0-alpha.1)** — SynthStrip brain extraction.
-Drop a structural T1; the app auto-runs SynthStrip in a module worker
-(WASM execution provider, ~7-10 s on M-series headless Chromium for
-~100 KB MNI152 2 mm input). Result is rendered as a translucent green
-overlay and downloadable as a NIfTI. Brain-extraction model is the
-[FreeSurfer SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/)
-ONNX export ported from [`neurodesk/vesselboost-webapp`](https://github.com/neurodesk/vesselboost-webapp).
+**Phase 2 complete (v0.2.0)** — auto brain extraction + lesion
+segmentation on T1.
 
-The remaining Phase 2 work (lesion segmentation against ATLAS-2 nnU-Net),
-plus Phases 3-5 (MNI registration, parcel-FC weighted sum, thresholding),
-are planned but not yet implemented.
+Drop a structural T1; the app:
+
+1. Runs **SynthStrip brain extraction** automatically in a module worker
+   (~7–10 s on M-series, WASM EP, single-pass). Result is rendered as a
+   translucent green overlay and downloadable as `lnm-brainmask.nii`.
+   Model: [FreeSurfer SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/)
+   ONNX export ported from
+   [`neurodesk/vesselboost-webapp`](https://github.com/neurodesk/vesselboost-webapp).
+2. On click of "Run lesion segmentation", runs **SynthStroke baseline**
+   (the closest available openly-licensed model for ATLAS-2-style
+   chronic stroke on T1; 3D MONAI UNet, MELBA 2025, MIT). ~5 s per pass
+   on M-series. Result is rendered as a translucent red overlay and
+   downloadable as `lnm-lesion.nii`. Sliding-window 128³ patches,
+   threshold 0.4, min cluster 30, overlap 0.25, no TTA.
+
+Phases 3–5 (MNI registration, parcel-FC weighted sum, thresholding /
+network-map overlay) are planned but not yet implemented. Until Phase 3
+ships registration, the lesion segmentation produces a mask in the
+input image's native space; the manual-mask Yeo overlap flow continues
+to require a mask already aligned to MNI152NLin2009cAsym 2mm.
 
 ## Attribution
 
@@ -43,10 +55,11 @@ See `THIRD_PARTY_NOTICES.md` (added in Phase 1) for full credit.
 
 Pipeline-specific dependencies (added incrementally):
 
-- **Lesion segmentation**: ATLAS-2-trained nnU-Net (Liew et al.), exported to ONNX.
-- **Registration**: SynthMorph (Hoffmann et al., Apache-2.0), exported to ONNX.
-- **Atlas**: Schaefer 2018 400 x 7 networks (CC-BY).
-- **Connectome**: Lead-DBS GSP1000 group functional connectome.
+- **Brain extraction**: SynthStrip (Hoopes 2022, Apache-2.0); ONNX export ported from `neurodesk/vesselboost-webapp`.
+- **Lesion segmentation**: SynthStroke baseline (Chalcroft 2025 MELBA, MIT); 3D MONAI UNet, T1.
+- **Registration** (Phase 3): SynthMorph (Hoffmann et al., Apache-2.0), exported to ONNX.
+- **Atlas**: Schaefer 2018 400 × 7 networks (CC-BY).
+- **Connectome** (Phase 4): Lead-DBS GSP1000 group functional connectome.
 
 ## Local development
 
@@ -70,18 +83,19 @@ npx playwright install chromium
 npm run test:smoke               # ~10 s on M-series; needs HF access
 ```
 
-### SynthStrip Node-side parity test
+### Node-side parity tests
 
-Validates the brain-extraction port end-to-end against the same ONNX model
-the browser uses, via `onnxruntime-node`. Drives `runSynthStrip` against a
-real MNI152 anatomical T1 and asserts the produced mask is plausible.
+Drive each ONNX pipeline directly via `onnxruntime-node` (no browser),
+against a real MNI152 anatomical T1. Pipeline-correctness checks
+(plausibility, not Dice — see commit notes).
 
 ```sh
-npm run test:synthstrip-parity   # ~5 s after the model is cached locally
+npm run test:synthstrip-parity   # SynthStrip:    ~5 s
+npm run test:lesion-seg-parity   # Lesion seg:    ~1 s
 ```
 
-Both smoke and parity fetch the SynthStrip ONNX live from Hugging Face on
-first run (cached afterward).
+Both fetch their respective ONNX models live from Hugging Face on first
+run (cached under `web/models/_dev_cache/`, gitignored).
 
 ## License
 
