@@ -72,6 +72,22 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 24 complete (v0.13.1)** — real-data Yeo overlap in `npm test`.
+
+`tests/fixtures/yeo7-mini/atlas.nii.gz` (73 KB, identical bytes to the
+runtime asset) committed alongside the existing `ds004884-mini` lesion
+fixture. `scripts/test_real_data_bridge.mjs` extended to load the
+atlas, run `computeParcelOverlap` + `summarizeNetworkOverlap` on the
+prealigned + Yeo-resampled lesion, and assert:
+
+- ≥ 2 Yeo networks hit (real chronic strokes span vascular
+  territories that cross network boundaries)
+- network voxel sums + out-of-atlas voxels = total Yeo lesion count
+
+Output for the committed ds004884 case (left-hemisphere chronic
+stroke): 7 networks hit; Limbic 11.6%, Default 10.5%, Frontoparietal
+7.1% dominant; ~63% subcortical / outside the cortical Yeo mask.
+
 **Phase 21+22 complete (v0.13.0)** — UX + deploy budget.
 
 - **Reset state button**: New "Clear results" button in the Results

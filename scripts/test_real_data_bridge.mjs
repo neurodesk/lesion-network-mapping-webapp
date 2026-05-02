@@ -30,11 +30,14 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LESION_PATH = path.join(ROOT, 'tests/fixtures/ds004884-mini/lesion_mask.nii.gz');
+const YEO7_PATH = path.join(ROOT, 'tests/fixtures/yeo7-mini/atlas.nii.gz');
 
 const { centroidOfMask, applyAffineToVoxel, computePrealignAffine } =
   await import(path.join(ROOT, 'web/js/modules/prealign.js'));
 const { resampleAffine } =
   await import(path.join(ROOT, 'web/js/modules/resample.js'));
+const { computeParcelOverlap, summarizeNetworkOverlap } =
+  await import(path.join(ROOT, 'web/js/modules/parcel-overlap.js'));
 
 async function loadNiftiParser() {
   const mod = await import('nifti-reader-js');
@@ -162,9 +165,57 @@ assert.ok(yeoCount > expectedYeo * 0.5 && yeoCount < expectedYeo * 1.5,
   `Yeo voxel count out of expected window: ${yeoCount} ` +
   `(expected ~${Math.round(expectedYeo)})`);
 
+// ---- Step 6: Yeo7 parcel overlap on the real-shaped lesion ----
+// Loads the committed Yeo7 atlas fixture so this stage runs in CI
+// without a network round-trip.
+const atlas = await decodeFile(YEO7_PATH);
 console.log(
-  `real-data bridge OK: lesion ${srcCount.toLocaleString()} src ` +
+  `\nYeo7 atlas: dims=${atlas.dims.join('x')}, ` +
+  `dtype=${atlas.data.constructor.name}`
+);
+assert.deepEqual(atlas.dims, [99, 117, 95],
+  'Yeo7 atlas fixture must be 99x117x95 (MNI152 2mm)');
+
+// computeParcelOverlap expects a Uint8 lesion mask. lesionYeo is already
+// Uint8 by construction (resampleAffine on a Uint8 source + nearest mode).
+// The atlas is int16; the reducer accepts any integer-typed atlas array.
+const parcelToNetwork = {
+  1: 'Visual', 2: 'Somatomotor', 3: 'DorsalAttention',
+  4: 'VentralAttention', 5: 'Limbic', 6: 'Frontoparietal', 7: 'Default'
+};
+const parcelResult = computeParcelOverlap({
+  lesion: lesionYeo,
+  atlas: atlas.data,
+  dims: yeoDims
+});
+const summary = summarizeNetworkOverlap(parcelResult, parcelToNetwork);
+console.log(
+  `Network overlap (real ds004884 stroke). totalLesionVoxels=${summary.totalLesionVoxels}, ` +
+  `outsideAtlas=${parcelResult.voxelsOutsideAtlas}:`
+);
+let networksHit = 0;
+let networksTotal = 0;
+for (const row of summary.networks) {
+  console.log(
+    `  ${row.network.padEnd(18)} voxels=${String(row.voxelsInLesion).padStart(6)} ` +
+    `(${(row.fractionOfLesion * 100).toFixed(1)}% of lesion)`
+  );
+  if (row.voxelsInLesion > 0 && row.network !== 'Unassigned') networksHit++;
+  networksTotal += row.voxelsInLesion;
+}
+// A real chronic stroke should hit at least 2 networks (most strokes
+// span vascular territories that cross network boundaries).
+assert.ok(networksHit >= 2,
+  `Real stroke should overlap >= 2 Yeo networks; got ${networksHit}`);
+// Network sums + out-of-atlas voxels must total the Yeo-grid lesion count.
+assert.equal(networksTotal + parcelResult.voxelsOutsideAtlas, yeoCount,
+  `network voxels (${networksTotal}) + outsideAtlas (${parcelResult.voxelsOutsideAtlas}) ` +
+  `should equal yeoCount (${yeoCount})`);
+
+console.log(
+  `\nreal-data bridge OK: lesion ${srcCount.toLocaleString()} src ` +
   `-> ${mniCount.toLocaleString()} MNI160 ` +
-  `-> ${yeoCount.toLocaleString()} Yeo7. ` +
+  `-> ${yeoCount.toLocaleString()} Yeo7 ` +
+  `-> ${networksHit} Yeo networks hit. ` +
   `Centroid round-trip within 1 voxel.`
 );
