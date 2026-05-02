@@ -63,6 +63,24 @@ assert.ok(typeof synthstrip.sizeBytes === 'number' && synthstrip.sizeBytes > 0,
 assert.match(synthstrip.sourceUrl, /huggingface\.co.+\.onnx$/,
   'lnm-synthstrip sourceUrl must point at an ONNX file on Hugging Face');
 
+// Phase 2a.2: lesion-segmentation model (SynthStroke baseline) registered.
+const stroke = manifest.modelAssets.find(a => a.id === 'lnm-stroke-lesion');
+assert.ok(stroke, "Phase 2a.2 manifest must register 'lnm-stroke-lesion' under modelAssets");
+assert.equal(stroke.supportStatus, 'supported',
+  'lnm-stroke-lesion must be supported once the ONNX is exported and uploaded');
+assert.match(stroke.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'lnm-stroke-lesion must declare a real sha256 checksum');
+assert.ok(typeof stroke.sizeBytes === 'number' && stroke.sizeBytes > 0,
+  'lnm-stroke-lesion must declare a non-zero sizeBytes');
+assert.match(stroke.sourceUrl, /huggingface\.co.+\.onnx$/,
+  'lnm-stroke-lesion sourceUrl must point at an ONNX file on Hugging Face');
+assert.ok(Array.isArray(stroke.patchSize) && stroke.patchSize.length === 3,
+  'lnm-stroke-lesion must declare a 3-tuple patchSize');
+assert.ok(typeof stroke.probabilityThreshold === 'number',
+  'lnm-stroke-lesion must declare a probabilityThreshold');
+assert.ok(typeof stroke.minComponentSize === 'number',
+  'lnm-stroke-lesion must declare a minComponentSize');
+
 // Phase 1: the Yeo7 atlas must exist and have a sensible parcel count
 // (network labels 1..7 plus 0 background -> at least 7 nonzero networks).
 const yeoAtlas = manifest.atlasAssets.find(a => /yeo/i.test(a.id));

@@ -36,15 +36,24 @@
     },
     {
       "id": "lnm-stroke-lesion",
-      "filename": "lnm-stroke-lesion.onnx",
-      "sizeBytes": 0,
-      "checksum": "sha256:pending",
-      "cacheKey": "lnm-stroke-lesion-pending",
-      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/lnm-stroke-lesion.onnx",
-      "sourceVersion": "pending",
-      "browserFormat": "onnx-fp16",
-      "supportStatus": "unsupported",
-      "_comment": "Phase 2a.2: ATLAS-2 nnU-Net derivative; placeholder until weights are exported."
+      "filename": "models/lnm-stroke-lesion.onnx",
+      "sizeBytes": 74518462,
+      "checksum": "sha256:49f3d047a2299501791c7176cfda770d45d2f411a18ef41dd1105be4d0582cb8",
+      "cacheKey": "lnm-stroke-lesion-synthstroke-baseline-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-stroke-lesion.onnx",
+      "sourceVersion": "SynthStroke-baseline-MELBA2025-MIT",
+      "browserFormat": "onnx-fp32",
+      "supportStatus": "supported",
+      "inputModality": "T1",
+      "patchSize": [128, 128, 128],
+      "targetSpacing": [1.0, 1.0, 1.0],
+      "probabilityThreshold": 0.4,
+      "minComponentSize": 30,
+      "preprocessing": {
+        "normalize": "zscore",
+        "channelOrder": "xyz"
+      },
+      "_comment": "Phase 2a.2 lesion-segmentation model. Exported from liamchalcroft/synthstroke-baseline (MELBA 2025; MIT) — a 3D MONAI UNet trained on synthetic + ATLAS-2 stroke data, T1 input, binary lesion output. Forward output is 2-channel logits (background, stroke); the worker should sigmoid-on-channel-1 (or argmax) before thresholding. Conversion: scripts/convert_lesion_seg_model.py traces the safetensors weights into a static-128^3 patch ONNX, opset 17, max-abs-diff vs PyTorch ~1.6e-3."
     },
     {
       "id": "lnm-synthmorph-mni",
