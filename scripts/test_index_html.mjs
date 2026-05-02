@@ -31,7 +31,12 @@ const requiredIds = [
   '#outsideAtlasWarning',
   '#structuralFileInput',
   '#lesionFileInput',
-  '#pipelineSelect'
+  '#pipelineSelect',
+  // Phase 2a.1.4b additions: brain-extraction button (re-run trigger; the
+  // SynthStrip pass also auto-fires on a structural drop) and the
+  // brain-mask download button.
+  '#runBrainExtractionButton',
+  '#downloadBrainMaskButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);

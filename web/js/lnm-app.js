@@ -1,5 +1,6 @@
 import { FileIOController } from './controllers/FileIOController.js';
 import { ViewerController } from './controllers/ViewerController.js';
+import { InferenceExecutor } from './controllers/InferenceExecutor.js';
 import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
 import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
@@ -10,6 +11,16 @@ import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
 import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
+
+function splitModelUrl(url) {
+  const i = url.lastIndexOf('/');
+  return { base: url.slice(0, i), name: url.slice(i + 1) };
+}
+
+function arrayBufferToFile(buffer, name) {
+  const blob = new Blob([buffer], { type: 'application/gzip' });
+  return new File([blob], name, { type: 'application/gzip' });
+}
 
 function binarise(typedArray) {
   const out = new Uint8Array(typedArray.length);
@@ -48,7 +59,18 @@ export class LesionNetworkMappingApp {
     this.structuralFile = null;
     this.lesionFile = null;
     this.overlapResult = null;
+    this.brainmaskFile = null;     // populated by handleStageData('brainmask')
+    this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
+
+    this.executor = new InferenceExecutor({
+      updateOutput: (msg) => this.updateOutput(msg),
+      setProgress: (frac, label) => this.handleWorkerProgress(frac, label),
+      onStageData: (data) => this.handleStageData(data),
+      onStepComplete: (step) => this.handleStepComplete(step),
+      onError: (msg) => this.updateOutput(`Worker error: ${msg}`),
+      onInitialized: () => this.updateOutput('Inference worker ready.')
+    });
   }
 
   async init() {
@@ -113,6 +135,20 @@ export class LesionNetworkMappingApp {
     if (csvButton) {
       csvButton.disabled = true;
       csvButton.addEventListener('click', () => this.exportCsv());
+    }
+
+    const runBrainBtn = document.getElementById('runBrainExtractionButton');
+    if (runBrainBtn) {
+      runBrainBtn.addEventListener('click', () => {
+        this.runBrainExtraction().catch(
+          err => this.updateOutput(`Brain extraction failed: ${err.message}`)
+        );
+      });
+    }
+    const downloadBrainBtn = document.getElementById('downloadBrainMaskButton');
+    if (downloadBrainBtn) {
+      downloadBrainBtn.disabled = true;
+      downloadBrainBtn.addEventListener('click', () => this.downloadBrainMask());
     }
 
     const copyConsole = document.getElementById('copyConsole');
@@ -209,6 +245,12 @@ export class LesionNetworkMappingApp {
     this.structuralFile = file;
     await this.viewerController.loadBaseVolume(file, { stage: 'structural' });
     this.updateOutput(`Structural image ready: ${file.name}`);
+    // Auto-run brain extraction on every structural drop. The button under
+    // #stepLesionSection re-triggers it on demand. Any error is swallowed
+    // into the console; the rest of the manual-mask flow continues to work.
+    this.runBrainExtraction().catch(
+      err => this.updateOutput(`Brain extraction failed: ${err.message}`)
+    );
   }
 
   async setLesion(file) {
@@ -263,6 +305,87 @@ export class LesionNetworkMappingApp {
       `Overlap computed for ${summary.networks.length} networks ` +
       `(${parcelResult.voxelsOutsideAtlas} lesion voxels outside atlas).`
     );
+  }
+
+  // ---- Phase 2a.1.4b: brain extraction wiring ----
+
+  async ensureManifest() {
+    if (this.manifest) return this.manifest;
+    const response = await fetch('./models/manifest.json');
+    if (!response.ok) {
+      throw new Error(`Failed to load manifest: HTTP ${response.status}`);
+    }
+    this.manifest = await response.json();
+    return this.manifest;
+  }
+
+  async runBrainExtraction() {
+    if (!this.structuralFile) {
+      this.updateOutput('Drop a structural image first.');
+      return;
+    }
+    const manifest = await this.ensureManifest();
+    const entry = manifest.modelAssets?.find(a => a.id === 'lnm-synthstrip');
+    if (!entry) throw new Error("Manifest is missing the 'lnm-synthstrip' model asset.");
+    if (entry.supportStatus !== 'supported') {
+      throw new Error(`'lnm-synthstrip' is ${entry.supportStatus}; cannot run brain extraction.`);
+    }
+    const { base, name } = splitModelUrl(entry.sourceUrl);
+
+    this.updateOutput('Starting SynthStrip brain extraction...');
+    const inputBuffer = await this.structuralFile.arrayBuffer();
+    await this.executor.loadVolume(inputBuffer);
+    await this.executor.runSynthStrip({
+      modelAssetId: entry.id,
+      modelName: name || 'synthstrip.onnx',
+      modelBaseUrl: base,
+      cacheKey: entry.cacheKey,
+      fast: false,
+      dilate: false
+    });
+  }
+
+  handleWorkerProgress(frac, label) {
+    if (!this.progress) return;
+    this.progress.setProgress(frac, label);
+  }
+
+  handleStepComplete(step) {
+    this.updateOutput(`Worker step '${step}' complete.`);
+  }
+
+  handleStageData(data) {
+    if (!data || !data.stage) return;
+    if (data.stage === 'brainmask' && data.niftiData) {
+      const file = arrayBufferToFile(data.niftiData, 'brainmask.nii.gz');
+      this.brainmaskFile = file;
+      // Render as a translucent overlay over the structural; if the user
+      // dropped a lesion manually before the structural, the lesion stage
+      // re-renders normally on its next setLesion() call.
+      if (this.structuralFile) {
+        this.viewerController
+          .loadOverlay(file, 'green', 0.4, { stage: 'brainmask' })
+          .catch(err => this.updateOutput(`Brain mask render error: ${err.message}`));
+      }
+      const btn = document.getElementById('downloadBrainMaskButton');
+      if (btn) btn.disabled = false;
+      this.updateOutput('Brain mask ready.');
+    }
+  }
+
+  downloadBrainMask() {
+    if (!this.brainmaskFile) {
+      this.updateOutput('No brain mask available yet.');
+      return;
+    }
+    const url = URL.createObjectURL(this.brainmaskFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lnm-brainmask.nii.gz';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   showOutsideAtlasWarning(outside, total) {

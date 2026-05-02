@@ -32,7 +32,11 @@ parse(src, { ecmaVersion: 'latest', sourceType: 'module' });
 // later phases extend them with chart rendering and full CSV serialization.
 assert.match(src, /export\s+class\s+LesionNetworkMappingApp\b/,
   'must export class LesionNetworkMappingApp');
-for (const method of ['init', 'setStructural', 'setLesion', 'runYeoOverlap', 'exportCsv']) {
+for (const method of [
+  'init', 'setStructural', 'setLesion', 'runYeoOverlap', 'exportCsv',
+  // Phase 2a.1.4b additions:
+  'runBrainExtraction', 'downloadBrainMask'
+]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
 }
@@ -86,6 +90,21 @@ assert.match(src, /outsideAtlasWarning/,
 // runYeoOverlap must call the atlas loader rather than the Phase 1c.1 stub.
 assert.match(src, /loadAtlasFromManifest|fetchAndDecodeAtlas|loadAtlas/,
   'runYeoOverlap must invoke the atlas-loader (no longer a stub)');
+
+// Phase 2a.1.4b: brain-extraction wiring. The orchestrator must spin up an
+// InferenceExecutor, kick a 'run-synthstrip' message via runBrainExtraction,
+// listen for 'brainmask' stageData, render it as an overlay (or store it
+// for download), and offer a NIfTI download via downloadBrainMask.
+assert.match(src, /from\s+['"]\.\/controllers\/InferenceExecutor\.js['"]/,
+  'lnm-app.js must import InferenceExecutor');
+assert.match(src, /new\s+InferenceExecutor\s*\(/,
+  'orchestrator must instantiate InferenceExecutor');
+assert.match(src, /\brunSynthStrip\s*\(/,
+  'runBrainExtraction must call executor.runSynthStrip(...)');
+assert.match(src, /['"]lnm-synthstrip['"]/,
+  'orchestrator must reference the lnm-synthstrip asset id literal');
+assert.match(src, /['"]brainmask['"]/,
+  'orchestrator must wire the brainmask stage');
 
 // Phase 1c.3: runYeoOverlap must populate #networkOverlapTable via the new
 // renderer, and exportCsv must serialise via overlap-export and trigger a

@@ -170,6 +170,25 @@ assert.match(
   "InferenceExecutor must spawn the worker with { type: 'module' }"
 );
 
+// Phase 2a.1.4b: InferenceExecutor must expose runSynthStrip() that posts
+// the 'run-synthstrip' worker op, and must NOT carry the dead
+// runVertebralLabeling method (the worker no longer handles that op).
+assert.match(
+  executor,
+  /\brunSynthStrip\s*\(/,
+  "InferenceExecutor must define runSynthStrip(...)"
+);
+assert.match(
+  executor,
+  /['"]run-synthstrip['"]/,
+  'runSynthStrip must post the run-synthstrip message type'
+);
+assert.doesNotMatch(
+  executor,
+  /\brunVertebralLabeling\s*\(/,
+  'runVertebralLabeling must be removed (worker no longer handles it)'
+);
+
 // ---- (7) sanity: known-good banner / cache name ----
 assert.match(
   worker,

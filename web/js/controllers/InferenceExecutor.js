@@ -28,7 +28,7 @@ export class InferenceExecutor {
     this.inputVolumeBuffer = null;
     this.currentRunningStep = null;
     this.pendingAbortCheckpoint = null;
-    this.currentTaskId = 'spinalcord';
+    this.currentTaskId = null;
     this.hiddenArtifacts = this._createEmptyHiddenArtifacts();
     this.restoreStateResolve = null;
     this.restoreStateReject = null;
@@ -36,6 +36,7 @@ export class InferenceExecutor {
     // Step status tracking
     this.stepStatus = {
       load: 'pending',
+      brainmask: 'pending',
       inference: 'pending',
       processing: 'pending'
     };
@@ -308,21 +309,25 @@ export class InferenceExecutor {
     }
     this.running = true;
     this.currentRunningStep = 'inference';
-    this.currentTaskId = settings?.taskId || 'spinalcord';
+    this.currentTaskId = settings?.taskId || null;
     this.stepStatus.inference = 'running';
     this.worker.postMessage({ type: 'run-inference', data: settings });
   }
 
-  async runVertebralLabeling(settings = {}) {
+  // Phase 2a.1.4b: SynthStrip brain-extraction stage. Posts to the worker's
+  // 'run-synthstrip' op (see web/js/inference-worker.js stepSynthStrip).
+  // Settings shape:
+  //   { modelAssetId, modelName, modelBaseUrl, cacheKey, fast?, dilate? }
+  async runSynthStrip(settings = {}) {
     await this.initialize();
-    if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'processing') {
-      this.captureCheckpoint('processing');
+    if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'brainmask') {
+      this.captureCheckpoint('brainmask');
     }
     this.running = true;
-    this.currentRunningStep = 'processing';
-    this.currentTaskId = 'vertebrae';
-    this.stepStatus.processing = 'running';
-    this.worker.postMessage({ type: 'run-vertebral-labeling', data: settings });
+    this.currentRunningStep = 'brainmask';
+    this.currentTaskId = settings?.modelAssetId || null;
+    this.stepStatus.brainmask = 'running';
+    this.worker.postMessage({ type: 'run-synthstrip', data: settings });
   }
 
   async resetWorkerState() {
@@ -330,6 +335,7 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'reset-state' });
     this.stepStatus = {
       load: 'pending',
+      brainmask: 'pending',
       inference: 'pending',
       processing: 'pending'
     };
