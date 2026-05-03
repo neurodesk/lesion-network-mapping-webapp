@@ -72,6 +72,36 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 35 (v0.16.1)** — controller + UI module behavior tests.
+
+The Phase 33 audit flagged 4 controllers + 3 UI modules as
+source-grep-only. This phase replaces that with real coverage:
+
+- **`test:viewer-controller`** — fake NiiVue (records every call); pins
+  the **Phase 4 silent-regression bug**: `loadBaseVolume` MUST call
+  `nv.loadVolumes([single])` (1 entry), `loadOverlay` MUST use
+  `nv.addVolumeFromUrl(...)`. A future "simplification" back to
+  `loadVolumes([base, ...overlays])` (which leaves overlay LUT
+  uninitialised in 0.68.x) fails immediately. 9 cases.
+- **`test:file-io-controller`** — fake DOM File events; pins NIfTI vs
+  DICOM detection (case-insensitive `.nii`/`.nii.gz`), the mixed-list
+  picker, dispatch via `onFileLoaded`, drop-item routing. 9 cases.
+- **`test:inference-executor`** — fake Worker constructor; pins the
+  message protocol (init/load/run-synthstrip/run-register/etc.),
+  `stageData` routing into `this.results`, `step-complete` state
+  transitions, error-path `onError` + state cleanup, `cancel()`
+  termination + idle-no-op, `removeResult`/`clearResults`,
+  `volume-info` + `complete` callbacks. 11 cases.
+- **`test:ui-modules`** — fake DOM; pins `ConsoleOutput` log/clear/
+  missing-element no-op, `ProgressManager` setProgress paints
+  `width: NN%` + reset-to-0, `ModalManager` open/close/toggle/isOpen +
+  overlay-click-to-close (target===modal closes; click on a child
+  doesn't). All three modules also tested for graceful behaviour when
+  the bound DOM id doesn't exist.
+
+**Test surface**: 24 → 28 distinct suites in `npm test`. Closes the
+7 zero-coverage modules from the Phase 33 audit.
+
 **Phases 34 + 36 + 37 (v0.16.0)** — auto-prealign + PCA orientation fix + download progress.
 
 - **Phase 34: auto-prealign in `runFullPipeline`** — clinical T1
