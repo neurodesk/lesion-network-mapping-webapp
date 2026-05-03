@@ -72,6 +72,28 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 38 (v0.16.2)** — N=155 development_fmri connectome + smoke verify.
+
+- **Connectome upgrade**: ADHD-200 N=40 → development_fmri N=155
+  (~4× sample size). `scripts/build_yeo7_connectome.py` parameterised
+  with a `--dataset {adhd, development_fmri}` flag; same processing
+  pipeline (per-subject Yeo7 ROI mean → Pearson r-map → Fisher-z →
+  group t-stat). New pack uploaded to HF as
+  `connectomes/yeo7_fc_pack_dev155.bin` under cacheKey
+  `yeo7-fc-pack-development-n155-v1`. Manifest entry repointed; old
+  N=40 pack still accessible via its prior URL for users pinning the
+  older cacheKey.
+
+  Group t-stat range: **[-13.47, +30.72]** (vs N=40's [-13.85, +19.74]
+  — peak +stat ~55% higher with the larger sample, as expected for a
+  fixed-effect group analysis).
+
+- **Browser smoke verified at v0.16.1**: 6/6 phases green
+  (1c.4 + 8 + 2a.1.5 + 2a.2.5 + 3.7 + 10). Confirms Phases 34/35/36/37
+  didn't regress anything user-visible. `SynthMorph EP=wasm`
+  (headless Chromium + swiftshader doesn't satisfy ORT's WebGPU
+  device requirements; degraded path fires as expected).
+
 **Phase 35 (v0.16.1)** — controller + UI module behavior tests.
 
 The Phase 33 audit flagged 4 controllers + 3 UI modules as

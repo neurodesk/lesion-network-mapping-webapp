@@ -86,7 +86,21 @@ def upload_to_hf(bin_path: str, idx_path: str, token: str | None = None,
         )
 
 
-def main(n_subjects: int = 30, do_upload: bool = False):
+DATASET_FETCHERS = {
+    # nilearn fetcher key -> (fn, max_subjects, version-tag for filenames)
+    "adhd": (lambda n: datasets.fetch_adhd(n_subjects=n), 40, "ADHD-200"),
+    # Phase 38: development_fmri (Richardson 2018; movie-watching task,
+    # 4mm resolution downsample). Up to 155 CC0 subjects, no DUT
+    # required. Same returned shape (.func + .confounds) as fetch_adhd
+    # so the rest of the pipeline is unchanged.
+    "development_fmri": (
+        lambda n: datasets.fetch_development_fmri(n_subjects=n),
+        155, "development_fmri"
+    ),
+}
+
+
+def main(n_subjects: int = 30, do_upload: bool = False, dataset: str = "adhd"):
     os.makedirs(OUT_DIR, exist_ok=True)
     if not os.path.exists(YEO7_PATH):
         raise SystemExit(
@@ -95,23 +109,29 @@ def main(n_subjects: int = 30, do_upload: bool = False):
             "example nilearn fetch)."
         )
 
+    if dataset not in DATASET_FETCHERS:
+        raise SystemExit(f"Unknown --dataset {dataset!r}; choose from {list(DATASET_FETCHERS)}")
+    fetcher, max_n, dataset_label = DATASET_FETCHERS[dataset]
+    if n_subjects > max_n:
+        raise SystemExit(f"--n-subjects {n_subjects} exceeds {dataset} cap ({max_n})")
+
     yeo7 = load_img(YEO7_PATH)
     print(f"Atlas: {yeo7.shape}, voxsize={np.abs(np.diag(yeo7.affine))[:3]}")
 
-    print(f"Fetching ADHD-200 ({n_subjects} subjects)...")
-    adhd = datasets.fetch_adhd(n_subjects=n_subjects)
+    print(f"Fetching {dataset_label} ({n_subjects} subjects)...")
+    bundle = fetcher(n_subjects)
 
     roi_masker = NiftiLabelsMasker(labels_img=yeo7, standardize="zscore_sample", verbose=0)
     brain_masker = NiftiMasker(standardize="zscore_sample", verbose=0)
-    brain_masker.fit(adhd.func[0])
+    brain_masker.fit(bundle.func[0])
     n_brain = int(brain_masker.mask_img_.get_fdata().sum())
     print(f"Brain mask voxels: {n_brain}")
 
     per_subj_z = []
-    for i, func in enumerate(adhd.func):
-        print(f"  subject {i + 1}/{len(adhd.func)}: {os.path.basename(func)}")
-        roi_ts = roi_masker.fit_transform(func, confounds=adhd.confounds[i])
-        brain_ts = brain_masker.transform(func, confounds=adhd.confounds[i])
+    for i, func in enumerate(bundle.func):
+        print(f"  subject {i + 1}/{len(bundle.func)}: {os.path.basename(func)}")
+        roi_ts = roi_masker.fit_transform(func, confounds=bundle.confounds[i])
+        brain_ts = brain_masker.transform(func, confounds=bundle.confounds[i])
         T = roi_ts.shape[0]
         r = (roi_ts.T @ brain_ts) / T
         z = np.arctanh(np.clip(r, -0.999, 0.999))
@@ -146,7 +166,7 @@ def main(n_subjects: int = 30, do_upload: bool = False):
         "atlasAssetId": "yeo7-2mm",
         "networkLabels": {str(k + 1): name for k, name in enumerate(NETWORK_NAMES)},
         "statistic": "group-tstat",
-        "source": f"ADHD-200, {n_subjects} subjects, nilearn fetch_adhd",
+        "source": f"{dataset_label}, {n_subjects} subjects, nilearn fetch_{dataset}",
         "atlasResolutionMm": 2,
     }
     with open(idx_path, "w") as f:
@@ -179,8 +199,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-subjects", type=int, default=30,
-                        help="ADHD-200 subjects to fetch (max 40 via nilearn).")
+                        help="Subjects to fetch (max 40 for adhd, 155 for development_fmri).")
+    parser.add_argument("--dataset", choices=list(DATASET_FETCHERS), default="adhd",
+                        help="nilearn fetcher: 'adhd' (n=40 max) or 'development_fmri' (n=155 max).")
     parser.add_argument("--upload", action="store_true",
                         help="Upload the resulting pack to HF (HF_TOKEN env required).")
     args = parser.parse_args()
-    main(n_subjects=args.n_subjects, do_upload=args.upload)
+    main(n_subjects=args.n_subjects, do_upload=args.upload, dataset=args.dataset)

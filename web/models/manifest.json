@@ -157,21 +157,21 @@
   "connectomeAssets": [
     {
       "id": "yeo7-fc-pack",
-      "filename": "connectomes/yeo7_fc_pack_n40.bin",
-      "indexFilename": "connectomes/yeo7_fc_pack_n40.index.json",
+      "filename": "connectomes/yeo7_fc_pack_dev155.bin",
+      "indexFilename": "connectomes/yeo7_fc_pack_dev155.index.json",
       "sizeBytes": 30810780,
-      "checksum": "sha256:8a270634a603bcf50684e6d695deea1337624663c371749233b5e2e20ee0ea6b",
-      "cacheKey": "yeo7-fc-pack-adhd200-n40-v1",
-      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/connectomes/yeo7_fc_pack_n40.bin",
-      "indexSourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/connectomes/yeo7_fc_pack_n40.index.json",
-      "sourceVersion": "ADHD-200-N40-fetch_adhd-fp32",
+      "checksum": "sha256:5db67b0d6ece1ec25f59134c067cac7c6cd0ffe4884685ed7fd7e9bc89e78493",
+      "cacheKey": "yeo7-fc-pack-development-n155-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/connectomes/yeo7_fc_pack_dev155.bin",
+      "indexSourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/connectomes/yeo7_fc_pack_dev155.index.json",
+      "sourceVersion": "development_fmri-N155-fetch_development_fmri-fp32",
       "atlasAssetId": "yeo7-2mm",
       "atlasResolutionMm": 2,
       "parcelCount": 7,
       "dtype": "float32",
       "statistic": "tstat",
       "supportStatus": "supported",
-      "_comment": "Phase 4 group-FC pack. 7 brain-wide one-sample t-maps (one per Yeo network) stacked Float32 in row-major order. Computed by scripts/build_yeo7_connectome.py from ADHD-200 30 subjects via nilearn fetch_adhd: per-subject Yeo7 ROI mean -> Pearson r-map vs every brain voxel -> Fisher-z -> group t-stat. Same 99x117x95 2mm grid as the yeo7-2mm atlas. Companion index.json carries byte offsets per network + label name + statistic metadata."
+      "_comment": "Phase 38 group-FC pack. 7 brain-wide one-sample t-maps (one per Yeo network) stacked Float32 in row-major order. Computed by scripts/build_yeo7_connectome.py from development_fmri 155 subjects via nilearn fetch_development_fmri (Richardson 2018, movie-watching task, CC0 — no DUT required). Per-subject Yeo7 ROI mean -> Pearson r-map vs every brain voxel -> Fisher-z -> group t-stat. Same 99x117x95 2mm grid as the yeo7-2mm atlas. Group t-stat range observed [-13.47, 30.72] (vs [-13.85, 19.74] for the prior ADHD-200 N=40 pack — peak +stat ~55% higher with the larger sample)."
     },
     {
       "id": "gsp1000-schaefer400-4mm",
