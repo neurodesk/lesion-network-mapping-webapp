@@ -79,6 +79,13 @@ export class LesionNetworkMappingApp {
     this._perfRunStart = null;       // Phase 19: total runFullPipeline start
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
+    // Phase 31: track whether the user has manually picked a pipeline
+    // via the dropdown. If not, setStructural/setLesion auto-promote
+    // to the pipeline that best matches the loaded input — so clicking
+    // "Run full pipeline" with a manual mask gets the full overlap+FC+
+    // threshold chain (lnm-network-map), and a structural T1 gets the
+    // full auto chain (lnm-yeo-auto).
+    this._userPickedPipeline = false;
 
     this.executor = new InferenceExecutor({
       updateOutput: (msg) => this.updateOutput(msg),
@@ -143,6 +150,7 @@ export class LesionNetworkMappingApp {
     if (pipelineSelect) {
       pipelineSelect.addEventListener('change', () => {
         this.selectedPipeline = getPipelineById(pipelineSelect.value) || this.selectedPipeline;
+        this._userPickedPipeline = true;
       });
     }
 
@@ -408,6 +416,9 @@ export class LesionNetworkMappingApp {
     this.structuralFile = file;
     await this.viewerController.loadBaseVolume(file, { stage: 'structural' });
     this.updateOutput(`Structural image ready: ${file.name}`);
+    // Phase 31: auto-promote the pipeline selection. A structural T1
+    // means the user wants the full auto chain.
+    this._autoPromotePipeline('lnm-yeo-auto');
     // Auto-run brain extraction on every structural drop. The button under
     // #stepLesionSection re-triggers it on demand. Any error is swallowed
     // into the console; the rest of the manual-mask flow continues to work.
@@ -425,6 +436,26 @@ export class LesionNetworkMappingApp {
       await this.viewerController.loadBaseVolume(file, { stage: 'lesion' });
     }
     this.updateOutput(`Lesion mask ready: ${file.name}`);
+    // Phase 31: a manual lesion mask without a structural T1 means the
+    // user wants the manual-mask network-map chain (overlap + FC +
+    // threshold). With a structural already loaded we leave the auto
+    // pipeline selected.
+    if (!this.structuralFile) {
+      this._autoPromotePipeline('lnm-network-map');
+    }
+  }
+
+  // Phase 31: promote the dropdown selection if the user hasn't manually
+  // overridden it. Keeps the dropdown a source-of-truth when the user
+  // cares, but defaults to the right full-chain pipeline based on what
+  // they dropped first.
+  _autoPromotePipeline(pipelineId) {
+    if (this._userPickedPipeline) return;
+    const pipeline = getPipelineById(pipelineId);
+    if (!pipeline) return;
+    this.selectedPipeline = pipeline;
+    const pipelineSelect = document.getElementById('pipelineSelect');
+    if (pipelineSelect) pipelineSelect.value = pipelineId;
   }
 
   async runYeoOverlap() {

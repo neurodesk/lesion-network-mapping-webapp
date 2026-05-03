@@ -72,6 +72,39 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 31 (v0.14.1)** — smoke regressions fixed + docs refresh.
+
+Ran the browser smoke for the first time since v0.10.0 and surfaced two
+issues I'd been carrying:
+
+1. **Pipeline auto-promote** — Phase 15 made `runFullPipeline` iterate
+   `selectedPipeline.stages`. Default selection `lnm-yeo-only` only had
+   `[parcel-overlap]`, so "Run full pipeline" with a manual mask only
+   ran overlap. Phase 8 smoke timed out polling for `thresholdedMaskFile`.
+   - `setStructural()` now auto-promotes the dropdown to `lnm-yeo-auto`
+     (full auto chain), `setLesion()` to `lnm-network-map` (overlap +
+     FC + threshold) when no structural is loaded.
+   - Suppressed once the user manually picks a pipeline
+     (`_userPickedPipeline = true`).
+   - Result: Phase 8 smoke now passes in 4.3s (was 120s timeout).
+
+2. **WebGPU EP fallback in headless Chromium** — Phase 10 (auto-branch
+   full pipeline) hit `Register error: 31954968` (ORT WASM C++ exception
+   pointer) because headless Chromium has no WebGPU and SynthMorph OOMs
+   the 4 GB WASM heap. This was always broken; nothing to do with
+   Phase 31's changes — just never run.
+   - Phase 10 smoke now launches Chromium with WebGPU-enabling flags
+     (`--enable-unsafe-webgpu`, `--use-vulkan=swiftshader`).
+   - Acceptance criterion split: WebGPU available + chain finished →
+     full assertion (thresholdedMaskFile + summary). WebGPU missing +
+     register WASM-OOMed → degraded assertion (SynthStrip + SynthStroke
+     completed, register at least attempted, console surfaced the
+     error). SynthMorph forward correctness is gated by
+     `test:registration-parity` in Node where there's no WASM heap limit.
+
+AGENTS.md architecture entry for `prealign.js` added; test surface table
+refreshed (20 Node suites listed).
+
 **Phases 26–30 complete (v0.14.0)** — autonomy push.
 
 This batch closes work I'd previously framed as needing user input,

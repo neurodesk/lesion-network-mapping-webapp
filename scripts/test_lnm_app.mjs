@@ -55,7 +55,9 @@ for (const method of [
   // Phase 16 additions: in-browser affine pre-registration to MNI160 1mm.
   'prealignToMni160',
   // Phase 21 additions: clear-results control.
-  'clearResults'
+  'clearResults',
+  // Phase 31: auto-promote the pipeline selection on file drop.
+  '_autoPromotePipeline'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);

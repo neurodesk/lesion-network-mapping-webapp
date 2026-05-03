@@ -38,6 +38,7 @@ Common issues it catches:
 - `web/js/modules/parcel-overlap.js` — Pure JS parcel and network overlap reducers
 - `web/js/modules/threshold.js` — Threshold + cluster-cleanup for the FC network map (modes: absolute / percentile, optional symmetric, optional minClusterVoxels via existing CC helpers)
 - `web/js/modules/resample.js` — Affine-aware 3D resampler that bridges the SynthMorph 160×160×192 1mm warp output onto the Yeo7 MNI2mm 99×117×95 grid; `affineFromHeader` reads sform/qform off a nifti-reader-js header, `resampleAffine` does NN/trilinear sampling under the destination affine
+- `web/js/modules/prealign.js` — In-browser affine pre-registration to the SynthMorph-required MNI160 1mm grid. `centroidOfMask` computes the brain-mask voxel centroid; `applyAffineToVoxel` applies a 4×4 affine to a voxel coord; `computePrealignAffine` builds the centroid-only destination affine (Phase 16 v1); `covarianceOfMask` + `jacobiEigen3x3` + `principalAxisAlign` add Phase 26 PCA rotation so the brain's principal axes line up with MNI canonical axes (right-handed enforced via det(R)=+1 sign flip)
 - `web/js/inference-worker.js` — Web Worker running the 3D inference pipeline (~700 lines, uses `importScripts`, not ES modules)
 - `web/js/controllers/` — FileIO, DICOM, Inference, Viewer controllers
 - `web/js/modules/` — UI components and inference pipeline modules
@@ -72,10 +73,16 @@ Common issues it catches:
 | `npm run test:threshold` | applyThreshold (absolute / percentile, one-sided / symmetric, with minClusterVoxels) + quantileAbsValue |
 | `npm run test:resample` | affineFromHeader + invertAffine + resampleAffine (5 cases: identity, downsample, oob, trilinear, validation) |
 | `npm run test:resample-parity` | Yeo grid → MNI160 1mm → Yeo grid roundtrip on a 6³ phantom: Dice = 1.0 + centroid drift < 1 voxel |
-| `npm run test:worker` | inference-worker module-worker invariants + ~20 source-grep guards on the message protocol |
-| `npm run test:app` | LesionNetworkMappingApp class shape + import surface + per-phase wiring assertions (Yeo, atlas, threshold, resample/bridge, FC) |
-| `npm run test:html` | `web/index.html` required-IDs lockdown (25 IDs incl. all phase additions) + no surviving SCT branding |
-| `npm test` | Full Node suite: lint + 14 above (no browser, no real-inference fixtures) |
+| `npm run test:prealign` | centroidOfMask + applyAffineToVoxel + computePrealignAffine (centroid-only Phase 16 v1 math) |
+| `npm run test:prealign-pca` | covarianceOfMask + jacobiEigen3x3 + principalAxisAlign (Phase 26 PCA: rotated phantom recovers principal axis, det(R)=+1) |
+| `npm run test:real-data-bridge` | Real ds004884 stroke (160×256×256 1mm) → MNI160 → Yeo7 → parcel overlap. Pinned-fixture parity gate (Phase 30) |
+| `npm run test:real-data-pca` | Phase 26 PCA on the ds004884 T1: positive eigenvalues, det(R)=+1, resampled centroid within 1.5 voxels of MNI center |
+| `npm run test:deploy-budget` | Static deploy < 60 MB; runtime cold-load < 300 MB (currently 38 + 209) |
+| `npm run test:manifest-checksums` | sha256 of every cached/committed asset matches its manifest entry; catches manifest/fixture drift |
+| `npm run test:worker` | inference-worker module-worker invariants + ~20 source-grep guards on the message protocol; pins SynthMorph EP introspection (Phase 28) |
+| `npm run test:app` | LesionNetworkMappingApp class shape + import surface + per-phase wiring assertions (Yeo, atlas, threshold, resample/bridge, FC, PCA prealign, perf instrumentation) |
+| `npm run test:html` | `web/index.html` required-IDs lockdown (27 IDs incl. all phase additions) + no surviving SCT branding |
+| `npm test` | Full Node suite: lint + 20 above (no browser, no real-inference fixtures) |
 | `npm run test:smoke` | Browser smoke (Playwright + headless Chromium): manual-mask Yeo overlap (Phase 1c.4), SynthStrip (2a.1.5), SynthStroke (2a.2.5), SynthMorph kickoff (3.7), full-pipeline manual branch (Phase 8), full-pipeline auto branch (Phase 10). Opt-in; requires `npx playwright install chromium`. ~5 min cold for Phase 10 |
 | `npm run test:synthstrip-parity` | SynthStrip ONNX parity vs FreeSurfer reference (Node, slow; opt-in) |
 | `npm run test:lesion-seg-parity` | SynthStroke ONNX parity (Node, slow; opt-in) |
