@@ -56,10 +56,11 @@
             <label class="param-label" for="structuralFileInput">Structural T1 (.nii / .nii.gz)</label>
             <input type="file" id="structuralFileInput" accept=".nii,.gz">
           </div>
-          <div class="param-group">
-            <label class="param-label" for="lesionFileInput">Or: pre-computed lesion mask (Yeo 2 mm grid)</label>
-            <input type="file" id="lesionFileInput" accept=".nii,.gz">
-          </div>
+          <p class="param-help" style="margin:8px 0 0 0">
+            Drop a raw T1 — any orientation, any voxel size. The auto chain
+            handles brain extraction, MNI prealign, lesion segmentation,
+            registration, and the Yeo7 network map.
+          </p>
         </div>
       </section>
 
@@ -77,10 +78,9 @@
             </button>
           </div>
           <p class="param-help" style="margin:8px 0 0 0">
-            Auto-detects the right chain: T1 → brain extraction → lesion
-            segmentation → MNI registration → Yeo7 network map +
-            threshold; or runs only overlap + network map if you dropped
-            a Yeo-grid mask.
+            Auto-detects the right chain from your input — drop a raw T1
+            and click. Pre-aligned data is detected and the prealign step
+            is skipped automatically.
           </p>
 
           <details id="advancedStageControls" style="margin-top:12px">
@@ -89,12 +89,21 @@
             </summary>
             <div style="margin-top:10px">
               <div class="param-group">
+                <label class="param-label" for="lesionFileInput">Researcher mode: pre-computed lesion mask (Yeo 2 mm grid)</label>
+                <input type="file" id="lesionFileInput" accept=".nii,.gz">
+                <p class="param-help" style="margin-top:4px">
+                  Skips segmentation + registration and goes straight to
+                  Yeo overlap + FC network map. Mask must already be on
+                  the 99×117×95 2 mm grid.
+                </p>
+              </div>
+              <div class="param-group">
                 <label class="param-label" for="pipelineSelect">Pipeline</label>
                 <select id="pipelineSelect">
                   <!-- populatePipelineSelect() in lnm-app.js rewrites these
                        options at boot from the runnable LNM_PIPELINES set;
                        the static option is just a no-JS fallback. -->
-                  <option value="lnm-yeo-only">Yeo 7-network overlap (manual mask)</option>
+                  <option value="lnm-yeo-auto">Auto Yeo overlap (T1)</option>
                 </select>
               </div>
               <p class="param-help">

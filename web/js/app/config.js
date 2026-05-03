@@ -1,4 +1,4 @@
-export const VERSION = '0.16.2';
+export const VERSION = '0.17.0';
 
 // Model - relative path (served from same origin)
 export const MODEL_BASE_URL = './models';

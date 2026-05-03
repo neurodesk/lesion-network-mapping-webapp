@@ -72,6 +72,30 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 39 (v0.17.0)** — assume raw T1; drop visible manual-mask input.
+
+The Input section used to show two file inputs: "Structural T1" and
+"Or: pre-computed lesion mask (Yeo 2 mm grid)". Clinical use is
+T1-only — the second input was researcher-mode noise. Simplified:
+
+- The lesion file input moves under Advanced as "Researcher mode:
+  pre-computed lesion mask" with a clear note that the mask must
+  already be on the 99×117×95 2 mm grid.
+- The Input section now shows ONE input (T1) plus a help line
+  explaining the auto chain handles everything from raw T1.
+- `lnm-yeo-only` and `lnm-network-map` pipelines are flagged
+  `hidden: true` so they drop out of the dropdown. Visible pipelines:
+  `lnm-yeo-auto` (the default) and `lnm-segment-only`. Hidden
+  pipelines remain reachable via `setLesion()` auto-promote when a
+  researcher loads a Yeo-grid mask through the Advanced input or
+  when the browser smoke drives `#lesionFileInput` directly.
+- Static `<select>` fallback option in `index.html` is now
+  `lnm-yeo-auto` (the auto chain) instead of `lnm-yeo-only`.
+
+Test contract pinned: `test:tasks` asserts both manual-mask
+pipelines are hidden + `lnm-yeo-auto` is visible. `test:html` asserts
+the static fallback is now the auto pipeline.
+
 **Phase 38 (v0.16.2)** — N=155 development_fmri connectome + smoke verify.
 
 - **Connectome upgrade**: ADHD-200 N=40 → development_fmri N=155

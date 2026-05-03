@@ -43,5 +43,9 @@ build/
 # Dev server runtime files
 web/.dev-server-*.pid
 
+# Phase 40: build metadata (commit SHA + branch + dirty flag) written
+# by web/run.sh on dev-server start and by .github/workflows/ at deploy.
+web/build-info.json
+
 node_modules
 test_data

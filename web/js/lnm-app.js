@@ -403,12 +403,37 @@ export class LesionNetworkMappingApp {
     pipelineSelect.value = this.selectedPipeline?.id || 'lnm-yeo-only';
   }
 
-  // Phase 13: populate the About modal's version line from Config.VERSION
-  // so users always see what they're running. Called from init() once
-  // the DOM is wired.
-  populateVersionLabel() {
-    const el = document.getElementById('aboutAppVersion');
-    if (el) el.textContent = Config.VERSION || '';
+  // Phase 13 + Phase 40: populate every visible version slot from
+  // Config.VERSION. Best-effort augment with build-info.json (written
+  // by web/run.sh for local dev + by .github/workflows/ for deploys)
+  // to surface the commit SHA / branch / dirty flag.
+  //
+  //   local dev    -> "v0.17.0 (abc1234, main, dirty)"
+  //   staging      -> "v0.17.0-staging+abc1234"  (sed'd by deploy-pages.yml)
+  //                   plus "(abc1234, main)" from build-info.json
+  //   production   -> "v0.17.0" (release-tag build; build-info.json may
+  //                   carry the tag SHA)
+  //
+  // build-info.json is fetched best-effort — a 404 falls back to just
+  // VERSION, so the static deploy works whether or not the file exists.
+  async populateVersionLabel() {
+    let label = Config.VERSION ? `v${Config.VERSION}` : '';
+    try {
+      const r = await fetch('build-info.json', { cache: 'no-store' });
+      if (r.ok) {
+        const info = await r.json();
+        const bits = [];
+        if (info.sha) bits.push(info.sha);
+        if (info.branch && info.branch !== 'main') bits.push(info.branch);
+        if (info.dirty) bits.push('dirty');
+        if (bits.length) label += ` (${bits.join(', ')})`;
+      }
+    } catch (e) { /* best-effort: silent fallback to VERSION */ }
+    const ids = ['aboutAppVersion', 'appVersion', 'footerVersion'];
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = label;
+    }
   }
 
   async setStructural(file) {

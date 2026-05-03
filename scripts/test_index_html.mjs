@@ -73,8 +73,12 @@ for (const id of requiredIds) {
 }
 
 // Pipeline selector must offer at least the Phase 1 pipeline.
-assert.match(html, /value=["']lnm-yeo-only["']/,
-  '#pipelineSelect must include the lnm-yeo-only option');
+// Phase 39: visible UI assumes raw T1 input; manual-mask pipelines
+// (lnm-yeo-only, lnm-network-map) are flagged hidden in lnm-tasks.js
+// and drop out of the dropdown. The static fallback option (rendered
+// only when JS doesn't run) is now lnm-yeo-auto — the auto chain.
+assert.match(html, /value=["']lnm-yeo-auto["']/,
+  '#pipelineSelect static fallback must be lnm-yeo-auto (auto T1 chain)');
 
 // Module loader points at the new orchestrator, not the old SCT app.
 assert.match(html, /<script\s[^>]*src=["']js\/lnm-app\.js["'][^>]*type=["']module["']/,

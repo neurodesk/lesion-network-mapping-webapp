@@ -50,6 +50,21 @@ jobs:
             git checkout origin/main
           fi
 
+      - name: Write build-info.json (production)
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+          BRANCH="${TAG:-detached}"
+          cat > web/build-info.json <<EOF
+          {
+            "sha": "${SHA}",
+            "branch": "${BRANCH}",
+            "dirty": false,
+            "buildEnv": "production"
+          }
+          EOF
+          cat web/build-info.json
+
       - name: Download ONNX Runtime WASM files
         run: |
           cd web
@@ -102,6 +117,20 @@ jobs:
           STAGING_VERSION="${BASE_VERSION}-staging+${SHORT_SHA}"
           sed -i -E "s/^export const VERSION = '[^']+';$/export const VERSION = '${STAGING_VERSION}';/" web/js/app/config.js
           echo "Building staging as ${STAGING_VERSION}."
+
+      - name: Write build-info.json (staging)
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+          cat > web/build-info.json <<EOF
+          {
+            "sha": "${SHA}",
+            "branch": "${BRANCH}",
+            "dirty": false,
+            "buildEnv": "staging"
+          }
+          EOF
+          cat web/build-info.json
 
       - name: Download ONNX Runtime WASM files
         run: |

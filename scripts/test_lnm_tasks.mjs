@@ -123,10 +123,17 @@ assert.equal(isStageRunnable(segStage), true,
 // Phase 13: pipeline-level runnability for the dropdown filter.
 // lnm-yeo-only + lnm-yeo-auto must surface; lnm-default (Schaefer400 +
 // GSP1000 placeholder) must stay hidden until those assets ship.
-assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-only')), true,
-  'lnm-yeo-only must be a runnable pipeline (drives the manual-mask flow)');
+// Phase 39: visible UI assumes raw T1 input. Manual-mask pipelines
+// (lnm-yeo-only + lnm-network-map) are flagged hidden:true so they
+// drop out of the dropdown — they're still reachable via setLesion()
+// auto-promote when a researcher loads a Yeo-grid mask through the
+// Advanced disclosure.
+assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-only')), false,
+  'lnm-yeo-only must be HIDDEN (manual-mask path moved to Advanced)');
+assert.equal(isPipelineRunnable(getPipelineById('lnm-network-map')), false,
+  'lnm-network-map must be HIDDEN (manual-mask path moved to Advanced)');
 assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-auto')), true,
-  'lnm-yeo-auto must be a runnable pipeline (drives the auto chain)');
+  'lnm-yeo-auto must be a runnable pipeline (the visible default)');
 assert.equal(isPipelineRunnable(getPipelineById('lnm-default')), false,
   'lnm-default is a Schaefer400/GSP1000 placeholder; must stay hidden');
 

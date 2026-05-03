@@ -14,6 +14,13 @@
 export const LNM_PIPELINES = [
   {
     id: 'lnm-yeo-only',
+    // Phase 39: hidden from the dropdown — the visible UI assumes raw T1
+    // input. Manual-mask path stays runnable for power users via the
+    // "Researcher mode" file input under Advanced; auto-promote in
+    // setLesion() switches to lnm-network-map (also hidden) when a mask
+    // is dropped. lnm-yeo-only is a strict subset of lnm-network-map
+    // and is kept for tests + back-compat with old smokes.
+    hidden: true,
     displayName: 'Yeo 7-network overlap (manual mask)',
     description:
       'Upload a lesion mask already in MNI152 space. Reports per-network ' +
@@ -54,6 +61,11 @@ export const LNM_PIPELINES = [
   },
   {
     id: 'lnm-network-map',
+    // Phase 39: hidden from the dropdown — the visible UI assumes raw T1
+    // input. setLesion() still auto-promotes to this pipeline when a
+    // researcher drops a Yeo-grid mask via the Advanced disclosure or
+    // when test_browser_smoke drives #lesionFileInput directly.
+    hidden: true,
     displayName: 'Lesion network map (Yeo7 + group-FC pack)',
     description:
       'Manual-mask path with FC weighted sum: drop a binary lesion mask in ' +

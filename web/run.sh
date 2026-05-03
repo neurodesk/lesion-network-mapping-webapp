@@ -51,6 +51,29 @@ stop_existing_server() {
 
 stop_existing_server
 
+# Phase 40: write a build-info.json so the orchestrator can show the
+# current commit SHA + branch + dirty flag in the version badge.
+# Production + staging deploys write their own build-info.json from
+# .github/workflows/; local dev writes it here on each server start.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if git -C "$REPO_ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
+  SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+  if git -C "$REPO_ROOT" diff-index --quiet HEAD -- 2>/dev/null; then
+    DIRTY=false
+  else
+    DIRTY=true
+  fi
+  cat > "$SCRIPT_DIR/build-info.json" <<EOF
+{
+  "sha": "${SHA}",
+  "branch": "${BRANCH}",
+  "dirty": ${DIRTY},
+  "buildEnv": "local"
+}
+EOF
+fi
+
 echo "=== SCT Browser Segmentation Development Server ==="
 echo "Serving at: http://localhost:$PORT"
 echo "Press Ctrl+C to stop"
