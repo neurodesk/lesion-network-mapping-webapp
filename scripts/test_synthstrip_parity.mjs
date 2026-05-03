@@ -184,20 +184,37 @@ function computeCentroid(mask, dims) {
   );
 
   // ---- plausibility ----
-  assert.ok(result.voxelCount > 1000,
-    `mask is too small: ${result.voxelCount} voxels`);
-  assert.ok(coverage > 0.10,
-    `coverage too low: ${(coverage * 100).toFixed(1)}%`);
-  assert.ok(coverage < 0.95,
-    `coverage suspiciously high (failed to crop background?): ${(coverage * 100).toFixed(1)}%`);
+  // Tightened (Phase 33 audit). Earlier 10-95% coverage + 15-voxel
+  // centroid drift would silently pass a partial-hemisphere mask. The
+  // MNI152 template is already mostly skull-stripped (only the
+  // neurocranium remains); SynthStrip on this fixture observes:
+  //   - coverage: ~24% of the conformed 192^3 volume
+  //   - centroid drift: ~7 voxels on z (the template's brain sits
+  //     inferior of the volume centre because the FOV includes some
+  //     superior neck/cervical)
+  // Gates set just outside those observations to catch real
+  // regressions without being noise-sensitive.
+  assert.ok(result.voxelCount > 50_000,
+    `mask is implausibly small (likely model failure): ${result.voxelCount} voxels`);
+  assert.ok(coverage > 0.18,
+    `coverage too low: ${(coverage * 100).toFixed(1)}% (expected >18%; ` +
+    `would catch a ~hemisphere or partial-cortex mask)`);
+  assert.ok(coverage < 0.60,
+    `coverage too high: ${(coverage * 100).toFixed(1)}% (expected <60%; ` +
+    `would catch a model that failed to crop background entirely)`);
 
+  // Centroid drift: 10 voxels on the conformed 1mm grid = 1cm. The MNI
+  // template's brain centroid sits ~7 voxels inferior of the volume
+  // centre on z (template FOV includes superior neck), so the gate has
+  // to accommodate that. 10 voxels still catches "centroid in a
+  // hemisphere" or a 2cm misalignment.
   for (const [axis, axisName] of [[0, 'x'], [1, 'y'], [2, 'z']]) {
     const observed = [cx, cy, cz][axis];
     const expected = imageCentre[axis];
     const drift = Math.abs(observed - expected);
-    assert.ok(drift < 15,
+    assert.ok(drift < 10,
       `centroid axis ${axisName} drifted too far from image centre: ` +
-      `${observed.toFixed(1)} vs ${expected.toFixed(1)} (drift ${drift.toFixed(1)} voxels)`);
+      `${observed.toFixed(1)} vs ${expected.toFixed(1)} (drift ${drift.toFixed(1)} voxels; gate <10)`);
   }
 
   const { connectedComponents3D } = await import('../web/js/modules/volume-utils.js');

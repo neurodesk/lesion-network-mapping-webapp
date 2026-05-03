@@ -71,9 +71,11 @@ const { pathToFileURL } = require('node:url');
   assert.ok(mniCount >= 1500 && mniCount <= 2000,
     `forward resample: expected ~1700 MNI voxels, got ${mniCount}`);
 
-  // Backward: MNI160 1mm -> Yeo grid. Should recover the original mask
-  // up to a small boundary loss. Compute Dice; require >= 0.95 for the
-  // chunky 6^3 cube.
+  // Backward: MNI160 1mm -> Yeo grid. For an aligned-grid roundtrip with
+  // nearest-neighbour resampling on a 2x downsample-then-upsample chain,
+  // the Dice should be 1.0 — the math is bit-exact under these grids.
+  // Earlier this gate was 0.95 (loose); tightened to require exact
+  // recovery so a regression that drops a single voxel surfaces.
   const recovered = resampleAffine(mniMask, mniDims, mniAffine,
     yeoDims, yeoAffine, 'nearest');
   let intersect = 0, union = 0;
@@ -85,8 +87,9 @@ const { pathToFileURL } = require('node:url');
   }
   const dice = (2 * intersect) / ((intersect + (yeoCount - intersect)) +
     (intersect + (union - yeoCount)));
-  assert.ok(dice >= 0.95,
-    `roundtrip Dice expected >= 0.95, got ${dice.toFixed(4)} ` +
+  assert.equal(dice, 1.0,
+    `roundtrip Dice must be exactly 1.0 for an aligned-grid 2x ` +
+    `nearest-neighbour roundtrip; got ${dice.toFixed(6)} ` +
     `(intersect=${intersect}, recovered_count=${
       Array.from(recovered).reduce((a, b) => a + b, 0)
     })`);

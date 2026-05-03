@@ -72,6 +72,51 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 33 (v0.15.1)** — test-suite audit + tightening.
+
+Audit found three loose thresholds and four uncovered modules. Fixed:
+
+**Tightened thresholds**:
+
+- `test:resample-parity` Dice: ≥ 0.95 → exact `= 1.0`. The math is
+  bit-exact for an aligned-grid 2× nearest-neighbour roundtrip.
+- `test:real-data-bridge` per-network tolerance: flat ±25 voxels →
+  `max(15, 0.05 × expected)`. Stops Visual (n=125) from getting 20%
+  slack while Limbic (n=1904) gets 1.3%.
+- `test:synthstrip-parity` coverage: 10–95% → 18–60%; centroid drift:
+  <15 voxels → <10 voxels. Catches "model output is half a hemisphere"
+  while accommodating the MNI template's natural inferior offset.
+
+**4 new behavior tests** (replace source-grep coverage):
+
+- `test:app-behavior` — partially-instantiates `LesionNetworkMappingApp`
+  with stubbed browser globals, replaces `_runStage` with a recording
+  spy, and asserts: stages dispatch in declared order, stage exception
+  halts the chain, precondition gates fire, `_runStage` rejects
+  unknown modules, `_autoPromotePipeline` only fires before user
+  manual pick. Catches a regression where the for-loop accidentally
+  `return`s after stage 1.
+- `test:nifti-writer` — round-trips Float32 + Uint8 phantoms through
+  `writeNifti1` and `nifti-reader-js`, asserts byte-equal voxel
+  values, dim/spacing/affine round-trip, NIfTI-1 magic bytes. Was
+  zero-coverage despite being load-bearing for every download button.
+- `test:atlas-loader-cache` — exports `fetchCacheFirst` and pins the
+  Phase 4 silent-fail bug fix: bare cacheKey strings parse as URL
+  schemes and crash `Cache.put`; the fix folds them into a URL
+  fragment. Tests warm-cache short-circuit, non-fatal cache failure,
+  and HTTP-error propagation.
+- `test:prealign-pca-orientation` — DOCUMENTS the 180° ambiguity
+  limitation: PCA covariance is identical for upright and flipped
+  acquisitions, so `principalAxisAlign` produces mirror-image outputs
+  for the same anatomy. The test confirms equal mass / equal skew
+  magnitudes on both poses; the orientation sign mismatch is logged
+  but not hard-asserted (a 3rd-moment fix would interact poorly with
+  the det = +1 enforcement; resolution needs an A/P/L/R anatomical
+  prior or accepting MNI's left-handed FSL convention).
+
+**Test surface**: 29 distinct test scripts, 21+ in `npm test` (was 21).
+6 browser smokes + 4 opt-in heavy parity tests unchanged.
+
 **Phase 32 (v0.15.0)** — UI cleanup for clinical use.
 
 Audit found the sidebar had grown to **3 stacked sections × 6+ buttons

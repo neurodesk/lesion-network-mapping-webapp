@@ -142,7 +142,10 @@ export async function loadConnectomeFromManifest(connectomeAssetId, { manifest }
 // resemble URL schemes (e.g. 'yeo7-fc-pack-adhd200-n30-v1' parses as a
 // scheme name and fails). The manifest's cacheKey is folded into the URL
 // search-params so different versions of the same source URL don't collide.
-async function fetchCacheFirst(url, cacheKey, cache) {
+//
+// Exported for unit testing (Phase 33 audit) — production callers go
+// through fetchAtlasBuffer / loadConnectomeFromManifest.
+export async function fetchCacheFirst(url, cacheKey, cache) {
   const cacheUrl = cacheKey ? `${url}#${encodeURIComponent(cacheKey)}` : url;
   if (cache) {
     const hit = await cache.match(cacheUrl);

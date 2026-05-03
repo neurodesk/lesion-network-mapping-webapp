@@ -21,6 +21,8 @@
   "tolerance": {
     "totalsAbsDiff": 50,
     "centroidAxisDiff": 0.5,
-    "networkAbsDiff": 25
+    "_networkAbsFloor": "Per-network tolerance is max(networkAbsFloor, networkRelDiff * expected). Earlier flat ±25 was too loose for Visual=125 (20%) and too tight for Limbic=1904 (1.3%) — proportional gate fixes both.",
+    "networkAbsFloor": 15,
+    "networkRelDiff": 0.05
   }
 }

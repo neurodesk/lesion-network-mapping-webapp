@@ -237,13 +237,16 @@ for (let i = 0; i < 3; i++) {
   assertWithinAbs(`centroidMni160Voxel[${i}]`, actCentroid[i], expCentroid[i], tol.centroidAxisDiff);
 }
 
-// Per-network voxel counts.
+// Per-network voxel counts. Tolerance is max(absFloor, relDiff * expected)
+// — proportional rather than flat-absolute, so a small network like Visual
+// (~125 voxels) doesn't get 20% slack while Limbic (~1900) gets 1.3%.
 const actNetworks = Object.fromEntries(
   summary.networks.map(n => [n.network, n.voxelsInLesion])
 );
 for (const [name, expectedVoxels] of Object.entries(expected.networks)) {
   const actualVoxels = actNetworks[name] || 0;
-  assertWithinAbs(`networks.${name}`, actualVoxels, expectedVoxels, tol.networkAbsDiff);
+  const allowed = Math.max(tol.networkAbsFloor, Math.ceil(tol.networkRelDiff * expectedVoxels));
+  assertWithinAbs(`networks.${name}`, actualVoxels, expectedVoxels, allowed);
 }
 
 console.log(

@@ -237,6 +237,16 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
     [sortedVecs[0][2], sortedVecs[1][2], sortedVecs[2][2]]
   ];
   // Force right-handed: det(R) must be +1, not -1 (mirror).
+  // KNOWN LIMITATION (Phase 33 audit): a 3rd-moment sign correction
+  // would resolve the 180° ambiguity (heavy half lands on a canonical
+  // MNI side regardless of acquisition pose), but a naive flip-then-
+  // re-det interacts badly: flipping a column for sign correction can
+  // break right-handedness, and the det-fix below undoes it. Proper
+  // resolution needs to either (a) accept det(R) = -1 (consistent
+  // with MNI's left-handed FSL convention) and audit downstream
+  // consumers, or (b) bake an A/P/L/R anatomical prior into the
+  // algorithm. Documented as expected-fail in
+  // scripts/test_prealign_pca_orientation.cjs.
   const det =
     R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) -
     R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +
