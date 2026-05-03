@@ -21,9 +21,13 @@ assert.doesNotMatch(html, /\bSCT\b(?!\.com)/,   // allow URL fragments like spin
 // Sidebar sections — the orchestrator binds to these IDs. If they drift, the
 // app fails silently instead of throwing, so we lock them down.
 const requiredIds = [
+  // Phase 32 — sidebar redesign: three primary sections (Input → Run → Results).
+  // Per-stage controls live inside <details> disclosures inside Run/Results so
+  // the orchestrator's bindings keep working without dominating the UI.
   '#stepLoadSection',
   '#stepLesionSection',
-  '#stepNetworkSection',
+  // (#stepNetworkSection removed; pipelineSelect + computeOverlapButton moved
+  //  under the Run section's Advanced disclosure.)
   '#resultsSection',
   '#networkOverlapTable',
   '#downloadOverlapCsv',
@@ -58,7 +62,9 @@ const requiredIds = [
   // Phase 16 addition: in-browser affine pre-registration.
   '#prealignToMniButton',
   // Phase 21 addition: clear-results / new-run UX control.
-  '#clearResultsButton'
+  '#clearResultsButton',
+  // Phase 32 additions: Advanced disclosure container.
+  '#advancedStageControls'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);

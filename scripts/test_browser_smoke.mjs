@@ -75,6 +75,17 @@ async function waitForServer(url, timeoutMs = 10000) {
   throw new Error(`server at ${url} not reachable within ${timeoutMs}ms (${lastErr?.message})`);
 }
 
+// Phase 32: per-stage controls live inside <details> disclosures so the
+// primary "Run analysis" flow dominates the sidebar. Smoke tests that
+// click those advanced controls must open the disclosure first or
+// Playwright reports the button as not-visible. Idempotent — opens any
+// already-open details a second time.
+async function openAllDisclosures(page) {
+  await page.evaluate(() => {
+    document.querySelectorAll('details').forEach(d => { d.open = true; });
+  });
+}
+
 async function spawnServer(port) {
   const server = spawn('bash', ['web/run.sh', String(port)], {
     cwd: ROOT,
@@ -120,6 +131,7 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
 
       await page.goto(URL, { waitUntil: 'load' });
       await page.waitForFunction(() => Boolean(window.app && window.app.viewerController), { timeout: 15000 });
+      await openAllDisclosures(page);
 
       // Drop the phantom mask. The change handler is async; wait until app.lesionFile is populated.
       await page.setInputFiles('#lesionFileInput', PHANTOM_PATH);
@@ -297,6 +309,7 @@ test('Phase 8 browser smoke: phantom -> Run full pipeline (manual branch)', { ti
 
       await page.goto(URL, { waitUntil: 'load' });
       await page.waitForFunction(() => Boolean(window.app && window.app.viewerController), { timeout: 15000 });
+      await openAllDisclosures(page);
 
       await page.setInputFiles('#lesionFileInput', PHANTOM_PATH);
       await page.waitForFunction(() => Boolean(window.app.lesionFile), { timeout: 15000 });
@@ -392,6 +405,7 @@ test('Phase 2a.1.5 browser smoke: structural T1 -> SynthStrip -> brain mask down
           () => Boolean(window.app && window.app.viewerController && window.app.executor),
           { timeout: 15000 }
         );
+        await openAllDisclosures(page);
 
         // Drop the structural T1. setStructural() loads it into NiiVue and
         // auto-fires runBrainExtraction(), which posts 'load' + 'run-synthstrip'
@@ -499,6 +513,7 @@ test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask d
           () => Boolean(window.app && window.app.viewerController && window.app.executor),
           { timeout: 15000 }
         );
+        await openAllDisclosures(page);
 
         // Drop the structural; SynthStrip auto-fires. Wait for the brain
         // mask to land before kicking off lesion seg (the SCT-derived
@@ -610,6 +625,7 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
           () => Boolean(window.app && window.app.viewerController && window.app.executor),
           { timeout: 15000 }
         );
+        await openAllDisclosures(page);
 
         // Drop the lnm-mni160 reference as the 'structural'. It is itself a
         // 160x160x192 1mm MNI152 brain — a clean self-pair for the
@@ -754,6 +770,7 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
           () => Boolean(window.app && window.app.viewerController),
           { timeout: 15000 }
         );
+        await openAllDisclosures(page);
 
         // Capture WebGPU availability up front; the assertions below
         // branch on it.

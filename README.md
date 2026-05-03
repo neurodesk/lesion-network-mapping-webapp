@@ -72,6 +72,42 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phase 32 (v0.15.0)** — UI cleanup for clinical use.
+
+Audit found the sidebar had grown to **3 stacked sections × 6+ buttons
+each** and the toolbar carried **9 controls of which 6 had no JS
+binding** (carried over from the SCT scaffold). Redesigned:
+
+- **Sidebar collapses to three numbered panels**:
+  1. **Input** — file inputs only.
+  2. **Run analysis** — single primary button. The 7 per-stage controls
+     (brain extraction, prealign, lesion seg, registration, warp, Yeo
+     overlap, network map) move into an `<details>` "Advanced" disclosure
+     that's closed by default.
+  3. **Results** — overlap table + threshold panel + 3 essential
+     downloads (CSV, network map, thresholded mask). Brain/lesion mask
+     downloads move into an "Intermediate downloads" disclosure.
+
+  All 27 DOM IDs preserved (the per-stage buttons just live inside
+  `<details>` now), so every existing JS binding + the
+  `test_index_html.mjs` lockdown still work.
+
+- **Toolbar trimmed**: dropped 6 dead controls (`windowMin/Max`,
+  `rangeMin/Max`, `rangeSelected`, `resetWindow`, `inputVisibilityToggle`,
+  `downloadCurrentVolume`, `screenshotViewer`) — none had JS bindings.
+  Kept: view tabs, overlay opacity (now visible by default; was hidden),
+  crosshair, smoothing, colorbar, base colormap.
+
+- **Section headers** are now static labels (no longer click-to-collapse —
+  the per-stage Advanced controls use native `<details>` instead).
+  `toggleSection` script removed; `.sidebar-section.collapsed` CSS rules
+  removed.
+
+- **Browser smoke**: 4 tests broke (per-stage buttons inside closed
+  disclosure → "not visible" to Playwright). Added `openAllDisclosures(page)`
+  helper called after each `page.goto`; idempotent. Phase 8/10 (primary
+  flow) untouched.
+
 **Phase 31 (v0.14.1)** — smoke regressions fixed + docs refresh.
 
 Ran the browser smoke for the first time since v0.10.0 and surfaced two

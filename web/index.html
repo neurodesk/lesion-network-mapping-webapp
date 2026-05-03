@@ -44,74 +44,83 @@
 
   <aside class="app-sidebar">
     <div class="sidebar-scroll">
+
+      <!-- 1. INPUT — drop a structural T1 or a Yeo-aligned lesion mask. -->
       <section class="sidebar-section" id="stepLoadSection">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+        <h2 class="section-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Load Images
+          1. Input
         </h2>
         <div class="section-content">
           <div class="param-group">
-            <label class="param-label" for="structuralFileInput">Structural image</label>
+            <label class="param-label" for="structuralFileInput">Structural T1 (.nii / .nii.gz)</label>
             <input type="file" id="structuralFileInput" accept=".nii,.gz">
           </div>
           <div class="param-group">
-            <label class="param-label" for="lesionFileInput">Lesion mask</label>
+            <label class="param-label" for="lesionFileInput">Or: pre-computed lesion mask (Yeo 2 mm grid)</label>
             <input type="file" id="lesionFileInput" accept=".nii,.gz">
           </div>
         </div>
       </section>
 
+      <!-- 2. RUN — primary one-click action. Per-stage controls hidden in
+           Advanced disclosure to avoid overwhelming clinicians. -->
       <section class="sidebar-section" id="stepLesionSection">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
-          Lesion
-        </h2>
-        <div class="section-content">
-          <p class="param-help">
-            SynthStrip brain extraction runs automatically when a structural is dropped.
-            Use this button to re-run on the current image.
-          </p>
-          <div class="step-buttons">
-            <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">Run brain extraction</button>
-            <button class="btn btn-secondary btn-sm" id="prealignToMniButton">Pre-align to MNI 160<sup>3</sup> 1mm</button>
-            <button class="btn btn-primary btn-sm" id="runLesionSegmentationButton">Run lesion segmentation</button>
-            <button class="btn btn-secondary btn-sm" id="runRegistrationButton">Run MNI registration</button>
-            <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">Apply registration to lesion</button>
-          </div>
-          <hr style="border:0;border-top:1px solid var(--border, #2a2a2a);margin:12px 0">
-          <p class="param-help">
-            One-click chain: brain extraction &rarr; lesion segmentation &rarr;
-            MNI registration &rarr; warp &rarr; Yeo overlap &rarr; FC network map
-            &rarr; threshold (defaults).
-          </p>
-          <div class="step-buttons">
-            <button class="btn btn-primary btn-sm" id="runFullPipelineButton">Run full pipeline</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="sidebar-section" id="stepNetworkSection">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+        <h2 class="section-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          Network
+          2. Run analysis
         </h2>
         <div class="section-content">
-          <div class="param-group">
-            <label class="param-label" for="pipelineSelect">Pipeline</label>
-            <select id="pipelineSelect">
-              <option value="lnm-yeo-only">Yeo 7-network overlap (manual mask)</option>
-            </select>
-          </div>
           <div class="step-buttons">
-            <button class="btn btn-primary" id="computeOverlapButton">Compute overlap</button>
+            <button class="btn btn-primary" id="runFullPipelineButton" style="width:100%;font-size:14px;padding:10px">
+              Run analysis
+            </button>
           </div>
+          <p class="param-help" style="margin:8px 0 0 0">
+            Auto-detects the right chain: T1 → brain extraction → lesion
+            segmentation → MNI registration → Yeo7 network map +
+            threshold; or runs only overlap + network map if you dropped
+            a Yeo-grid mask.
+          </p>
+
+          <details id="advancedStageControls" style="margin-top:12px">
+            <summary style="cursor:pointer;font-size:12px;color:var(--muted,#888);text-transform:uppercase">
+              Advanced — per-stage controls
+            </summary>
+            <div style="margin-top:10px">
+              <div class="param-group">
+                <label class="param-label" for="pipelineSelect">Pipeline</label>
+                <select id="pipelineSelect">
+                  <!-- populatePipelineSelect() in lnm-app.js rewrites these
+                       options at boot from the runnable LNM_PIPELINES set;
+                       the static option is just a no-JS fallback. -->
+                  <option value="lnm-yeo-only">Yeo 7-network overlap (manual mask)</option>
+                </select>
+              </div>
+              <p class="param-help">
+                Run individual stages on the current image. Selection is
+                auto-promoted on file drop; pick manually here to override.
+              </p>
+              <div class="step-buttons">
+                <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">Brain extraction</button>
+                <button class="btn btn-secondary btn-sm" id="prealignToMniButton">Pre-align T1 to MNI 160<sup>3</sup> 1 mm</button>
+                <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton">Lesion segmentation</button>
+                <button class="btn btn-secondary btn-sm" id="runRegistrationButton">MNI registration (SynthMorph)</button>
+                <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">Warp lesion → Yeo grid</button>
+                <button class="btn btn-secondary btn-sm" id="computeOverlapButton">Compute Yeo overlap</button>
+                <button class="btn btn-secondary btn-sm" id="computeNetworkMapButton">Compute network map</button>
+              </div>
+            </div>
+          </details>
         </div>
       </section>
 
+      <!-- 3. RESULTS — overlap table, threshold panel, primary downloads.
+           Intermediate masks (brain / lesion) hidden under Advanced. -->
       <section class="sidebar-section" id="resultsSection">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+        <h2 class="section-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-7"/></svg>
-          Results
+          3. Results
         </h2>
         <div class="section-content">
           <div id="outsideAtlasWarning" class="warning hidden"></div>
@@ -125,46 +134,46 @@
             </thead>
             <tbody></tbody>
           </table>
-          <button class="btn btn-secondary btn-sm" id="downloadOverlapCsv" disabled>Download CSV</button>
-          <button class="btn btn-secondary btn-sm" id="downloadBrainMaskButton" disabled>Download brain mask</button>
-          <button class="btn btn-secondary btn-sm" id="downloadLesionMaskButton" disabled>Download lesion mask</button>
-          <button class="btn btn-secondary btn-sm" id="clearResultsButton" title="Clear intermediate pipeline state and start a fresh run">Clear results</button>
-          <hr style="border:0;border-top:1px solid var(--border, #2a2a2a);margin:12px 0">
-          <h3 style="font-size:12px;text-transform:uppercase;color:var(--muted,#888);margin:0 0 6px 0">Network map</h3>
-          <p class="param-help">
-            Yeo7 group-FC weighted sum. Computes a brain-wide t-map after
-            running "Compute overlap" — each Yeo network's group-level
-            connectivity map is weighted by the lesion's share of that network.
-          </p>
-          <div class="step-buttons">
-            <button class="btn btn-primary btn-sm" id="computeNetworkMapButton">Compute network map</button>
-            <button class="btn btn-secondary btn-sm" id="downloadNetworkMapButton" disabled>Download network map</button>
-          </div>
+
           <div class="threshold-controls" id="thresholdControls" style="margin-top:12px">
-            <h4 style="font-size:11px;text-transform:uppercase;color:var(--muted,#888);margin:0 0 6px 0">Threshold</h4>
+            <h3 style="font-size:12px;text-transform:uppercase;color:var(--muted,#888);margin:0 0 6px 0">Threshold network map</h3>
             <div class="param-row">
               <label for="networkThresholdMode">Mode</label>
               <select id="networkThresholdMode" class="param-input">
-                <option value="absolute" selected>Absolute</option>
-                <option value="percentile">Percentile of |voxels|</option>
+                <option value="absolute" selected>Absolute t-stat</option>
+                <option value="percentile">Top % of |voxels|</option>
               </select>
             </div>
             <div class="param-row">
-              <label for="networkThresholdValue">Value <span id="networkThresholdValueLabel" class="param-help" style="float:right">0.00</span></label>
+              <label for="networkThresholdValue">Threshold <span id="networkThresholdValueLabel" class="param-help" style="float:right">0.00</span></label>
               <input type="range" id="networkThresholdValue" class="param-input" min="0" max="1" step="0.01" value="0.5">
             </div>
             <div class="param-row">
-              <label><input type="checkbox" id="networkThresholdSymmetric"> Symmetric (|x| &gt; T)</label>
+              <label><input type="checkbox" id="networkThresholdSymmetric"> Two-sided (|x| &gt; T)</label>
             </div>
             <div class="param-row">
-              <label for="networkThresholdMinCluster">Min cluster (voxels)</label>
+              <label for="networkThresholdMinCluster">Min cluster size (voxels)</label>
               <input type="number" id="networkThresholdMinCluster" class="param-input" min="0" step="1" value="0">
             </div>
-            <p class="param-help" id="networkThresholdSummary" style="margin:6px 0 0 0">Compute a network map first to enable thresholding.</p>
-            <div class="step-buttons" style="margin-top:6px">
-              <button class="btn btn-secondary btn-sm" id="downloadThresholdedNetworkMapButton" disabled>Download thresholded mask</button>
-            </div>
+            <p class="param-help" id="networkThresholdSummary" style="margin:6px 0 0 0">Run analysis first to enable thresholding.</p>
           </div>
+
+          <div class="step-buttons" style="margin-top:12px">
+            <button class="btn btn-primary btn-sm" id="downloadOverlapCsv" disabled>Download overlap CSV</button>
+            <button class="btn btn-secondary btn-sm" id="downloadNetworkMapButton" disabled>Download network map</button>
+            <button class="btn btn-secondary btn-sm" id="downloadThresholdedNetworkMapButton" disabled>Download thresholded mask</button>
+            <button class="btn btn-secondary btn-sm" id="clearResultsButton" title="Clear intermediate pipeline state">Start over</button>
+          </div>
+
+          <details style="margin-top:10px">
+            <summary style="cursor:pointer;font-size:12px;color:var(--muted,#888);text-transform:uppercase">
+              Intermediate downloads
+            </summary>
+            <div class="step-buttons" style="margin-top:8px">
+              <button class="btn btn-secondary btn-sm" id="downloadBrainMaskButton" disabled>Brain mask</button>
+              <button class="btn btn-secondary btn-sm" id="downloadLesionMaskButton" disabled>Lesion mask (native)</button>
+            </div>
+          </details>
         </div>
       </section>
     </div>
@@ -199,32 +208,25 @@
       </div>
 
       <div class="viewer-actions">
-        <div class="window-controls">
-          <input type="number" id="windowMin" class="window-input" placeholder="min" step="any" title="Window minimum">
-          <div class="range-slider-container">
-            <input type="range" id="rangeMin" class="range-slider range-min" min="0" max="100" value="0">
-            <input type="range" id="rangeMax" class="range-slider range-max" min="0" max="100" value="100">
-            <div class="range-track"></div>
-            <div class="range-selected" id="rangeSelected"></div>
-          </div>
-          <input type="number" id="windowMax" class="window-input" placeholder="max" step="any" title="Window maximum">
-          <button class="btn btn-sm" id="resetWindow" title="Reset to full range">Auto</button>
-        </div>
-
-        <div class="opacity-control hidden" id="overlayControl">
-          <label>Overlay</label>
+        <!-- Phase 32 toolbar trim: removed dead controls (window-controls
+             block, downloadCurrentVolume, screenshotViewer, resetWindow,
+             inputVisibilityToggle) — none had JS bindings. The opacity
+             control wrapper is now visible-by-default since the slider
+             is wired through ViewerController. -->
+        <div class="opacity-control" id="overlayControl">
+          <label>Overlay opacity</label>
           <input type="range" id="overlayOpacity" min="0" max="1" step="0.05" value="0.7">
           <span id="overlayOpacityValue">70%</span>
         </div>
 
-        <label class="viewer-checkbox" title="Show input image">
-          <input type="checkbox" id="inputVisibilityToggle" checked>
-          <span>Input</span>
+        <label class="viewer-checkbox">
+          <input type="checkbox" id="crosshairToggle" checked>
+          <span>Crosshair</span>
         </label>
 
         <label class="viewer-checkbox">
           <input type="checkbox" id="interpolation">
-          <span>Interp</span>
+          <span>Smooth</span>
         </label>
 
         <label class="viewer-checkbox">
@@ -232,26 +234,13 @@
           <span>Colorbar</span>
         </label>
 
-        <label class="viewer-checkbox">
-          <input type="checkbox" id="crosshairToggle" checked>
-          <span>Crosshair</span>
-        </label>
-
-        <select class="colormap-select" id="colormapSelect">
+        <select class="colormap-select" id="colormapSelect" title="Base-volume colormap">
           <option value="gray">Gray</option>
           <option value="hot">Hot</option>
           <option value="cool">Cool</option>
           <option value="viridis">Viridis</option>
           <option value="plasma">Plasma</option>
         </select>
-
-        <button class="btn btn-sm btn-icon" id="downloadCurrentVolume" title="Download current image as NIfTI" disabled>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </button>
-
-        <button class="btn btn-sm btn-icon" id="screenshotViewer" title="Save screenshot as PNG">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-        </button>
       </div>
     </div>
 
@@ -416,12 +405,6 @@
     </div>
   </div>
 </div>
-
-<script>
-function toggleSection(section) {
-  section.classList.toggle('collapsed');
-}
-</script>
 
 <script src="coi-serviceworker.js"></script>
 <script src="js/lnm-app.js" type="module"></script>
