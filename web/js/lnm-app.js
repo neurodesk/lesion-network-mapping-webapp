@@ -686,8 +686,26 @@ export class LesionNetworkMappingApp {
       return;
     }
     this.updateOutput('Loading Yeo7 group-FC pack...');
+    // Phase 37: surface download progress for the heavy FC pack
+    // (~30 MB cold; cache hit is instant). The callback is throttled
+    // to one progress message per ~512 KB to avoid spamming the
+    // console + status bar.
+    let lastTick = 0;
     const { arrayBuffer, index, manifestEntry } =
-      await loadConnectomeFromManifest('yeo7-fc-pack');
+      await loadConnectomeFromManifest('yeo7-fc-pack', {
+        onProgress: ({ received, total, label }) => {
+          if (received - lastTick < 512 * 1024 && received !== total) return;
+          lastTick = received;
+          const mb = (received / 1048576).toFixed(1);
+          if (total) {
+            const totalMb = (total / 1048576).toFixed(0);
+            const pct = Math.round((received / total) * 100);
+            this.handleWorkerProgress(pct / 100, `Downloading ${label} (${mb}/${totalMb} MB)`);
+          } else {
+            this.updateOutput(`Downloading ${label}: ${mb} MB`);
+          }
+        }
+      });
     const pack = decodeFcPack(arrayBuffer, index);
 
     const NETWORK_ORDER = [
@@ -870,11 +888,28 @@ export class LesionNetworkMappingApp {
   // MNI160 1mm grid with the centroid placed at MNI voxel (80, 80, 96).
   // The lesion seg + lesion file are cleared because they were
   // computed in the old space; user re-runs them on the aligned grid.
-  async prealignToMni160() {
+  async prealignToMni160({ skipIfAligned = false } = {}) {
     if (!this.structuralFile) {
       this.updateOutput('Drop a structural T1 first.');
       return;
     }
+
+    // Phase 34: idempotent fast-path. If the structural is already at
+    // exactly the SynthMorph-required pose (160x160x192 1mm) and 1mm
+    // isotropic, prealign has nothing to do — used by runFullPipeline's
+    // auto chain so users with already-aligned T1s don't pay the
+    // cost. Probe via a header decode (cheap relative to a resample).
+    if (skipIfAligned) {
+      const probeBuf = await this.structuralFile.arrayBuffer();
+      const probe = await decodeNiftiBuffer(probeBuf);
+      const isAligned =
+        probe.dims[0] === 160 && probe.dims[1] === 160 && probe.dims[2] === 192;
+      if (isAligned) {
+        this.updateOutput('Structural already at 160x160x192, skipping prealign.');
+        return;
+      }
+    }
+
     if (!this.brainmaskFile) {
       this.updateOutput('Running brain extraction (prealign needs the brain mask)...');
       await this.runBrainExtraction();
@@ -1120,6 +1155,11 @@ export class LesionNetworkMappingApp {
           return;
         }
         return this.runBrainExtraction();
+      case 'prealign':
+        // Phase 34: idempotent prealign. Skip if the structural is
+        // already at the SynthMorph-required pose (160x160x192 1mm).
+        // prealignToMni160() handles the dim probe + early return.
+        return this.prealignToMni160({ skipIfAligned: true });
       case 'inference-pipeline':
         if (this.lesionMaskFile) {
           this.updateOutput('Lesion mask already present, skipping segmentation.');

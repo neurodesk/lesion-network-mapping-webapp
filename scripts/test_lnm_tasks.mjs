@@ -130,4 +130,18 @@ assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-auto')), true,
 assert.equal(isPipelineRunnable(getPipelineById('lnm-default')), false,
   'lnm-default is a Schaefer400/GSP1000 placeholder; must stay hidden');
 
+// Phase 34: lnm-yeo-auto must include the prealign stage between
+// brain-extraction and lesion segmentation so the auto chain swallows
+// arbitrary clinical T1s.
+const auto = getPipelineById('lnm-yeo-auto');
+const stageModules = auto.stages.map(s => s.module);
+assert.ok(stageModules.includes('prealign'),
+  `lnm-yeo-auto must include a 'prealign' stage; got [${stageModules.join(', ')}]`);
+const idxBrain = stageModules.indexOf('brain-extraction');
+const idxPrealign = stageModules.indexOf('prealign');
+const idxSegment = stageModules.indexOf('inference-pipeline');
+assert.ok(idxBrain < idxPrealign && idxPrealign < idxSegment,
+  `lnm-yeo-auto stage order must be brain-extraction -> prealign -> inference-pipeline; ` +
+  `got brain=${idxBrain}, prealign=${idxPrealign}, segment=${idxSegment}`);
+
 console.log(`LNM tasks OK: ${LNM_PIPELINES.length} pipeline(s); Yeo overlap + lnm-segment-only runnable.`);

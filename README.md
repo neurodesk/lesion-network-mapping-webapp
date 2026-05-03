@@ -72,6 +72,46 @@ ANTs `antsRegistrationSyNQuick`), deformable registration on raw
 clinical T1 may not converge well. Inputs must be exactly 160×160×192
 at 1mm; the orchestrator surfaces a clear error otherwise.
 
+**Phases 34 + 36 + 37 (v0.16.0)** — auto-prealign + PCA orientation fix + download progress.
+
+- **Phase 34: auto-prealign in `runFullPipeline`** — clinical T1
+  workflow now requires *one click*, not three. The `lnm-yeo-auto`
+  pipeline gains a `prealign` stage between `brain-extraction` and
+  `inference-pipeline`. `prealignToMni160({ skipIfAligned: true })` is
+  idempotent: probes the structural's dims and no-ops when already at
+  160×160×192. New `prealign` module added to `IMPLEMENTED_MODULES`
+  and `_runStage`'s case dispatch.
+
+- **Phase 36: PCA 180° fix via NIfTI affine prior** — the Phase 33
+  audit flagged that PCA on a brain mask gives the principal axes up
+  to sign, so a clinical T1 acquired upside-down would silently
+  prealign to a mirror-image brain. Resolution: trust the source NIfTI
+  affine. After PCA, project each column from source-voxel to
+  source-world space, pick column signs that make `R_world`'s diagonal
+  positive (PCA axes align with world axes the source declares). When
+  re-enforcing det = +1, flip the *most ambiguously-oriented* column
+  (smallest `|R_world[k][k]|`) instead of always column 2 — which is
+  what the previous implementation did and undid the sign correction.
+  `test:prealign-pca-orientation` flipped from documented-limitation to
+  hard assertion.
+
+- **Phase 37: download progress for FC pack fetch** — the FC pack
+  (~30 MB cold) used to download silently from Hugging Face during
+  network-map runs. Now `loadConnectomeFromManifest` accepts an
+  `onProgress` callback that the orchestrator wires into the existing
+  status-bar progress. `fetchCacheFirst` opts into a streaming-tee
+  path when a callback is supplied (cache hits skip the streaming).
+  Exception in `onProgress` is swallowed — best-effort. Worker model
+  fetches already had progress (Phase 19); this closes the atlas-side
+  gap. Two new test cases added to `test:atlas-loader-cache`.
+
+  *Honest correction*: the original Phase 37 plan claimed lazy-loading
+  ORT WASM would drop first-page-load from 38 MB to 3 MB. On further
+  inspection this was already the case — the worker (and therefore
+  ORT) is created lazily; the 35 MB WASM only downloads on first
+  inference. Pivoted Phase 37 to download-progress UX, which is the
+  actual user-facing gap.
+
 **Phase 33 (v0.15.1)** — test-suite audit + tightening.
 
 Audit found three loose thresholds and four uncovered modules. Fixed:

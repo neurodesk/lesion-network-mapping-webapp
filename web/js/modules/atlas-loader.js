@@ -98,7 +98,11 @@ async function fetchAtlasBuffer(manifestEntry) {
 // Phase 4: load a connectome pack (.bin + companion index.json) via the
 // same Cache Storage path the atlas-loader uses for atlases. Returns the
 // raw ArrayBuffer for the .bin plus the parsed index.
-export async function loadConnectomeFromManifest(connectomeAssetId, { manifest } = {}) {
+//
+// Phase 37: optional `onProgress` callback fires during the .bin
+// streaming download (the .bin is the heavy fetch — ~30 MB for the
+// Yeo7 FC pack). Cache hits skip the callback.
+export async function loadConnectomeFromManifest(connectomeAssetId, { manifest, onProgress } = {}) {
   const assetManifest = manifest || await loadManifest();
   const manifestEntry = assetManifest.connectomeAssets?.find(
     a => a.id === connectomeAssetId
@@ -118,7 +122,8 @@ export async function loadConnectomeFromManifest(connectomeAssetId, { manifest }
   const arrayBuffer = await fetchCacheFirst(
     manifestEntry.sourceUrl,
     manifestEntry.cacheKey,
-    cache
+    cache,
+    { onProgress, label: connectomeAssetId }
   );
 
   // The companion index.json is small (~hundreds of bytes); fetch fresh
@@ -145,7 +150,14 @@ export async function loadConnectomeFromManifest(connectomeAssetId, { manifest }
 //
 // Exported for unit testing (Phase 33 audit) — production callers go
 // through fetchAtlasBuffer / loadConnectomeFromManifest.
-export async function fetchCacheFirst(url, cacheKey, cache) {
+//
+// Phase 37: optional onProgress({ received, total, label }) callback fires
+// during streaming download. The atlases (Yeo7 ~70 KB) are too small to
+// matter, but the FC pack (~30 MB) is worth surfacing — silently
+// stalling for 10-30 s on a slow link without progress is a user-
+// experience cliff. Cache hits skip the callback (instant).
+export async function fetchCacheFirst(url, cacheKey, cache, options = {}) {
+  const { onProgress, label } = options;
   const cacheUrl = cacheKey ? `${url}#${encodeURIComponent(cacheKey)}` : url;
   if (cache) {
     const hit = await cache.match(cacheUrl);
@@ -153,6 +165,42 @@ export async function fetchCacheFirst(url, cacheKey, cache) {
   }
   const response = await fetch(url);
   if (!response.ok) throw new Error(`fetch ${url} -> HTTP ${response.status}`);
+
+  // Stream-read for progress reporting if a callback is provided AND
+  // the response body is a streamable ReadableStream (it is in browsers
+  // and modern Node fetch). Fall back to the simple arrayBuffer path
+  // when no callback or no streaming.
+  let buf;
+  if (onProgress && response.body && typeof response.body.tee === 'function') {
+    const [progressStream, cacheStream] = response.body.tee();
+    const total = parseInt(response.headers.get('content-length'), 10) || 0;
+    const reader = progressStream.getReader();
+    const chunks = [];
+    let received = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      try { onProgress({ received, total, label: label || cacheKey || url }); }
+      catch (e) { /* progress is best-effort */ }
+    }
+    buf = new Uint8Array(received);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.length; }
+    if (cache) {
+      try {
+        const cachedResponse = new Response(cacheStream, {
+          headers: response.headers,
+          status: response.status,
+          statusText: response.statusText
+        });
+        await cache.put(cacheUrl, cachedResponse);
+      } catch (e) { /* non-fatal */ }
+    }
+    return buf.buffer;
+  }
+
   if (cache) {
     try {
       await cache.put(cacheUrl, response.clone());

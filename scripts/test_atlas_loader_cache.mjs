@@ -157,4 +157,79 @@ function restoreFetch() { globalThis.fetch = ORIG_FETCH; }
   } finally { restoreFetch(); }
 }
 
-console.log('atlas-loader cache OK: URL fragment fix locked + 5 round-trip / failure cases.');
+// ---- Test 7: Phase 37 — onProgress callback fires during streaming download ----
+// fetchCacheFirst opts into the streaming-tee path when an onProgress
+// callback is provided AND the response body is a ReadableStream. Stub
+// a streaming response with two chunks to verify both progress updates
+// land + the final buffer is correctly assembled.
+{
+  const chunks = [
+    new Uint8Array([1, 2, 3, 4]),
+    new Uint8Array([5, 6, 7, 8, 9])
+  ];
+  const totalBytes = 9;
+  const url = 'https://example.com/streamed.bin';
+  globalThis.fetch = async () => {
+    let i = 0;
+    const stream = new ReadableStream({
+      pull(controller) {
+        if (i < chunks.length) controller.enqueue(chunks[i++]);
+        else controller.close();
+      }
+    });
+    return {
+      ok: true,
+      status: 200, statusText: 'OK',
+      headers: { get: (k) => k.toLowerCase() === 'content-length' ? String(totalBytes) : null },
+      body: stream
+    };
+  };
+  const cache = makeFakeCache();
+  const events = [];
+  try {
+    const buf = await fetchCacheFirst(url, 'streamed-key', cache, {
+      onProgress: (e) => events.push({ ...e })
+    });
+    const u8 = new Uint8Array(buf);
+    assert.deepEqual(Array.from(u8), [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      'streamed chunks must concatenate in order');
+    assert.equal(events.length, 2, 'exactly one progress event per chunk');
+    assert.equal(events[0].received, 4);
+    assert.equal(events[0].total, 9);
+    assert.equal(events[0].label, 'streamed-key');
+    assert.equal(events[1].received, 9);
+    assert.equal(events[1].total, 9);
+    // Cache must be populated with the streamed bytes too.
+    assert.ok(cache.calls.put.length === 1,
+      `cache should be populated once; got ${cache.calls.put.length} put calls`);
+  } finally { restoreFetch(); }
+}
+
+// ---- Test 8: onProgress callback exception is swallowed (best-effort) ----
+{
+  const chunks = [new Uint8Array([1, 2, 3])];
+  globalThis.fetch = async () => {
+    let i = 0;
+    const stream = new ReadableStream({
+      pull(controller) {
+        if (i < chunks.length) controller.enqueue(chunks[i++]);
+        else controller.close();
+      }
+    });
+    return {
+      ok: true,
+      status: 200, statusText: 'OK',
+      headers: { get: () => '3' },
+      body: stream
+    };
+  };
+  try {
+    const buf = await fetchCacheFirst('https://example.com/err.bin', 'k', null, {
+      onProgress: () => { throw new Error('synthetic onProgress failure'); }
+    });
+    assert.equal(buf.byteLength, 3,
+      'fetchCacheFirst must complete even when onProgress throws');
+  } finally { restoreFetch(); }
+}
+
+console.log('atlas-loader cache OK: URL fragment fix + streaming progress + 6 round-trip / failure cases.');

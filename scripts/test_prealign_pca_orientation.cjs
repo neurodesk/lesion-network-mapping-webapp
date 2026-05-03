@@ -40,48 +40,47 @@ const { pathToFileURL } = require('node:url');
   ));
 
   // 16x8x8 phantom with clear z-asymmetry: a 14×6×3 slab at the bottom
-  // (z=1..3) and a 4×4×3 cube on top (z=4..6). Heavy mass is at -z;
-  // light bump at +z. Source affine = identity.
-  function makePhantom({ flip = false } = {}) {
+  // (z=1..3) and a 4×4×3 cube on top (z=4..6). Phase 36's PCA fix uses
+  // the source NIfTI affine as the orientation prior, so the test
+  // models clinical reality: an upside-down acquisition has a flipped
+  // affine (voxel z+ = world z-) and identical anatomical mass
+  // distribution in WORLD space. Both phantoms must produce the same
+  // prealigned output.
+  function makePhantom({ flipZ = false } = {}) {
     const dims = [16, 8, 8];
     const mask = new Uint8Array(16 * 8 * 8);
     function set(x, y, z) {
-      const Z = flip ? (7 - z) : z;
+      const Z = flipZ ? (7 - z) : z;
       mask[x + y * 16 + Z * 16 * 8] = 1;
     }
-    // Base slab z=1..3, x=1..14, y=1..6
+    // Base slab z=1..3 (anatomical "bottom" — head's foramen-magnum side)
     for (let z = 1; z <= 3; z++)
       for (let y = 1; y <= 6; y++)
         for (let x = 1; x <= 14; x++) set(x, y, z);
-    // Bump cube z=4..6, x=6..9, y=2..5
+    // Bump cube z=4..6 (anatomical "top" — vertex side)
     for (let z = 4; z <= 6; z++)
       for (let y = 2; y <= 5; y++)
         for (let x = 6; x <= 9; x++) set(x, y, z);
-    return { mask, dims };
+    // Phase 36: when the voxel grid stores the brain upside-down, the
+    // source NIfTI affine encodes the flip on z (voxel z+ -> world z-).
+    // The world-space anatomical layout is therefore identical for both
+    // phantoms — only the storage convention differs.
+    const srcAffine = flipZ
+      ? [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 7], [0, 0, 0, 1]]
+      : [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0,  1, 0], [0, 0, 0, 1]];
+    return { mask, dims, srcAffine };
   }
 
-  const srcAffine = [
-    [1, 0, 0, 0],
-    [0, 1, 0, 0],
-    [0, 0, 1, 0],
-    [0, 0, 0, 1]
-  ];
-
   function alignAndSkew(phantom) {
-    const r = principalAxisAlign(phantom.mask, phantom.dims, srcAffine);
-    // Use a small destination grid (32×32×32) with a 1mm affine centred
-    // on (16, 16, 16) so the phantom centroid maps to the destination
-    // centre AND the resampled output occupies a meaningful fraction
-    // of the volume.
+    // Use a small destination grid (32×32×32) so the resampled output
+    // occupies a meaningful fraction of the volume.
     const dstDims = [32, 32, 32];
-    const dstAffine = r.dstAffine;
-    // Re-tune mniCenterVox by re-running with the smaller dst grid.
-    const r2 = principalAxisAlign(phantom.mask, phantom.dims, srcAffine, {
+    const r = principalAxisAlign(phantom.mask, phantom.dims, phantom.srcAffine, {
       mniDims: dstDims, mniCenterVox: [16, 16, 16]
     });
     const aligned = resampleAffine(
-      phantom.mask, phantom.dims, srcAffine,
-      dstDims, r2.dstAffine, 'nearest'
+      phantom.mask, phantom.dims, phantom.srcAffine,
+      dstDims, r.dstAffine, 'nearest'
     );
 
     // Voxel count + per-axis third central moment around the centroid.
@@ -111,7 +110,7 @@ const { pathToFileURL } = require('node:url');
   }
 
   const upright = alignAndSkew(makePhantom());
-  const flipped = alignAndSkew(makePhantom({ flip: true }));
+  const flipped = alignAndSkew(makePhantom({ flipZ: true }));
 
   console.log(
     `Upright phantom: n=${upright.n}, centroid=(${upright.cx.toFixed(1)},${upright.cy.toFixed(1)},${upright.cz.toFixed(1)}), ` +
@@ -147,28 +146,21 @@ const { pathToFileURL } = require('node:url');
   assert.ok(magDiff < 0.2 * Math.max(Math.abs(upSkew), Math.abs(flSkew), 1),
     `principal-skew magnitudes must match within 20%; got ${upSkew} vs ${flSkew}`);
 
-  // The orientation question: do BOTH skews have the same sign?
-  // - Same sign     → PCA prealign disambiguates orientation correctly.
-  // - Opposite sign → silent 180° flip (the documented audit gap).
+  // Phase 36: HARD ASSERTION. Both poses must produce the same-sign
+  // principal-axis skew because they are anatomically the same brain
+  // — only the storage convention (NIfTI affine) differs. The Phase 36
+  // fix uses the source affine as an orientation prior, which is
+  // exactly the disambiguation needed here.
   const sameSign = Math.sign(upSkew) === Math.sign(flSkew);
-  if (sameSign) {
-    console.log('prealign-pca orientation OK: both poses produce the same-sign principal-axis skew (no silent flip).');
-  } else {
-    // Document the gap. This is NOT a hard failure today — just a
-    // visible signal so a future fix can flip it to a passing assert.
-    console.log(
-      `KNOWN LIMITATION (Phase 33 audit): PCA prealign produces opposite-sign ` +
-      `orientation for upright vs flipped acquisitions of the same anatomy. ` +
-      `Add a 3rd-moment sign-correction step to principalAxisAlign to resolve. ` +
-      `See tests/fixtures/lnm-auto-mini for the real-data fixture this would ` +
-      `affect on a clinical T1.`
-    );
-  }
-  // Hard assertion: regardless of which way it goes, the magnitudes
-  // matching ensures we ARE detecting the same anatomy. The orientation-
-  // sign assertion is intentionally soft for now — flip to hard once
-  // the sign-correction lands.
-  assert.ok(true, 'orientation gap documented; magnitude check is the load-bearing assertion');
+  assert.ok(
+    sameSign,
+    `Phase 36 regression: upside-down acquisition produces a mirror-image ` +
+    `prealigned brain. Upright skew=${upSkew.toFixed(2)}, ` +
+    `flipped skew=${flSkew.toFixed(2)}. The source NIfTI affine encodes ` +
+    `the flip; principalAxisAlign must use it to pick consistent column ` +
+    `signs for R.`
+  );
+  console.log('prealign-pca orientation OK: source-affine prior correctly resolves 180° ambiguity.');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

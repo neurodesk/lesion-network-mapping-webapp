@@ -84,20 +84,28 @@ export const LNM_PIPELINES = [
   },
   {
     id: 'lnm-yeo-auto',
-    displayName: 'Auto Yeo overlap (T1 -> SynthStrip -> seg -> MNI -> Yeo)',
+    displayName: 'Auto Yeo overlap (T1 -> SynthStrip -> prealign -> seg -> MNI -> Yeo)',
     description:
-      'End-to-end automatic flow: drop a structural T1 (already at 160x160x192 1mm; ' +
-      'pre-process with FSL FLIRT to MNI152 + center-crop if needed), get brain ' +
-      'extraction + lesion segmentation in native space, then SynthMorph deformable ' +
-      'registration warps the lesion mask onto MNI152NLin2009cAsym, after which the ' +
-      'Yeo 7-network overlap runs on the warped mask. *Experimental*: requires ' +
-      'pre-aligned input; deformable registration without affine pre-alignment may ' +
-      'not converge well.',
+      'End-to-end automatic flow: drop ANY structural T1, get brain extraction + ' +
+      'in-browser PCA prealign to MNI160 1mm + lesion segmentation, then SynthMorph ' +
+      'deformable registration onto MNI152NLin2009cAsym, then Yeo 7-network overlap + ' +
+      'group-FC weighted-sum + threshold. The prealign stage is no-op when the input ' +
+      'is already 160x160x192 1mm.',
     stages: [
       {
         id: 'brainmask',
         module: 'brain-extraction',
         modelAssetId: 'lnm-synthstrip',
+        required: true
+      },
+      {
+        // Phase 34: prealign T1 (+ brainmask) to MNI160 1mm via centroid +
+        // PCA. Lets the auto chain swallow arbitrary clinical T1s instead
+        // of requiring an upstream FSL FLIRT step. No-op if input is
+        // already at the SynthMorph-required pose.
+        id: 'prealign',
+        module: 'prealign',
+        atlasAssetId: 'lnm-mni160',
         required: true
       },
       {
@@ -203,7 +211,10 @@ const IMPLEMENTED_MODULES = new Set([
   'fc-weighted-sum',
   // Phase 5: applyThreshold in web/js/modules/threshold.js, driven by
   // the orchestrator's applyNetworkThreshold().
-  'threshold'
+  'threshold',
+  // Phase 16: in-browser PCA prealign to MNI160 1mm in
+  // web/js/modules/prealign.js, driven by orchestrator.prealignToMni160().
+  'prealign'
 ]);
 
 export function getPipelineById(id) {

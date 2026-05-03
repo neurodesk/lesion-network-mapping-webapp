@@ -236,26 +236,66 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
     [sortedVecs[0][1], sortedVecs[1][1], sortedVecs[2][1]],
     [sortedVecs[0][2], sortedVecs[1][2], sortedVecs[2][2]]
   ];
-  // Force right-handed: det(R) must be +1, not -1 (mirror).
-  // KNOWN LIMITATION (Phase 33 audit): a 3rd-moment sign correction
-  // would resolve the 180° ambiguity (heavy half lands on a canonical
-  // MNI side regardless of acquisition pose), but a naive flip-then-
-  // re-det interacts badly: flipping a column for sign correction can
-  // break right-handedness, and the det-fix below undoes it. Proper
-  // resolution needs to either (a) accept det(R) = -1 (consistent
-  // with MNI's left-handed FSL convention) and audit downstream
-  // consumers, or (b) bake an A/P/L/R anatomical prior into the
-  // algorithm. Documented as expected-fail in
-  // scripts/test_prealign_pca_orientation.cjs.
+
+  // Phase 36: PCA 180° fix via NIfTI affine prior. PCA covariance is a
+  // 2nd-moment statistic — invariant to 180° rotations around any
+  // principal axis — so without disambiguation a flipped acquisition
+  // produces a mirror-image prealigned brain.
+  //
+  // Fix: trust the source NIfTI affine. Map each PCA column from
+  // source voxel space to source world space (R_world = src_affine_3x3
+  // * R) and pick column signs that make R_world's diagonal positive.
+  // That choice keeps each PCA axis pointing in the same world
+  // direction the source's own affine declares — so anatomically-
+  // upright source T1s land upright in MNI, and an upside-down
+  // acquisition (where the source NIfTI affine itself encodes the
+  // flip) gets corrected back to canonical.
+  //
+  // After signing, det(R) may flip. Re-enforce right-handedness by
+  // flipping the column with the SMALLEST |R_world[k][k]| (the most
+  // ambiguously-oriented PCA axis) instead of always column 2 — which
+  // is what the previous implementation did and undid one of the sign
+  // corrections.
+  const srcA3 = [
+    [srcAffine[0][0], srcAffine[0][1], srcAffine[0][2]],
+    [srcAffine[1][0], srcAffine[1][1], srcAffine[1][2]],
+    [srcAffine[2][0], srcAffine[2][1], srcAffine[2][2]]
+  ];
+  // R_world[r][c] = sum_k srcA3[r][k] * R[k][c].
+  // We only need the diagonal R_world[c][c] for the sign decision.
+  function worldDiag(R3) {
+    return [0, 1, 2].map(c =>
+      srcA3[c][0] * R3[0][c] +
+      srcA3[c][1] * R3[1][c] +
+      srcA3[c][2] * R3[2][c]
+    );
+  }
+  let worldD = worldDiag(R);
+  for (let k = 0; k < 3; k++) {
+    if (worldD[k] < 0) {
+      R[0][k] = -R[0][k];
+      R[1][k] = -R[1][k];
+      R[2][k] = -R[2][k];
+    }
+  }
+  // Re-enforce det(R) = +1 by flipping the most-ambiguous column if
+  // an odd number of sign flips above made it -1.
+  worldD = worldDiag(R);
   const det =
     R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) -
     R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +
     R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]);
   if (det < 0) {
-    // Flip the third column to make a right-handed system.
-    R[0][2] = -R[0][2];
-    R[1][2] = -R[1][2];
-    R[2][2] = -R[2][2];
+    // Find the column with the smallest |worldD[k]| — that PCA axis
+    // is the most ambiguously oriented in world space, so flipping it
+    // costs the least anatomically.
+    let flipIdx = 0, minMag = Math.abs(worldD[0]);
+    for (let k = 1; k < 3; k++) {
+      if (Math.abs(worldD[k]) < minMag) { minMag = Math.abs(worldD[k]); flipIdx = k; }
+    }
+    R[0][flipIdx] = -R[0][flipIdx];
+    R[1][flipIdx] = -R[1][flipIdx];
+    R[2][flipIdx] = -R[2][flipIdx];
   }
 
   // Build the source-voxel-to-source-voxel transform M such that for a

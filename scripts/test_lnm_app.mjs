@@ -195,10 +195,11 @@ assert.match(src, /\[perf\]/,
 assert.match(src, /performance\.now/,
   '_now must call performance.now() when available');
 
-// Phase 15: _runStage must dispatch on stage.module and cover every
-// implemented module. Source-grep that each module's case-clause exists
-// (a typo or missing branch would silently fall through to the throw).
-for (const m of ['brain-extraction', 'inference-pipeline', 'registration',
+// Phase 15 + Phase 34: _runStage must dispatch on stage.module and cover
+// every implemented module, including the Phase 34 'prealign' module.
+// Source-grep each module's case-clause (a typo or missing branch
+// would silently fall through to the throw).
+for (const m of ['brain-extraction', 'prealign', 'inference-pipeline', 'registration',
                  'parcel-overlap', 'fc-weighted-sum', 'threshold']) {
   const re = new RegExp(`case\\s+['"]${m}['"]`);
   assert.match(src, re, `_runStage must handle module '${m}'`);
