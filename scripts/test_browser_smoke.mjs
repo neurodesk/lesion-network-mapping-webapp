@@ -790,10 +790,10 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
 
         const FULL_TIMEOUT = 480000;
         // After SynthStrip + SynthStroke complete, give SynthMorph 3 min
-        // to either produce the warped lesion or error. With a working
-        // WebGPU EP it's well under 30 s; with the WASM EP it usually
-        // OOMs in the same window. If neither happens, the WASM heap
-        // is still grinding — accept as degraded and move on.
+        // to either produce the warped lesion or error. The current
+        // SynthMorph graph is WASM-routed because WebGPU rejects its
+        // NHWC 3D MaxPool nodes; in headless Chromium, that path can
+        // stall before the bridge emits the MNI lesion.
         const REGISTER_STALL_LIMIT = 180000;
         const startedAt = Date.now();
         let done = false;
@@ -831,12 +831,11 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
           await sleep(1000);
         }
 
-        // Branch: WebGPU available + chain finished -> full assertion.
-        // Otherwise (no WebGPU, register OOMed in WASM) -> degraded
-        // assertion: brain extraction + segmentation completed and the
-        // register stage was at least attempted. SynthMorph correctness
-        // is tested by test:registration-parity in Node where ORT-Node
-        // doesn't have the 4 GB WASM heap limit.
+        // Branch: chain finished -> full assertion. Otherwise, use the
+        // degraded assertion: brain extraction + segmentation completed
+        // and the register stage was at least attempted. SynthMorph
+        // correctness is tested by test:registration-parity in Node
+        // where ORT-Node doesn't have the browser WASM heap limit.
         if (done) {
           const threshSummary = await page.$eval(
             '#networkThresholdSummary',
@@ -853,19 +852,18 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
           assert.ok(threshEnabled, '#downloadThresholdedNetworkMapButton must be enabled.');
           t.diagnostic(`Auto-branch full pipeline OK. Summary: "${threshSummary}".`);
         } else if (registerErrored || registerStalled) {
-          // Headless Chromium fell back to WASM and SynthMorph either
-          // OOMed or hung. That's a known environment limitation, not
-          // a wiring bug. Verify the chain DID get through SynthStrip
-          // + SynthStroke + register-attempted; the Node parity tests
-          // cover SynthMorph forward correctness without the WASM
-          // heap limit.
+          // Headless Chromium's WASM route either OOMed or hung. That's
+          // a known environment limitation, not a wiring bug. Verify the
+          // chain DID get through SynthStrip + SynthStroke + register-
+          // attempted; the Node parity tests cover SynthMorph forward
+          // correctness without the browser WASM heap limit.
           assert.ok(registerAttemptedAt > 0,
             'register stage must at least be attempted (brain + seg complete)');
           const reason = registerErrored ? 'WASM-OOMed' : 'WASM-stalled';
           t.diagnostic(
             `Auto-branch degraded: WebGPU=${webgpuAvailable}, ` +
             `SynthStrip+SynthStroke ran, SynthMorph ${reason} as expected. ` +
-            `Run with a real WebGPU device for full coverage.`
+            `Run registration directly or with a longer browser budget for full coverage.`
           );
         } else {
           throw new Error(

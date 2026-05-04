@@ -78,6 +78,8 @@ assert.ok(Array.isArray(synmorph.inputShape) && synmorph.inputShape.length === 5
   'lnm-synthmorph-mni must declare a 5D inputShape (1, X, Y, Z, 1)');
 assert.ok(Array.isArray(synmorph.svfShape) && synmorph.svfShape.length === 5,
   'lnm-synthmorph-mni must declare a 5D svfShape (1, X/2, Y/2, Z/2, 3)');
+assert.deepEqual(synmorph.browserRuntime?.executionProviders, ['wasm'],
+  'lnm-synthmorph-mni must declare the WASM execution provider for its 3D MaxPool graph');
 
 // Phase 4: Yeo7 group-FC pack (7 brain-wide t-maps stacked into one
 // Float32 .bin). Lives under connectomeAssets so it gets the same

@@ -33,6 +33,11 @@ assert.ok(Array.isArray(runtime.svfDims) && runtime.svfDims.length === 3,
   'browserRuntime.svfDims must be [X/2,Y/2,Z/2]');
 assert.deepEqual(runtime.svfDims, runtime.inputDims.map(v => v / 2),
   'browserRuntime.svfDims must be exactly half of inputDims');
+assert.deepEqual(runtime.executionProviders, ['wasm'],
+  'current SynthMorph graph must be routed through WASM because WebGPU cannot run NHWC 3D MaxPool');
+assert.ok(Array.isArray(runtime.webgpuUnsupportedOps) &&
+    runtime.webgpuUnsupportedOps.includes('MaxPool3D'),
+  'browserRuntime must document the WebGPU-blocking MaxPool3D operator');
 
 assert.deepEqual(synthmorph.inputShape, [1, ...runtime.inputDims, 1],
   'manifest inputShape must match browserRuntime.inputDims');

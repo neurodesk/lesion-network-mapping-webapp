@@ -1307,6 +1307,7 @@ async function stepRegister(params = {}) {
     modelLocalUrl,
     modelInputDims = [160, 160, 192],
     svfDims = null,
+    executionProviders = ['wasm'],
     nbSteps = 7
   } = params;
   if (!modelBaseUrl) throw new Error('run-register requires modelBaseUrl');
@@ -1353,41 +1354,19 @@ async function stepRegister(params = {}) {
     `${modelBaseUrl}/${modelName}`, modelName, 0.20, 0.30, modelLocalUrl
   );
 
-  postProgress(0.55, 'Building SynthMorph session...');
-  // Prefer WebGPU for SynthMorph: the network is pure conv/upsample/concat
-  // (no 3D MaxPool — that was the SynthStrip blocker). 80 MB of weights +
-  // ~1 GB peak intermediate activations on a (160x160x192) pair OOMs the
-  // 4 GB WASM heap in Chromium; WebGPU runs in GPU memory and avoids that.
-  // Fallback to WASM if WebGPU isn't available (browsers / headless modes
-  // without GPU).
-  //
-  // Phase 28: try WebGPU explicitly first, fall back to WASM only on
-  // failure, and log the chosen EP. ORT Web 1.21 doesn't expose the
-  // chosen-EP name on the session object when an EP list is supplied,
-  // so the explicit two-step is the only way to surface the path the
-  // user actually got. The smoke test asserts the log line contains
-  // 'EP=webgpu' to catch a silent fallback to WASM (which OOMs in
-  // production-sized workloads).
-  let session;
-  let chosenEp;
-  try {
-    session = await ort.InferenceSession.create(modelArrayBuffer, {
-      executionProviders: ['webgpu'],
-      graphOptimizationLevel: 'all'
-    });
-    chosenEp = 'webgpu';
-  } catch (err) {
-    postLog(`SynthMorph WebGPU EP unavailable (${err?.message || err}); falling back to WASM.`);
-    session = await ort.InferenceSession.create(modelArrayBuffer, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all'
-    });
-    chosenEp = 'wasm';
+  function normaliseSynthMorphExecutionProviders(value) {
+    const requested = Array.isArray(value) ? value : [];
+    const names = requested
+      .map(ep => typeof ep === 'string' ? ep : ep?.name)
+      .filter(ep => typeof ep === 'string' && ep.length > 0);
+    const order = [];
+    for (const ep of names.length ? names : ['wasm']) {
+      if (!order.includes(ep)) order.push(ep);
+    }
+    if (!order.includes('wasm')) order.push('wasm');
+    return order;
   }
-  postLog(`SynthMorph EP=${chosenEp}`);
-  const inputNames = session.inputNames;
-  const outputName = session.outputNames[0];
-  postLog(`SynthMorph session ready (inputs=${inputNames.join(',')}, output=${outputName})`);
+  const providerOrder = normaliseSynthMorphExecutionProviders(executionProviders);
 
   // The model expects channel-last NDHWC: (1, 160, 160, 192, 1) per input.
   // Our F-order data needs a one-pass repack into row-major NDHWC.
@@ -1439,33 +1418,65 @@ async function stepRegister(params = {}) {
   const sourceNHWC = fOrderToNDHWC(sourceModel, modelDims);
   const targetNHWC = fOrderToNDHWC(targetModel, modelDims);
 
-  postProgress(0.60, 'Running SynthMorph (single-pass, ~30 s)...');
-  const t0 = performance.now();
-  const sourceTensor = new ort.Tensor('float32', sourceNHWC, [1, ...modelDims, 1]);
-  const targetTensor = new ort.Tensor('float32', targetNHWC, [1, ...modelDims, 1]);
+  postProgress(0.55, 'Building SynthMorph session...');
+  postLog(`SynthMorph EP candidates=${providerOrder.join(',')}`);
   let svfFlat;
   let outputDims = svfDims;
-  try {
-    const out = await session.run({
-      [inputNames[0]]: sourceTensor,
-      [inputNames[1]]: targetTensor
-    });
-    const outputTensor = out[outputName];
-    svfFlat = outputTensor.data;
-    if (Array.isArray(outputTensor.dims) && outputTensor.dims.length === 5) {
-      outputDims = outputTensor.dims.slice(1, 4);
+  let chosenEp = null;
+  let forwardSeconds = 0;
+  let lastError = null;
+  for (let i = 0; i < providerOrder.length && !svfFlat; i++) {
+    const ep = providerOrder[i];
+    let session;
+    let sourceTensor;
+    let targetTensor;
+    try {
+      session = await ort.InferenceSession.create(modelArrayBuffer, {
+        executionProviders: [ep],
+        graphOptimizationLevel: 'all'
+      });
+      const inputNames = session.inputNames;
+      const outputName = session.outputNames[0];
+      postLog(`SynthMorph EP candidate=${ep}`);
+      postLog(`SynthMorph session ready (inputs=${inputNames.join(',')}, output=${outputName})`);
+
+      postProgress(0.60, 'Running SynthMorph (single-pass, ~30 s)...');
+      sourceTensor = new ort.Tensor('float32', sourceNHWC, [1, ...modelDims, 1]);
+      targetTensor = new ort.Tensor('float32', targetNHWC, [1, ...modelDims, 1]);
+      const t0 = performance.now();
+      const out = await session.run({
+        [inputNames[0]]: sourceTensor,
+        [inputNames[1]]: targetTensor
+      });
+      forwardSeconds = (performance.now() - t0) / 1000;
+      const outputTensor = out[outputName];
+      svfFlat = outputTensor.data;
+      chosenEp = ep;
+      postLog(`SynthMorph EP=${ep}`);
+      if (Array.isArray(outputTensor.dims) && outputTensor.dims.length === 5) {
+        outputDims = outputTensor.dims.slice(1, 4);
+      }
+    } catch (err) {
+      lastError = err;
+      const nextEp = providerOrder[i + 1];
+      if (nextEp) {
+        postLog(`SynthMorph EP ${ep} failed (${err?.message || err}); trying ${nextEp}.`);
+      }
+    } finally {
+      sourceTensor?.dispose?.();
+      targetTensor?.dispose?.();
+      session?.release?.();
     }
-  } finally {
-    sourceTensor.dispose?.();
-    targetTensor.dispose?.();
-    session.release?.();
+  }
+  if (!svfFlat) {
+    throw lastError || new Error('SynthMorph failed for all execution providers.');
   }
   if (!Array.isArray(outputDims) || outputDims.length !== 3) {
     outputDims = modelDims.map(v => v / 2);
   }
   const halfDims = outputDims.map(v => Number(v));
   postLog(
-    `SynthMorph forward in ${((performance.now() - t0) / 1000).toFixed(1)}s; ` +
+    `SynthMorph forward in ${forwardSeconds.toFixed(1)}s (${chosenEp}); ` +
     `SVF shape=${halfDims.join('x')}x3`
   );
 

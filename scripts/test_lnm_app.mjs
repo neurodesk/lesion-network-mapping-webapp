@@ -137,6 +137,8 @@ assert.match(src, /['"]lnm-synthmorph-mni['"]/,
   'orchestrator must reference the lnm-synthmorph-mni asset id literal');
 assert.match(src, /['"]lnm-mni160['"]/,
   'orchestrator must reference the lnm-mni160 atlas asset id literal');
+assert.match(src, /executionProviders:\s*model\.browserRuntime\?\.executionProviders/,
+  'orchestrator must pass SynthMorph manifest executionProviders into the worker');
 
 // Phase 4.4: FC weighted-sum wiring. runFcNetworkMap loads the
 // yeo7-fc-pack via loadConnectomeFromManifest, calls fcWeightedSum,

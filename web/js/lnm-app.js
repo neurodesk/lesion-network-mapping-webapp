@@ -905,6 +905,7 @@ export class LesionNetworkMappingApp {
       modelLocalUrl,
       modelInputDims: model.browserRuntime?.inputDims || model.inputShape?.slice(1, 4),
       svfDims: model.browserRuntime?.svfDims || model.svfShape?.slice(1, 4),
+      executionProviders: model.browserRuntime?.executionProviders,
       referenceAssetId: ref.id,
       referenceUrl: ref.sourceUrl,
       referenceCacheKey: ref.cacheKey,

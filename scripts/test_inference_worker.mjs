@@ -196,20 +196,35 @@ assert.match(
   'worker file should mention LNM in the banner / comments'
 );
 
-// ---- (8) Phase 28: SynthMorph EP introspection ----
-// The worker MUST try WebGPU first, fall back to WASM only on failure,
-// and log 'SynthMorph EP=<name>' so the smoke test can read the chosen
-// EP. Catches a regression where a future ORT upgrade silently always
-// picks WASM (which OOMs on the 4 GB heap).
+// ---- (8) Phase 28/31: SynthMorph EP routing ----
+// The current 48x48x64 SynthMorph graph contains 3D MaxPool nodes, which
+// ORT WebGPU cannot run in NHWC layout. The worker must respect the
+// manifest-declared provider order, keep WASM as the fallback provider,
+// and log 'SynthMorph EP=<name>' so the smoke test can read the chosen EP.
 assert.match(
   worker,
-  /executionProviders:\s*\[\s*['"]webgpu['"]\s*\]/,
-  "stepRegister must try executionProviders: ['webgpu'] explicitly first"
+  /executionProviders\s*=\s*\[\s*['"]wasm['"]\s*\]/,
+  "stepRegister must default SynthMorph executionProviders to ['wasm']"
 );
 assert.match(
   worker,
-  /executionProviders:\s*\[\s*['"]wasm['"]\s*\]/,
-  'stepRegister must have a WASM fallback session-create call'
+  /normaliseSynthMorphExecutionProviders/,
+  'stepRegister must normalize manifest-declared SynthMorph execution providers'
+);
+assert.match(
+  worker,
+  /providerOrder\s*=\s*normaliseSynthMorphExecutionProviders\(executionProviders\)/,
+  'stepRegister must build its provider order from the manifest-provided settings'
+);
+assert.match(
+  worker,
+  /for\s*\(\s*let\s+i\s*=\s*0;\s*i\s*<\s*providerOrder\.length\s*&&\s*!svfFlat;/,
+  'stepRegister must retry providers across the whole create + run path'
+);
+assert.match(
+  worker,
+  /executionProviders:\s*\[\s*ep\s*\]/,
+  'stepRegister must create each session from the selected provider candidate'
 );
 assert.match(
   worker,

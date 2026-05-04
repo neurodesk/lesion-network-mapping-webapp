@@ -99,6 +99,8 @@
         "inputDims": [48, 48, 64],
         "svfDims": [24, 24, 32],
         "downsampleSpacingMm": [3.3333333333, 3.3333333333, 3.0],
+        "executionProviders": ["wasm"],
+        "webgpuUnsupportedOps": ["MaxPool3D"],
         "firstConvChannels": 256,
         "maxActivationBytes": 150994944
       },
@@ -108,7 +110,7 @@
         "resample": "mni160-to-browserRuntime.inputDims",
         "padding": "center"
       },
-      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser model reuses the original SynthMorph weights on a 48x48x64 static graph so the largest first-conv activation is 144 MiB instead of ~4.7 GiB. The worker downsamples the MNI160 source/reference pair to 48x48x64, runs ONNX, then performs scaling-and-squaring SVF integration, 24x24x32 -> 160x160x192 displacement upsample, and spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py."
+      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser model reuses the original SynthMorph weights on a 48x48x64 static graph so the largest first-conv activation is 144 MiB instead of ~4.7 GiB. The graph still contains 3D MaxPool nodes, so the worker routes it through WASM because ORT WebGPU does not support NHWC 3D pooling. The worker downsamples the MNI160 source/reference pair to 48x48x64, runs ONNX, then performs scaling-and-squaring SVF integration, 24x24x32 -> 160x160x192 displacement upsample, and spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py."
     }
   ],
   "atlasAssets": [
