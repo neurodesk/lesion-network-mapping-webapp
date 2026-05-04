@@ -450,14 +450,8 @@ export class LesionNetworkMappingApp {
     await this.viewerController.loadBaseVolume(file, { stage: 'structural' });
     this.updateOutput(`Structural image ready: ${file.name}`);
     // Phase 31: auto-promote the pipeline selection. A structural T1
-    // means the user wants the full auto chain.
+    // means the explicit Run analysis action should use the full auto chain.
     this._autoPromotePipeline('lnm-yeo-auto');
-    // Auto-run brain extraction on every structural drop. The button under
-    // #stepLesionSection re-triggers it on demand. Any error is swallowed
-    // into the console; the rest of the manual-mask flow continues to work.
-    this.runBrainExtraction().catch(
-      err => this.updateOutput(`Brain extraction failed: ${err.message}`)
-    );
   }
 
   async setLesion(file) {

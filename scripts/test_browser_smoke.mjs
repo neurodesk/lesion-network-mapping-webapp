@@ -407,11 +407,13 @@ test('Phase 2a.1.5 browser smoke: structural T1 -> SynthStrip -> brain mask down
         );
         await openAllDisclosures(page);
 
-        // Drop the structural T1. setStructural() loads it into NiiVue and
-        // auto-fires runBrainExtraction(), which posts 'load' + 'run-synthstrip'
-        // to the worker. The worker fetches the SynthStrip ONNX from HF on
-        // first run (cached after) and runs the whole-volume WASM pipeline.
+        // Load the structural T1, then explicitly start brain extraction.
+        // Loading only previews the image; the user-owned stage button posts
+        // 'load' + 'run-synthstrip' to the worker. The worker fetches the
+        // SynthStrip ONNX from HF on first run (cached after) and runs the
+        // whole-volume WASM pipeline.
         await page.setInputFiles('#structuralFileInput', STRUCTURAL_PATH);
+        await page.click('#runBrainExtractionButton');
 
         // Wait for SynthStrip completion: brainmaskFile is set by
         // handleStageData('brainmask') in lnm-app.js. Manual poll loop
@@ -515,11 +517,12 @@ test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask d
         );
         await openAllDisclosures(page);
 
-        // Drop the structural; SynthStrip auto-fires. Wait for the brain
-        // mask to land before kicking off lesion seg (the SCT-derived
+        // Load the structural, then explicitly run SynthStrip. Wait for the
+        // brain mask to land before kicking off lesion seg (the SCT-derived
         // worker state is single-tenant: a 'load' op overwrites
         // workerState.rasData, so we must serialise the two stages).
         await page.setInputFiles('#structuralFileInput', STRUCTURAL_PATH);
+        await page.click('#runBrainExtractionButton');
         const SYNTH_TIMEOUT_MS = 180000;
         const synthStart = Date.now();
         let synthDone = false;
@@ -629,25 +632,9 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
 
         // Drop the lnm-mni160 reference as the 'structural'. It is itself a
         // 160x160x192 1mm MNI152 brain — a clean self-pair for the
-        // registration. SynthStrip auto-fires; wait for that, then click
-        // #runRegistrationButton.
+        // registration. Loading does not start processing; click
+        // #runRegistrationButton explicitly.
         await page.setInputFiles('#structuralFileInput', structuralPath);
-        const SYNTH_TIMEOUT_MS = 240000;
-        const synthStart = Date.now();
-        let synthDone = false;
-        while (Date.now() - synthStart < SYNTH_TIMEOUT_MS) {
-          synthDone = await page.evaluate(() => Boolean(window.app && window.app.brainmaskFile));
-          if (synthDone) break;
-          await sleep(500);
-        }
-        if (!synthDone) {
-          throw new Error(
-            `SynthStrip never finished within ${SYNTH_TIMEOUT_MS}ms\n` +
-            `console: ${consoleMessages.slice(-30).join('\n')}`
-          );
-        }
-        t.diagnostic(`SynthStrip elapsed: ${((Date.now() - synthStart) / 1000).toFixed(1)}s`);
-
         await page.click('#runRegistrationButton');
         // The browser SynthMorph graph is spatially retargeted to
         // 48x48x64, so this smoke now requires the registration stage to

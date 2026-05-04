@@ -17,6 +17,8 @@
 //     `try/catch ... return` path).
 //   - Verifies _autoPromotePipeline switches selectedPipeline only
 //     when the user hasn't manually picked.
+//   - Verifies loading a structural image does not start processing;
+//     the user must click Run analysis or an explicit stage button.
 
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -200,7 +202,28 @@ function makeApp() {
   );
 }
 
-// ---- Test 7: version label de-duplicates the staging short SHA ----
+// ---- Test 7: setStructural only loads/selects; it must not run SynthStrip ----
+{
+  const app = makeApp();
+  const loaded = [];
+  let synthStripCalls = 0;
+  app.viewerController = {
+    loadBaseVolume: async (file, opts) => { loaded.push({ file, opts }); }
+  };
+  app.runBrainExtraction = async () => { synthStripCalls += 1; };
+  const file = { name: 'subject-t1.nii.gz' };
+
+  await app.setStructural(file);
+
+  assert.equal(app.structuralFile, file, 'setStructural must store the structural file');
+  assert.equal(loaded.length, 1, 'setStructural must still load the structural into the viewer');
+  assert.equal(app.selectedPipeline?.id, 'lnm-yeo-auto',
+    'setStructural must still select the auto T1 pipeline for the later Run analysis click');
+  assert.equal(synthStripCalls, 0,
+    'setStructural must not call runBrainExtraction; users explicitly start processing');
+}
+
+// ---- Test 8: version label de-duplicates the staging short SHA ----
 {
   assert.equal(
     formatVersionLabel('0.17.1-staging+31ff9d1', {
@@ -222,4 +245,4 @@ function makeApp() {
   );
 }
 
-console.log('lnm-app behavior OK: 7 dispatch + precondition + auto-promote + version-label cases.');
+console.log('lnm-app behavior OK: 8 dispatch + precondition + explicit-start + auto-promote + version-label cases.');

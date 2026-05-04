@@ -45,7 +45,7 @@
   <aside class="app-sidebar">
     <div class="sidebar-scroll">
 
-      <!-- 1. INPUT — drop a structural T1 or a Yeo-aligned lesion mask. -->
+      <!-- 1. INPUT — choose a structural T1 or a Yeo-aligned lesion mask. -->
       <section class="sidebar-section" id="stepLoadSection">
         <h2 class="section-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -53,14 +53,16 @@
         </h2>
         <div class="section-content">
           <div class="param-group">
-            <label class="param-label" for="structuralFileInput">Structural T1 (.nii / .nii.gz)</label>
+            <div class="param-label-row">
+              <label class="param-label" for="structuralFileInput">Structural T1 (.nii / .nii.gz)</label>
+              <button type="button" class="help-icon" aria-label="Structural T1 help">i
+                <span class="help-popover" role="tooltip">
+                  Choose a structural T1. Loading the image only displays it; processing starts when you click Run analysis.
+                </span>
+              </button>
+            </div>
             <input type="file" id="structuralFileInput" accept=".nii,.gz">
           </div>
-          <p class="param-help" style="margin:8px 0 0 0">
-            Drop a raw T1 — any orientation, any voxel size. The auto chain
-            handles brain extraction, MNI prealign, lesion segmentation,
-            registration, and the Yeo7 network map.
-          </p>
         </div>
       </section>
 
@@ -70,35 +72,42 @@
         <h2 class="section-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           2. Run analysis
+          <button type="button" class="help-icon" aria-label="Run analysis help">i
+            <span class="help-popover" role="tooltip">
+              Runs the selected chain: brain extraction, prealign when needed, lesion segmentation, registration, Yeo overlap, FC map, and thresholding.
+            </span>
+          </button>
         </h2>
         <div class="section-content">
           <div class="step-buttons">
-            <button class="btn btn-primary" id="runFullPipelineButton" style="width:100%;font-size:14px;padding:10px">
+            <button class="btn btn-primary" id="runFullPipelineButton">
               Run analysis
             </button>
           </div>
-          <p class="param-help" style="margin:8px 0 0 0">
-            Auto-detects the right chain from your input — drop a raw T1
-            and click. Pre-aligned data is detected and the prealign step
-            is skipped automatically.
-          </p>
 
-          <details id="advancedStageControls" style="margin-top:12px">
-            <summary style="cursor:pointer;font-size:12px;color:var(--muted,#888);text-transform:uppercase">
-              Advanced — per-stage controls
-            </summary>
-            <div style="margin-top:10px">
+          <details id="advancedStageControls" class="compact-disclosure">
+            <summary>Advanced controls</summary>
+            <div class="disclosure-content">
               <div class="param-group">
-                <label class="param-label" for="lesionFileInput">Researcher mode: pre-computed lesion mask (Yeo 2 mm grid)</label>
+                <div class="param-label-row">
+                  <label class="param-label" for="lesionFileInput">Researcher mode: lesion mask</label>
+                  <button type="button" class="help-icon" aria-label="Researcher mode help">i
+                    <span class="help-popover" role="tooltip">
+                      Use a pre-computed binary lesion mask already on the 99x117x95 Yeo 2 mm grid to skip segmentation and registration.
+                    </span>
+                  </button>
+                </div>
                 <input type="file" id="lesionFileInput" accept=".nii,.gz">
-                <p class="param-help" style="margin-top:4px">
-                  Skips segmentation + registration and goes straight to
-                  Yeo overlap + FC network map. Mask must already be on
-                  the 99×117×95 2 mm grid.
-                </p>
               </div>
               <div class="param-group">
-                <label class="param-label" for="pipelineSelect">Pipeline</label>
+                <div class="param-label-row">
+                  <label class="param-label" for="pipelineSelect">Pipeline</label>
+                  <button type="button" class="help-icon" aria-label="Pipeline selection help">i
+                    <span class="help-popover" role="tooltip">
+                      The app picks the matching chain for the loaded input unless you choose a pipeline here.
+                    </span>
+                  </button>
+                </div>
                 <select id="pipelineSelect">
                   <!-- populatePipelineSelect() in lnm-app.js rewrites these
                        options at boot from the runnable LNM_PIPELINES set;
@@ -106,10 +115,6 @@
                   <option value="lnm-yeo-auto">Auto Yeo overlap (T1)</option>
                 </select>
               </div>
-              <p class="param-help">
-                Run individual stages on the current image. Selection is
-                auto-promoted on file drop; pick manually here to override.
-              </p>
               <div class="step-buttons">
                 <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">Brain extraction</button>
                 <button class="btn btn-secondary btn-sm" id="prealignToMniButton">Pre-align T1 to MNI 160<sup>3</sup> 1 mm</button>
@@ -144,8 +149,15 @@
             <tbody></tbody>
           </table>
 
-          <div class="threshold-controls" id="thresholdControls" style="margin-top:12px">
-            <h3 style="font-size:12px;text-transform:uppercase;color:var(--muted,#888);margin:0 0 6px 0">Threshold network map</h3>
+          <div class="threshold-controls" id="thresholdControls">
+            <div class="panel-title-row">
+              <h3>Threshold network map</h3>
+              <button type="button" class="help-icon" aria-label="Threshold network map help">i
+                <span class="help-popover" role="tooltip">
+                  Absolute mode keeps voxels above a t-stat threshold; percentile mode keeps the strongest map values by absolute magnitude.
+                </span>
+              </button>
+            </div>
             <div class="param-row">
               <label for="networkThresholdMode">Mode</label>
               <select id="networkThresholdMode" class="param-input">
@@ -154,7 +166,10 @@
               </select>
             </div>
             <div class="param-row">
-              <label for="networkThresholdValue">Threshold <span id="networkThresholdValueLabel" class="param-help" style="float:right">0.00</span></label>
+              <div class="param-label-row">
+                <label for="networkThresholdValue">Threshold</label>
+                <span id="networkThresholdValueLabel" class="param-value">0.00</span>
+              </div>
               <input type="range" id="networkThresholdValue" class="param-input" min="0" max="1" step="0.01" value="0.5">
             </div>
             <div class="param-row">
@@ -164,21 +179,19 @@
               <label for="networkThresholdMinCluster">Min cluster size (voxels)</label>
               <input type="number" id="networkThresholdMinCluster" class="param-input" min="0" step="1" value="0">
             </div>
-            <p class="param-help" id="networkThresholdSummary" style="margin:6px 0 0 0">Run analysis first to enable thresholding.</p>
+            <p class="threshold-summary" id="networkThresholdSummary">Run analysis first to enable thresholding.</p>
           </div>
 
-          <div class="step-buttons" style="margin-top:12px">
+          <div class="step-buttons results-actions">
             <button class="btn btn-primary btn-sm" id="downloadOverlapCsv" disabled>Download overlap CSV</button>
             <button class="btn btn-secondary btn-sm" id="downloadNetworkMapButton" disabled>Download network map</button>
             <button class="btn btn-secondary btn-sm" id="downloadThresholdedNetworkMapButton" disabled>Download thresholded mask</button>
             <button class="btn btn-secondary btn-sm" id="clearResultsButton" title="Clear intermediate pipeline state">Start over</button>
           </div>
 
-          <details style="margin-top:10px">
-            <summary style="cursor:pointer;font-size:12px;color:var(--muted,#888);text-transform:uppercase">
-              Intermediate downloads
-            </summary>
-            <div class="step-buttons" style="margin-top:8px">
+          <details class="compact-disclosure">
+            <summary>Intermediate downloads</summary>
+            <div class="step-buttons disclosure-content">
               <button class="btn btn-secondary btn-sm" id="downloadBrainMaskButton" disabled>Brain mask</button>
               <button class="btn btn-secondary btn-sm" id="downloadLesionMaskButton" disabled>Lesion mask (native)</button>
             </div>

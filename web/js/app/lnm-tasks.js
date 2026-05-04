@@ -38,9 +38,9 @@ export const LNM_PIPELINES = [
     id: 'lnm-segment-only',
     displayName: 'Auto-segment lesion (T1 + SynthStrip)',
     description:
-      'Drop a structural T1. Brain extraction (SynthStrip) runs ' +
-      'automatically; the lesion-segmentation model (SynthStroke ' +
-      'baseline) operates on the brain-masked structural and produces a ' +
+      'Drop a structural T1, then run analysis. Brain extraction ' +
+      '(SynthStrip) runs first; the lesion-segmentation model ' +
+      '(SynthStroke baseline) operates on the brain-masked structural and produces a ' +
       'binary lesion mask in the input image\'s native space, downloadable ' +
       'as NIfTI. No MNI registration / no Yeo overlap (those land in ' +
       'Phases 3-4).',

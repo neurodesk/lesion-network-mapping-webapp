@@ -1,4 +1,4 @@
-/* SpinalCordToolbox Styles */
+/* Lesion Network Mapping styles */
 
 :root {
   --color-bg: #0f1419;
@@ -85,6 +85,9 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Robo
 details > summary { user-select: none; padding: 4px 0; font-weight: 600; letter-spacing: 0.05em; outline: none; }
 details > summary:hover { color: var(--color-primary); }
 details[open] > summary { margin-bottom: 4px; }
+.compact-disclosure { margin-top: var(--space-md); }
+.compact-disclosure > summary { cursor: pointer; font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase; }
+.disclosure-content { margin-top: var(--space-sm); }
 
 .file-upload-group { margin-bottom: var(--space-sm); }
 .file-upload-group:last-child { margin-bottom: 0; }
@@ -105,14 +108,25 @@ details[open] > summary { margin-bottom: 4px; }
 
 .param-group { margin-bottom: var(--space-sm); }
 .param-group:last-child { margin-bottom: 0; }
-.param-label { display: flex; align-items: center; gap: 4px; font-size: 0.8rem; font-weight: 500; margin-bottom: 2px; }
+.param-label-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; margin-bottom: 2px; }
+.param-label-row label,
+.param-label { min-width: 0; color: var(--color-text); font-size: 0.8rem; font-weight: 500; line-height: 1.3; }
+.param-label-row .help-icon { margin-left: auto; }
+.section-title .help-icon { margin-left: auto; }
 
-.info-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--color-text-muted); color: var(--color-text-muted); font-size: 9px; font-weight: 700; font-style: normal; cursor: help; flex-shrink: 0; }
-.info-icon .info-tooltip { display: none; position: fixed; background: var(--color-surface-elevated); border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 0.75rem; font-weight: 400; color: var(--color-text); white-space: normal; width: 200px; line-height: 1.4; z-index: 10000; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: none; }
+.help-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0; border-radius: 50%; border: 1px solid var(--color-text-muted); background: transparent; color: var(--color-text-muted); font-family: inherit; font-size: 10px; font-weight: 700; line-height: 1; cursor: help; flex-shrink: 0; }
+.help-icon:hover,
+.help-icon:focus { color: var(--color-primary); border-color: var(--color-primary); background: var(--color-primary-glow); outline: none; }
+.help-popover { display: none; position: absolute; top: calc(100% + 6px); right: 0; width: 240px; max-width: calc(100vw - 32px); padding: 8px 10px; background: var(--color-surface-elevated); border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); color: var(--color-text); font-size: 0.75rem; font-weight: 400; line-height: 1.4; text-align: left; text-transform: none; letter-spacing: 0; white-space: normal; z-index: 10000; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4); pointer-events: none; }
+.help-icon:hover .help-popover,
+.help-icon:focus .help-popover { display: block; }
 
 input[type="number"], input[type="text"], select { width: 100%; padding: var(--space-xs) var(--space-sm); background: var(--color-surface-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); font-size: 0.8rem; transition: all var(--transition-fast); }
 input[type="number"]:focus, input[type="text"]:focus, select:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-glow); }
 select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b99ad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+input[type="file"] { width: 100%; color: var(--color-text-muted); font-size: 0.78rem; }
+input[type="file"]::file-selector-button { margin-right: var(--space-sm); padding: var(--space-xs) var(--space-sm); background: var(--color-surface-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); cursor: pointer; }
+input[type="file"]::file-selector-button:hover { border-color: var(--color-border-light); background: var(--color-border); }
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-sm); padding: var(--space-sm) var(--space-lg); font-size: 0.875rem; font-weight: 500; border-radius: var(--radius-md); border: none; cursor: pointer; transition: all var(--transition-fast); }
 .btn-primary { background: var(--color-primary); color: white; width: 100%; padding: var(--space-sm) var(--space-md); }
@@ -261,6 +275,24 @@ input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .step-buttons { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-sm); }
 .step-buttons .btn { flex: 1 1 120px; min-width: 0; }
+.results-actions { margin-top: var(--space-md); }
+
+.panel-title-row { display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm); }
+.panel-title-row h3 { flex: 1; min-width: 0; font-size: 0.75rem; text-transform: uppercase; color: var(--color-text-muted); margin: 0; letter-spacing: 0.05em; }
+.threshold-controls { margin-top: var(--space-md); }
+.param-row { margin-bottom: var(--space-sm); }
+.param-row:last-child { margin-bottom: 0; }
+.param-row label { font-size: 0.78rem; color: var(--color-text); }
+.param-input { margin-top: 2px; }
+.param-value { margin-left: auto; color: var(--color-text-muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.threshold-summary { margin: 6px 0 0; color: var(--color-text-muted); font-size: 0.75rem; line-height: 1.4; }
+
+.results-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; color: var(--color-text); }
+.results-table th,
+.results-table td { padding: 5px 4px; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+.results-table th { color: var(--color-text-muted); font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.results-table th:nth-child(n+2),
+.results-table td:nth-child(n+2) { text-align: right; }
 
 .step-badge { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 8px; margin-left: auto; line-height: 1.5; }
 .step-badge:empty { display: none; }

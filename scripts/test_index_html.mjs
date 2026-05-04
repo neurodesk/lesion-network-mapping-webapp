@@ -36,9 +36,8 @@ const requiredIds = [
   '#structuralFileInput',
   '#lesionFileInput',
   '#pipelineSelect',
-  // Phase 2a.1.4b additions: brain-extraction button (re-run trigger; the
-  // SynthStrip pass also auto-fires on a structural drop) and the
-  // brain-mask download button.
+  // Phase 2a.1.4b additions: brain-extraction button (explicit trigger) and
+  // the brain-mask download button.
   '#runBrainExtractionButton',
   '#downloadBrainMaskButton',
   // Phase 2a.2.3 additions: lesion-segmentation trigger button + mask
@@ -79,6 +78,19 @@ for (const id of requiredIds) {
 // only when JS doesn't run) is now lnm-yeo-auto — the auto chain.
 assert.match(html, /value=["']lnm-yeo-auto["']/,
   '#pipelineSelect static fallback must be lnm-yeo-auto (auto T1 chain)');
+
+// Helper copy should live behind compact inline help popovers, following the
+// QSMbly-style "i" affordance, rather than always-visible paragraphs.
+assert.match(html, /class=["'][^"']*\bhelp-icon\b[^"']*["']/,
+  'index.html must include compact help icons');
+assert.match(html, /class=["'][^"']*\bhelp-popover\b[^"']*["']/,
+  'index.html must include help popover content');
+assert.match(html, /Loading the image only displays it; processing starts when you click Run analysis/,
+  'structural input help must make explicit that loading does not start processing');
+assert.doesNotMatch(html, /<p\s+class=["']param-help["']/,
+  'always-visible param-help paragraphs should be replaced with popovers or status text');
+assert.doesNotMatch(html, /auto-promoted on file drop|auto-fires/i,
+  'UI copy must not imply processing starts on file load');
 
 // Module loader points at the new orchestrator, not the old SCT app.
 assert.match(html, /<script\s[^>]*src=["']js\/lnm-app\.js["'][^>]*type=["']module["']/,
