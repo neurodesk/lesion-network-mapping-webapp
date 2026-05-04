@@ -54,6 +54,18 @@ function computeNetworkSizes(atlasData, networkLabels) {
   return sizes;
 }
 
+export function formatVersionLabel(version, buildInfo = null) {
+  let label = version ? `v${version}` : '';
+  const versionText = version || '';
+  const bits = [];
+  const sha = buildInfo?.sha || '';
+  if (sha && !versionText.includes(sha)) bits.push(sha);
+  if (buildInfo?.branch && buildInfo.branch !== 'main') bits.push(buildInfo.branch);
+  if (buildInfo?.dirty) bits.push('dirty');
+  if (bits.length) label += ` (${bits.join(', ')})`;
+  return label;
+}
+
 export class LesionNetworkMappingApp {
   constructor() {
     this.nv = new niivue.Niivue({
@@ -408,27 +420,23 @@ export class LesionNetworkMappingApp {
   // by web/run.sh for local dev + by .github/workflows/ for deploys)
   // to surface the commit SHA / branch / dirty flag.
   //
-  //   local dev    -> "v0.17.0 (abc1234, main, dirty)"
+  //   local dev    -> "v0.17.0 (abc1234, dirty)" on main
   //   staging      -> "v0.17.0-staging+abc1234"  (sed'd by deploy-pages.yml)
-  //                   plus "(abc1234, main)" from build-info.json
+  //                   with build-info.json SHA suppressed as duplicate
   //   production   -> "v0.17.0" (release-tag build; build-info.json may
   //                   carry the tag SHA)
   //
   // build-info.json is fetched best-effort — a 404 falls back to just
   // VERSION, so the static deploy works whether or not the file exists.
   async populateVersionLabel() {
-    let label = Config.VERSION ? `v${Config.VERSION}` : '';
+    let buildInfo = null;
     try {
       const r = await fetch('build-info.json', { cache: 'no-store' });
       if (r.ok) {
-        const info = await r.json();
-        const bits = [];
-        if (info.sha) bits.push(info.sha);
-        if (info.branch && info.branch !== 'main') bits.push(info.branch);
-        if (info.dirty) bits.push('dirty');
-        if (bits.length) label += ` (${bits.join(', ')})`;
+        buildInfo = await r.json();
       }
     } catch (e) { /* best-effort: silent fallback to VERSION */ }
+    const label = formatVersionLabel(Config.VERSION, buildInfo);
     const ids = ['aboutAppVersion', 'appVersion', 'footerVersion'];
     for (const id of ids) {
       const el = document.getElementById(id);

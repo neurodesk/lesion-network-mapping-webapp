@@ -61,7 +61,7 @@ globalThis.URL = { createObjectURL: () => 'blob:fake', revokeObjectURL: () => {}
 globalThis.Blob = class { constructor() {} };
 globalThis.File = class { constructor() {} };
 
-const { LesionNetworkMappingApp } =
+const { LesionNetworkMappingApp, formatVersionLabel } =
   await import(path.join(ROOT, 'web/js/lnm-app.js'));
 
 function makeApp() {
@@ -200,4 +200,26 @@ function makeApp() {
   );
 }
 
-console.log('lnm-app behavior OK: 6 dispatch + precondition + auto-promote cases.');
+// ---- Test 7: version label de-duplicates the staging short SHA ----
+{
+  assert.equal(
+    formatVersionLabel('0.17.1-staging+31ff9d1', {
+      sha: '31ff9d1',
+      branch: 'main',
+      dirty: false
+    }),
+    'v0.17.1-staging+31ff9d1',
+    'staging version must not append the same git SHA twice'
+  );
+  assert.equal(
+    formatVersionLabel('0.17.1', {
+      sha: '31ff9d1',
+      branch: 'main',
+      dirty: false
+    }),
+    'v0.17.1 (31ff9d1)',
+    'plain versions should still surface build-info SHA'
+  );
+}
+
+console.log('lnm-app behavior OK: 7 dispatch + precondition + auto-promote + version-label cases.');
