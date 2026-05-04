@@ -16,12 +16,14 @@
 //   6. Fortran-order -> C-order transpose into ONNX tensor
 //   7. ONNX inference (WASM execution provider only — WebGPU lacks 3D MaxPool)
 //   8. C-order -> Fortran-order transpose back
-//   9. SDT < 1 -> binary mask
-//   10. Reverse center-pad, reverse crop
-//   11. Largest CC + interior fill (FreeSurfer SynthStrip default)
-//   12. Resample mask back to LIA original dims (nearest-neighbour)
-//   13. LIA -> RAS reorientation
-//   14. (Optional) 1-voxel 6-conn dilation — vesselboost behaviour, off by
+//   9. If fast-mode resampled the input, reverse center-pad/crop on the
+//      signed-distance transform, linearly resample it back to original
+//      LIA dims, then threshold. This preserves a sub-voxel boundary and
+//      avoids overgrowing the mask by nearest-upsampling a 2mm binary mask.
+//      Non-resampled inputs threshold on the conformed grid as before.
+//   10. Largest CC + interior fill (FreeSurfer SynthStrip default)
+//   11. LIA -> RAS reorientation
+//   12. (Optional) 1-voxel 6-conn dilation — vesselboost behaviour, off by
 //       default for LNM where we want a tighter mask.
 
 import {
@@ -243,6 +245,31 @@ function computeBoundingBox(data, dims) {
   return { min: [minX, minY, minZ], max: [maxX + 1, maxY + 1, maxZ + 1], isEmpty: false };
 }
 
+export function chooseFastTargetSpacing(data, dims, spacing) {
+  const bbox = computeBoundingBox(data, dims);
+  if (bbox.isEmpty) return [1.0, 1.0, 1.0];
+
+  const cropExtents = [
+    (bbox.max[0] - bbox.min[0]) * spacing[0],
+    (bbox.max[1] - bbox.min[1]) * spacing[1],
+    (bbox.max[2] - bbox.min[2]) * spacing[2]
+  ];
+  const fullExtents = dims.map((d, i) => d * spacing[i]);
+  const minExtent = Math.min(...fullExtents);
+
+  // Keep the conformed ONNX tensor at 192^3 whenever possible. A blanket
+  // 2mm downsample still produces a 192^3 tensor for many 1mm clinical
+  // heads, but it removes boundary detail and overgrows the final mask.
+  const spacingForConform192 = Math.max(...cropExtents.map(e => e / 191));
+  const spacingForMinDim48 = minExtent / 48;
+  const nativeFloor = Math.min(2.0, Math.max(1.0, Math.min(...spacing)));
+  const sp = Math.max(
+    nativeFloor,
+    Math.min(2.0, spacingForMinDim48, spacingForConform192)
+  );
+  return [sp, sp, sp];
+}
+
 function cropToBBox(data, dims, bbox) {
   const [nx, ny] = dims;
   const [oxMin, oyMin, ozMin] = bbox.min;
@@ -276,6 +303,97 @@ function placeBackInResampledFrame(croppedMask, cropDims, fullDims, bbox) {
   return out;
 }
 
+function uncenterUnpadFloat(paddedData, targetDims, cropDims, offsets) {
+  const [cnx, cny, cnz] = cropDims;
+  const [tnx, tny] = targetDims;
+  const result = new Float32Array(cnx * cny * cnz);
+  for (let z = 0; z < cnz; z++) {
+    for (let y = 0; y < cny; y++) {
+      for (let x = 0; x < cnx; x++) {
+        const sx = x + offsets[0];
+        const sy = y + offsets[1];
+        const sz = z + offsets[2];
+        result[x + y * cnx + z * cnx * cny] =
+          paddedData[sx + sy * tnx + sz * tnx * tny];
+      }
+    }
+  }
+  return result;
+}
+
+function placeBackFloat(croppedData, cropDims, fullDims, bbox, fillValue) {
+  const out = new Float32Array(fullDims[0] * fullDims[1] * fullDims[2]);
+  out.fill(fillValue);
+  const [oxMin, oyMin, ozMin] = bbox.min;
+  const [fnx, fny] = fullDims;
+  const [cnx, cny, cnz] = cropDims;
+  for (let z = 0; z < cnz; z++) {
+    for (let y = 0; y < cny; y++) {
+      for (let x = 0; x < cnx; x++) {
+        const dst = (oxMin + x) + (oyMin + y) * fnx + (ozMin + z) * fnx * fny;
+        out[dst] = croppedData[x + y * cnx + z * cnx * cny];
+      }
+    }
+  }
+  return out;
+}
+
+function resampleFloatToDims(data, dims, targetDims) {
+  const [nx, ny, nz] = dims;
+  const [tnx, tny, tnz] = targetDims;
+  const result = new Float32Array(tnx * tny * tnz);
+  const scaleX = (nx - 1) / Math.max(tnx - 1, 1);
+  const scaleY = (ny - 1) / Math.max(tny - 1, 1);
+  const scaleZ = (nz - 1) / Math.max(tnz - 1, 1);
+
+  for (let z = 0; z < tnz; z++) {
+    const sz = z * scaleZ;
+    const z0 = Math.floor(sz);
+    const z1 = Math.min(z0 + 1, nz - 1);
+    const wz = sz - z0;
+    for (let y = 0; y < tny; y++) {
+      const sy = y * scaleY;
+      const y0 = Math.floor(sy);
+      const y1 = Math.min(y0 + 1, ny - 1);
+      const wy = sy - y0;
+      for (let x = 0; x < tnx; x++) {
+        const sx = x * scaleX;
+        const x0 = Math.floor(sx);
+        const x1 = Math.min(x0 + 1, nx - 1);
+        const wx = sx - x0;
+
+        const c000 = data[x0 + y0 * nx + z0 * nx * ny];
+        const c100 = data[x1 + y0 * nx + z0 * nx * ny];
+        const c010 = data[x0 + y1 * nx + z0 * nx * ny];
+        const c110 = data[x1 + y1 * nx + z0 * nx * ny];
+        const c001 = data[x0 + y0 * nx + z1 * nx * ny];
+        const c101 = data[x1 + y0 * nx + z1 * nx * ny];
+        const c011 = data[x0 + y1 * nx + z1 * nx * ny];
+        const c111 = data[x1 + y1 * nx + z1 * nx * ny];
+
+        const c00 = c000 * (1 - wx) + c100 * wx;
+        const c01 = c001 * (1 - wx) + c101 * wx;
+        const c10 = c010 * (1 - wx) + c110 * wx;
+        const c11 = c011 * (1 - wx) + c111 * wx;
+        const c0 = c00 * (1 - wy) + c10 * wy;
+        const c1 = c01 * (1 - wy) + c11 * wy;
+
+        result[x + y * tnx + z * tnx * tny] = c0 * (1 - wz) + c1 * wz;
+      }
+    }
+  }
+
+  return result;
+}
+
+function thresholdSdt(data, border) {
+  const mask = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] < border) mask[i] = 1;
+  }
+  return mask;
+}
+
 // Public entry point. Caller hands in already-decoded, RAS-oriented voxel
 // data + the SynthStrip ONNX model bytes + an `ort` namespace (the bundled
 // onnxruntime-web). Returns { mask: Uint8Array (RAS, same dims as input),
@@ -299,21 +417,15 @@ export async function runSynthStrip({
     throw new Error('runSynthStrip: missing required argument');
   }
 
-  const targetSpacing = (() => {
-    if (!fast) return [1.0, 1.0, 1.0];
-    const MIN_RESAMPLED_DIM = 48;
-    const physicalExtents = rasDims.map((d, i) => d * rasSpacing[i]);
-    const minExtent = Math.min(...physicalExtents);
-    const maxSpacing = Math.min(2.0, minExtent / MIN_RESAMPLED_DIM);
-    const sp = Math.max(1.0, maxSpacing);
-    return [sp, sp, sp];
-  })();
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
   onProgress(0.02, `${modeLabel}: reorienting RAS->LIA...`);
 
   // 1. RAS -> LIA
   const lia = rasToLia(rasData, rasDims);
   const liaSpacing = [rasSpacing[0], rasSpacing[2], rasSpacing[1]];
+  const targetSpacing = fast
+    ? chooseFastTargetSpacing(lia.data, lia.dims, liaSpacing)
+    : [1.0, 1.0, 1.0];
   onLog(`Reoriented RAS->LIA: ${rasDims.join('x')} -> ${lia.dims.join('x')}`);
 
   // 2. Resample to target spacing
@@ -385,42 +497,52 @@ export async function runSynthStrip({
   // 8. SDT < 1 -> binary mask
   onProgress(0.85, `${modeLabel}: thresholding SDT...`);
   const SDT_BORDER = 1;
+  const effectiveSdtBorder = needsResample
+    ? SDT_BORDER / Math.max(targetSpacing[0], targetSpacing[1], targetSpacing[2])
+    : SDT_BORDER;
   const totalConformed = targetDims[0] * targetDims[1] * targetDims[2];
-  const conformedMask = new Uint8Array(totalConformed);
   let sdtMin = Infinity, sdtMax = -Infinity;
   for (let i = 0; i < totalConformed; i++) {
     const v = sdtData[i];
     if (v < sdtMin) sdtMin = v;
     if (v > sdtMax) sdtMax = v;
-    if (v < SDT_BORDER) conformedMask[i] = 1;
   }
-  onLog(`SDT range [${sdtMin.toFixed(2)}, ${sdtMax.toFixed(2)}]; threshold < ${SDT_BORDER}`);
-
-  // 9. Reverse center+pad
-  const croppedMask =
-    uncenterUnpadMask(conformedMask, targetDims, cropped.dims, centerOffsets);
-
-  // 10. Reverse crop
-  let resampledMask = placeBackInResampledFrame(
-    croppedMask, cropped.dims, resampledDims, bbox
+  onLog(
+    `SDT range [${sdtMin.toFixed(2)}, ${sdtMax.toFixed(2)}]; ` +
+    `threshold < ${effectiveSdtBorder.toFixed(2)}`
   );
 
-  // 11. Largest CC + interior fill (FreeSurfer SynthStrip default)
-  onProgress(0.90, `${modeLabel}: cleaning mask...`);
-  resampledMask = keepLargestComponentAndFill(resampledMask, resampledDims);
-
-  // 12. Resample mask back to LIA original dims (nearest-neighbour)
   let liaMask;
   if (needsResample) {
-    liaMask = resampleLabelsNearest(resampledMask, resampledDims, lia.dims);
+    onProgress(0.88, `${modeLabel}: resampling SDT boundary...`);
+    const croppedSdt =
+      uncenterUnpadFloat(sdtData, targetDims, cropped.dims, centerOffsets);
+    const resampledSdt = placeBackFloat(
+      croppedSdt,
+      cropped.dims,
+      resampledDims,
+      bbox,
+      effectiveSdtBorder + 1
+    );
+    const liaSdt = resampleFloatToDims(resampledSdt, resampledDims, lia.dims);
+    liaMask = thresholdSdt(liaSdt, effectiveSdtBorder);
   } else {
-    liaMask = resampledMask;
+    const conformedMask = thresholdSdt(sdtData, effectiveSdtBorder);
+    const croppedMask =
+      uncenterUnpadMask(conformedMask, targetDims, cropped.dims, centerOffsets);
+    liaMask = placeBackInResampledFrame(
+      croppedMask, cropped.dims, resampledDims, bbox
+    );
   }
 
-  // 13. LIA -> RAS
+  // 9. Largest CC + interior fill (FreeSurfer SynthStrip default)
+  onProgress(0.90, `${modeLabel}: cleaning mask...`);
+  liaMask = keepLargestComponentAndFill(liaMask, lia.dims);
+
+  // 10. LIA -> RAS
   let finalMask = liaMaskToRas(liaMask, lia.dims, rasDims);
 
-  // 14. Optional dilation (off for LNM by default)
+  // 11. Optional dilation (off for LNM by default)
   if (dilate) {
     onProgress(0.95, `${modeLabel}: dilating mask by 1 voxel...`);
     finalMask = dilate3D(finalMask, rasDims, 1);

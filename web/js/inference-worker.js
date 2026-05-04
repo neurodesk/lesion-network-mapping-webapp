@@ -838,7 +838,7 @@ async function _openModelCache() {
   return caches.open(MODEL_CACHE_NAME);
 }
 
-async function fetchModel(url, modelName, progressBase, progressSpan) {
+async function fetchModel(url, modelName, progressBase, progressSpan, localFallbackUrl = null) {
   const displayName = modelName || url.split('/').pop();
   const cacheKey = self._modelCacheKey || `${url}?v=${self._appVersion || ''}`;
 
@@ -858,17 +858,28 @@ async function fetchModel(url, modelName, progressBase, progressSpan) {
     } catch (e) { /* cache miss; fall through to network */ }
   }
 
-  let response = null;
   let lastError = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      postLog(`Downloading: ${displayName}${attempt > 1 ? ' (retry)' : ''}...`);
-      response = await fetch(url, { cache: attempt > 1 ? 'reload' : 'default' });
-      if (response.ok) break;
-      lastError = new Error(`Failed to fetch model: ${response.status} ${response.statusText}`);
-    } catch (error) {
-      lastError = error;
+  let response = null;
+  const candidates = localFallbackUrl ? [
+    { url: localFallbackUrl, attempts: 1, label: 'local dev cache' },
+    { url, attempts: 2, label: 'remote' }
+  ] : [
+    { url, attempts: 2, label: 'remote' }
+  ];
+
+  for (const candidate of candidates) {
+    for (let attempt = 1; attempt <= candidate.attempts; attempt++) {
+      try {
+        const retry = attempt > 1 ? ' (retry)' : '';
+        postLog(`Downloading: ${displayName} from ${candidate.label}${retry}...`);
+        response = await fetch(candidate.url, { cache: attempt > 1 ? 'reload' : 'default' });
+        if (response.ok) break;
+        lastError = new Error(`Failed to fetch model: ${response.status} ${response.statusText}`);
+      } catch (error) {
+        lastError = error;
+      }
     }
+    if (response && response.ok) break;
   }
   if (!response || !response.ok) {
     throw lastError || new Error(`Failed to fetch model: ${displayName}`);
@@ -1293,6 +1304,9 @@ async function stepRegister(params = {}) {
     referenceAssetId = 'lnm-mni160',
     referenceUrl,
     referenceCacheKey,
+    modelLocalUrl,
+    modelInputDims = [160, 160, 192],
+    svfDims = null,
     nbSteps = 7
   } = params;
   if (!modelBaseUrl) throw new Error('run-register requires modelBaseUrl');
@@ -1336,7 +1350,7 @@ async function stepRegister(params = {}) {
   postProgress(0.20, 'Fetching SynthMorph model...');
   self._modelCacheKey = modelCacheKey || `${modelAssetId}:${self._appVersion || ''}`;
   const modelArrayBuffer = await fetchModel(
-    `${modelBaseUrl}/${modelName}`, modelName, 0.20, 0.30
+    `${modelBaseUrl}/${modelName}`, modelName, 0.20, 0.30, modelLocalUrl
   );
 
   postProgress(0.55, 'Building SynthMorph session...');
@@ -1380,43 +1394,85 @@ async function stepRegister(params = {}) {
   // F-order index: i_F = x + y*X + z*X*Y
   // Row-major NDHWC (C=1): i_R = (x*Y + y)*Z + z
   const X = 160, Y = 160, Z = 192;
-  function fOrderToNDHWC(fdata) {
-    const out = new Float32Array(X * Y * Z);
-    for (let z = 0; z < Z; z++) {
-      for (let y = 0; y < Y; y++) {
-        for (let x = 0; x < X; x++) {
-          out[(x * Y + y) * Z + z] = fdata[x + y * X + z * X * Y];
+  const modelDims = Array.isArray(modelInputDims) && modelInputDims.length === 3
+    ? modelInputDims.map(v => Number(v))
+    : [X, Y, Z];
+  if (modelDims.some(v => !Number.isInteger(v) || v <= 0)) {
+    throw new Error(`Invalid SynthMorph modelInputDims: ${modelInputDims}`);
+  }
+
+  function maybeResampleToModelGrid(fdata, label) {
+    if (modelDims[0] === X && modelDims[1] === Y && modelDims[2] === Z) {
+      return fdata;
+    }
+    const spacing = [X / modelDims[0], Y / modelDims[1], Z / modelDims[2]];
+    const resampled = resampleVolume(fdata, [X, Y, Z], [1, 1, 1], spacing);
+    if (resampled.dims[0] !== modelDims[0] ||
+        resampled.dims[1] !== modelDims[1] ||
+        resampled.dims[2] !== modelDims[2]) {
+      throw new Error(
+        `SynthMorph ${label} downsample produced ${resampled.dims.join('x')}; ` +
+        `expected ${modelDims.join('x')}`
+      );
+    }
+    return resampled.data;
+  }
+
+  function fOrderToNDHWC(fdata, dims) {
+    const [mX, mY, mZ] = dims;
+    const out = new Float32Array(mX * mY * mZ);
+    for (let z = 0; z < mZ; z++) {
+      for (let y = 0; y < mY; y++) {
+        for (let x = 0; x < mX; x++) {
+          out[(x * mY + y) * mZ + z] = fdata[x + y * mX + z * mX * mY];
         }
       }
     }
     return out;
   }
-  const sourceNHWC = fOrderToNDHWC(sourceNormalized);
-  const targetNHWC = fOrderToNDHWC(targetData);
+
+  const sourceModel = maybeResampleToModelGrid(sourceNormalized, 'source');
+  const targetModel = maybeResampleToModelGrid(targetData, 'target');
+  if (modelDims[0] !== X || modelDims[1] !== Y || modelDims[2] !== Z) {
+    postLog(`SynthMorph browser grid: ${X}x${Y}x${Z} -> ${modelDims.join('x')}`);
+  }
+  const sourceNHWC = fOrderToNDHWC(sourceModel, modelDims);
+  const targetNHWC = fOrderToNDHWC(targetModel, modelDims);
 
   postProgress(0.60, 'Running SynthMorph (single-pass, ~30 s)...');
   const t0 = performance.now();
-  const sourceTensor = new ort.Tensor('float32', sourceNHWC, [1, X, Y, Z, 1]);
-  const targetTensor = new ort.Tensor('float32', targetNHWC, [1, X, Y, Z, 1]);
+  const sourceTensor = new ort.Tensor('float32', sourceNHWC, [1, ...modelDims, 1]);
+  const targetTensor = new ort.Tensor('float32', targetNHWC, [1, ...modelDims, 1]);
   let svfFlat;
+  let outputDims = svfDims;
   try {
     const out = await session.run({
       [inputNames[0]]: sourceTensor,
       [inputNames[1]]: targetTensor
     });
-    svfFlat = out[outputName].data;
+    const outputTensor = out[outputName];
+    svfFlat = outputTensor.data;
+    if (Array.isArray(outputTensor.dims) && outputTensor.dims.length === 5) {
+      outputDims = outputTensor.dims.slice(1, 4);
+    }
   } finally {
     sourceTensor.dispose?.();
     targetTensor.dispose?.();
     session.release?.();
   }
-  postLog(`SynthMorph forward in ${((performance.now() - t0) / 1000).toFixed(1)}s; SVF shape=80x80x96x3`);
+  if (!Array.isArray(outputDims) || outputDims.length !== 3) {
+    outputDims = modelDims.map(v => v / 2);
+  }
+  const halfDims = outputDims.map(v => Number(v));
+  postLog(
+    `SynthMorph forward in ${((performance.now() - t0) / 1000).toFixed(1)}s; ` +
+    `SVF shape=${halfDims.join('x')}x3`
+  );
 
   // Integrate SVF (scaling-and-squaring) and upsample to full-res. Both
   // run in pure JS — see web/js/modules/registration.js. svfFlat is
   // already in row-major NDHWC, which is what registration.js expects.
   postProgress(0.85, 'Integrating SVF (scaling-and-squaring)...');
-  const halfDims = [80, 80, 96];
   const halfDisp = integrateSvf(svfFlat, halfDims, nbSteps);
 
   postProgress(0.95, 'Upsampling displacement to full resolution...');

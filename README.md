@@ -54,9 +54,10 @@ combination via [`web/js/modules/fc-weighted-sum.js`](web/js/modules/fc-weighted
 **Phase 3 complete (v0.3.0)** — deformable MNI registration via
 **SynthMorph** (Hoffmann 2022, Apache-2.0). Click "Run MNI registration"
 on a 160×160×192 1mm structural T1; the app fetches the SynthMorph
-ONNX (81 MB) + the lnm-mni160 reference (8 MB), runs the SVF-only
-sub-network in the worker, then performs scaling-and-squaring SVF
-integration + half→full upsample + the spatial warp in pure JS
+ONNX (81 MB) + the lnm-mni160 reference (8 MB), downsamples the
+source/reference pair to the browser graph's 48×48×64 grid, runs the
+SVF-only sub-network in the worker, then performs scaling-and-squaring
+SVF integration + 24×24×32→160×160×192 upsample + the spatial warp in pure JS
 ([`web/js/modules/registration.js`](web/js/modules/registration.js)).
 WebGPU execution provider when available; falls back to WASM.
 
@@ -285,19 +286,13 @@ issues I'd been carrying:
      (`_userPickedPipeline = true`).
    - Result: Phase 8 smoke now passes in 4.3s (was 120s timeout).
 
-2. **WebGPU EP fallback in headless Chromium** — Phase 10 (auto-branch
-   full pipeline) hit `Register error: 31954968` (ORT WASM C++ exception
-   pointer) because headless Chromium has no WebGPU and SynthMorph OOMs
-   the 4 GB WASM heap. This was always broken; nothing to do with
-   Phase 31's changes — just never run.
-   - Phase 10 smoke now launches Chromium with WebGPU-enabling flags
-     (`--enable-unsafe-webgpu`, `--use-vulkan=swiftshader`).
-   - Acceptance criterion split: WebGPU available + chain finished →
-     full assertion (thresholdedMaskFile + summary). WebGPU missing +
-     register WASM-OOMed → degraded assertion (SynthStrip + SynthStroke
-     completed, register at least attempted, console surfaced the
-     error). SynthMorph forward correctness is gated by
-     `test:registration-parity` in Node where there's no WASM heap limit.
+2. **Browser-runnable SynthMorph graph** — the original 160×160×192 ONNX
+   graph hit a multi-gigabyte first Conv3D activation in ORT WebGPU/WASM.
+   The registered browser asset is now `lnm-synthmorph-mni-48x48x64.onnx`:
+   same SynthMorph weights, smaller static graph, source/reference
+   downsampled before ONNX, and displacement upsampled back to MNI160.
+   `npm run test:synthmorph-browser-model` gates the activation budget,
+   and Phase 3.7 smoke now requires browser registration completion.
 
 AGENTS.md architecture entry for `prealign.js` added; test surface table
 refreshed (20 Node suites listed).
@@ -613,7 +608,7 @@ against a real MNI152 anatomical T1. Pipeline-correctness checks
 ```sh
 npm run test:synthstrip-parity     # SynthStrip:        ~5 s
 npm run test:lesion-seg-parity     # Lesion seg:        ~5 s; Dice >= 0.50 vs ds004884 ground truth
-npm run test:registration-parity   # SynthMorph:       ~37 s (CPU EP); self-pair near-identity
+npm run test:registration-parity   # SynthMorph:       ~3 s (CPU EP); browser graph self-pair near-identity
 npm run test:fc-weighted-sum-parity # FC weighted sum: ~1 s; identity case bit-exact
 ```
 

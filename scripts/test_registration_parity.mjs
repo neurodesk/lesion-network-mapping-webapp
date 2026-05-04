@@ -4,15 +4,16 @@
 // Drives the full stack end-to-end via onnxruntime-node:
 //
 //   1. Load the lnm-mni160 reference target (160x160x192 1mm MNI152).
-//   2. Run SynthMorph ONNX with (source = target = reference) — the
+//   2. Downsample it to the manifest's browserRuntime.inputDims.
+//   3. Run SynthMorph ONNX with (source = target = downsampled reference) — the
 //      identity case. The model has been trained with regularisation
 //      that pulls the velocity field toward zero, so a self-pair should
 //      produce a near-zero SVF.
-//   3. integrateSvf(svf, [80,80,96], 7) -> half-res displacement.
+//   4. integrateSvf(svf, browserRuntime.svfDims, 7) -> low-res displacement.
 //      Should be near-zero.
-//   4. upsampleDisplacementField -> full-res 160x160x192x3.
+//   5. upsampleDisplacementField -> full-res 160x160x192x3.
 //      Should be near-zero.
-//   5. warpVolume(reference, fullDims, displacement, fullDims) -> warped.
+//   6. warpVolume(reference, fullDims, displacement, fullDims) -> warped.
 //      Should be near-bit-equivalent to the reference (boundary +
 //      interpolation noise gives sub-1% per-voxel error).
 //
@@ -30,11 +31,23 @@ import { fileURLToPath } from 'node:url';
 import * as ort from 'onnxruntime-node';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MANIFEST = JSON.parse(
+  await fs.readFile(path.join(ROOT, 'web/models/manifest.json'), 'utf8')
+);
+const MODEL_ASSET = MANIFEST.modelAssets.find(a => a.id === 'lnm-synthmorph-mni');
+if (!MODEL_ASSET) throw new Error("manifest missing modelAsset 'lnm-synthmorph-mni'");
+const RUNTIME = MODEL_ASSET.browserRuntime || {};
+const MODEL_DIMS = RUNTIME.inputDims || MODEL_ASSET.inputShape?.slice(1, 4);
+const SVF_DIMS = RUNTIME.svfDims || MODEL_ASSET.svfShape?.slice(1, 4);
+if (!Array.isArray(MODEL_DIMS) || MODEL_DIMS.length !== 3) {
+  throw new Error('lnm-synthmorph-mni missing browser input dims');
+}
+if (!Array.isArray(SVF_DIMS) || SVF_DIMS.length !== 3) {
+  throw new Error('lnm-synthmorph-mni missing browser SVF dims');
+}
 const MODEL_CACHE_DIR = path.join(ROOT, 'web/models/_dev_cache');
-const MODEL_CACHE = path.join(MODEL_CACHE_DIR, 'lnm-synthmorph-mni.onnx');
-const MODEL_URL =
-  'https://huggingface.co/datasets/sbollmann/lnm-webapp-models' +
-  '/resolve/main/models/lnm-synthmorph-mni.onnx';
+const MODEL_CACHE = path.join(MODEL_CACHE_DIR, path.basename(MODEL_ASSET.filename));
+const MODEL_URL = MODEL_ASSET.sourceUrl;
 const REF_CACHE = path.join(MODEL_CACHE_DIR, 'lnm-mni160.nii.gz');
 const REF_URL =
   'https://huggingface.co/datasets/sbollmann/lnm-webapp-models' +
@@ -90,6 +103,12 @@ function fOrderToNDHWC(fdata, dims) {
   console.log(`Reference: ${ref.dims.join('x')}, ${ref.data.length.toLocaleString()} voxels`);
   assert.deepEqual(ref.dims, [160, 160, 192]);
 
+  const { resampleVolume } = await import('../web/js/modules/volume-utils.js');
+  const modelSpacing = ref.dims.map((dim, i) => dim / MODEL_DIMS[i]);
+  const modelRef = resampleVolume(ref.data, ref.dims, [1, 1, 1], modelSpacing);
+  assert.deepEqual(modelRef.dims, MODEL_DIMS);
+  console.log(`Browser model grid: ${MODEL_DIMS.join('x')} -> SVF ${SVF_DIMS.join('x')}`);
+
   console.log('Building ONNX session (CPU EP)...');
   const session = await ort.InferenceSession.create(modelBuf, {
     executionProviders: ['cpu'],
@@ -99,17 +118,22 @@ function fOrderToNDHWC(fdata, dims) {
   const outputName = session.outputNames[0];
   console.log(`session ready (inputs=${inputNames.join(',')}, output=${outputName})`);
 
-  // Source = target = reference: the model should output ~zero SVF.
-  const refNHWC = fOrderToNDHWC(ref.data, ref.dims);
-  const tA = new ort.Tensor('float32', refNHWC, [1, 160, 160, 192, 1]);
-  const tB = new ort.Tensor('float32', refNHWC, [1, 160, 160, 192, 1]);
+  // Source = target = downsampled reference: the model should output ~zero SVF.
+  const refNHWC = fOrderToNDHWC(modelRef.data, MODEL_DIMS);
+  const tA = new ort.Tensor('float32', refNHWC, [1, ...MODEL_DIMS, 1]);
+  const tB = new ort.Tensor('float32', refNHWC, [1, ...MODEL_DIMS, 1]);
 
   console.log('Running SynthMorph forward...');
   const t0 = Date.now();
   const out = await session.run({ [inputNames[0]]: tA, [inputNames[1]]: tB });
-  const svf = out[outputName].data;
+  const svfTensor = out[outputName];
+  const svf = svfTensor.data;
   const elapsed = (Date.now() - t0) / 1000;
-  console.log(`forward in ${elapsed.toFixed(1)}s; SVF length=${svf.length.toLocaleString()}`);
+  console.log(
+    `forward in ${elapsed.toFixed(1)}s; SVF length=${svf.length.toLocaleString()}; ` +
+    `dims=${svfTensor.dims.join('x')}`
+  );
+  assert.deepEqual(svfTensor.dims.slice(1, 4), SVF_DIMS);
 
   let svfMax = 0, svfSumAbs = 0;
   for (let i = 0; i < svf.length; i++) {
@@ -124,9 +148,9 @@ function fOrderToNDHWC(fdata, dims) {
   const { integrateSvf, upsampleDisplacementField, warpVolume } =
     await import('../web/js/modules/registration.js');
   console.log('Integrating SVF (scaling-and-squaring, 7 steps)...');
-  const halfDisp = integrateSvf(svf, [80, 80, 96], 7);
+  const halfDisp = integrateSvf(svf, SVF_DIMS, 7);
   console.log('Upsampling to full resolution...');
-  const fullDisp = upsampleDisplacementField(halfDisp, [80, 80, 96], [160, 160, 192]);
+  const fullDisp = upsampleDisplacementField(halfDisp, SVF_DIMS, [160, 160, 192]);
 
   let dispMax = 0, dispSumAbs = 0;
   for (let i = 0; i < fullDisp.length; i++) {

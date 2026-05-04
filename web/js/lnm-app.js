@@ -889,15 +889,20 @@ export class LesionNetworkMappingApp {
       throw new Error("Manifest entry 'lnm-mni160' is not supported.");
     }
     const m = splitModelUrl(model.sourceUrl);
+    const modelFileName = (model.filename || m.name || 'lnm-synthmorph-mni.onnx').split('/').pop();
+    const modelLocalUrl = new URL(`models/_dev_cache/${modelFileName}`, window.location.href).href;
 
     this.updateOutput('Starting MNI registration (SynthMorph deformable)...');
     const inputBuffer = await this.structuralFile.arrayBuffer();
     await this.executor.loadVolume(inputBuffer);
     await this.executor.runRegistration({
       modelAssetId: model.id,
-      modelName: m.name || 'lnm-synthmorph-mni.onnx',
+      modelName: m.name || modelFileName,
       modelBaseUrl: m.base,
       modelCacheKey: model.cacheKey,
+      modelLocalUrl,
+      modelInputDims: model.browserRuntime?.inputDims || model.inputShape?.slice(1, 4),
+      svfDims: model.browserRuntime?.svfDims || model.svfShape?.slice(1, 4),
       referenceAssetId: ref.id,
       referenceUrl: ref.sourceUrl,
       referenceCacheKey: ref.cacheKey,

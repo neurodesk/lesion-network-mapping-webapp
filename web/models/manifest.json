@@ -83,23 +83,32 @@
     },
     {
       "id": "lnm-synthmorph-mni",
-      "filename": "models/lnm-synthmorph-mni.onnx",
-      "sizeBytes": 85153621,
-      "checksum": "sha256:ec874aefbee4cf7e28964ad8b5343255a95485ebe522f4edb48eb9750c00a984",
-      "cacheKey": "lnm-synthmorph-mni-brains-svf-v1",
-      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-synthmorph-mni.onnx",
-      "sourceVersion": "SynthMorph-brains-dice-vel-0.5-res-16-256f-Apache-2.0",
+      "filename": "models/lnm-synthmorph-mni-48x48x64.onnx",
+      "sizeBytes": 85116577,
+      "checksum": "sha256:d57442183d2d4ab2d579205807b8c72f5ca6b26e8178d64d74c66eabb6e32bba",
+      "cacheKey": "lnm-synthmorph-mni-brains-browser-48x48x64-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-synthmorph-mni-48x48x64.onnx",
+      "sourceVersion": "SynthMorph-brains-dice-vel-0.5-res-16-256f-Apache-2.0 spatially-retargeted-48x48x64",
       "browserFormat": "onnx-fp32",
       "supportStatus": "supported",
-      "inputShape": [1, 160, 160, 192, 1],
-      "svfShape":   [1, 80, 80, 96, 3],
+      "inputShape": [1, 48, 48, 64, 1],
+      "svfShape":   [1, 24, 24, 32, 3],
       "targetSpacing": [1.0, 1.0, 1.0],
+      "browserRuntime": {
+        "sourceGrid": [160, 160, 192],
+        "inputDims": [48, 48, 64],
+        "svfDims": [24, 24, 32],
+        "downsampleSpacingMm": [3.3333333333, 3.3333333333, 3.0],
+        "firstConvChannels": 256,
+        "maxActivationBytes": 150994944
+      },
       "preprocessing": {
         "axisOrder": "channelLast",
         "normalize": "minmax",
+        "resample": "mni160-to-browserRuntime.inputDims",
         "padding": "center"
       },
-      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser performs scaling-and-squaring SVF integration, half->full upsample, and the spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py. Inputs: (1, 160, 160, 192, 1) source + same-shape target, both float32 zero-to-one normalised, channel-last. Output: (1, 80, 80, 96, 3) SVF in voxel units of the half-resolution grid."
+      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser model reuses the original SynthMorph weights on a 48x48x64 static graph so the largest first-conv activation is 144 MiB instead of ~4.7 GiB. The worker downsamples the MNI160 source/reference pair to 48x48x64, runs ONNX, then performs scaling-and-squaring SVF integration, 24x24x32 -> 160x160x192 displacement upsample, and spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py."
     }
   ],
   "atlasAssets": [

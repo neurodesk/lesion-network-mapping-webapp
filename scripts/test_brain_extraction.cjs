@@ -12,6 +12,7 @@
 //   fortranToCOrder(data, dims) -> Float32Array
 //   cOrderToFortran(data, dims) -> Float32Array
 //   dilate3D(mask, dims, radius=1) -> Uint8Array
+//   chooseFastTargetSpacing(data, dims, spacing) -> [sx, sy, sz]
 
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -28,7 +29,8 @@ const { pathToFileURL } = require('node:url');
     p99Normalize,
     fortranToCOrder,
     cOrderToFortran,
-    dilate3D
+    dilate3D,
+    chooseFastTargetSpacing
   } = await import(moduleUrl);
 
   // ---- computeFreeSurferTargetDims ----
@@ -176,7 +178,31 @@ const { pathToFileURL } = require('node:url');
   for (let i = 0; i < 125; i++) noopSum += noop[i];
   assert.equal(noopSum, 1, 'radius=0 dilation is identity');
 
-  console.log('brain-extraction helpers OK: 7 helper groups, 30+ assertions.');
+  // ---- chooseFastTargetSpacing ----
+  // Regression for the ds004884 1mm clinical T1: a blanket 2mm fast-mode
+  // target made the SynthStrip mask visibly overgrown while still passing
+  // broad "mask exists" checks. The adaptive rule should keep this foreground
+  // crop in the 192^3 conform bucket by choosing ~1.06mm, not 2mm.
+  const clinicalDims = [160, 256, 256];
+  const clinical = new Float32Array(clinicalDims[0] * clinicalDims[1] * clinicalDims[2]);
+  const clinicalIdx = (x, y, z) => x + y * clinicalDims[0] + z * clinicalDims[0] * clinicalDims[1];
+  clinical[clinicalIdx(6, 38, 24)] = 1;
+  clinical[clinicalIdx(153, 226, 226)] = 1;
+  const clinicalSpacing = chooseFastTargetSpacing(clinical, clinicalDims, [1, 1, 1]);
+  assert.ok(clinicalSpacing[0] > 1.05 && clinicalSpacing[0] < 1.08,
+    `1mm clinical fast target should be ~1.06mm, got ${clinicalSpacing[0]}`);
+  assert.deepEqual(clinicalSpacing, [clinicalSpacing[0], clinicalSpacing[0], clinicalSpacing[0]],
+    'fast target spacing remains isotropic');
+
+  // Already-2mm inputs must not be upsampled in fast mode.
+  const mniDims = [99, 95, 117];
+  const mni = new Float32Array(mniDims[0] * mniDims[1] * mniDims[2]);
+  mni[0] = 1;
+  mni[mni.length - 1] = 1;
+  assert.deepEqual(chooseFastTargetSpacing(mni, mniDims, [2, 2, 2]), [2, 2, 2],
+    '2mm input stays at native 2mm in fast mode');
+
+  console.log('brain-extraction helpers OK: 8 helper groups, 35+ assertions.');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

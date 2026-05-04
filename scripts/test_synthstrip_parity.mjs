@@ -18,6 +18,10 @@
 //      the image centre per axis, exactly 1 connected component (the
 //      largest-CC + fill step in runSynthStrip is supposed to enforce
 //      this by construction).
+//   5. Runs the same fast-mode code path used by the browser app on the
+//      ds004884 1mm clinical T1 fixture and asserts the mask is not
+//      overgrown. This catches the production failure where the model
+//      looked successful but visibly included skull/non-brain tissue.
 //
 // Plausibility checks rather than byte-exact parity vs FreeSurfer's
 // `mri_synthstrip` reference because we don't ship a FreeSurfer dep. The
@@ -35,6 +39,7 @@ import * as ort from 'onnxruntime-node';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_T1 = path.join(ROOT, 'tests/fixtures/synthstrip-mini/T1.nii.gz');
+const CLINICAL_T1 = path.join(ROOT, 'tests/fixtures/ds004884-mini/T1.nii.gz');
 const MODEL_CACHE_DIR = path.join(ROOT, 'web/models/_dev_cache');
 const MODEL_CACHE = path.join(MODEL_CACHE_DIR, 'synthstrip.onnx');
 const MODEL_URL =
@@ -90,8 +95,8 @@ function typedArrayForImage(nifti, header, imageBuffer) {
   }
 }
 
-async function decodeT1Fixture() {
-  const t1Bytes = await fs.readFile(FIXTURE_T1);
+async function decodeT1Fixture(filePath = FIXTURE_T1) {
+  const t1Bytes = await fs.readFile(filePath);
   let buf = t1Bytes.buffer.slice(
     t1Bytes.byteOffset,
     t1Bytes.byteOffset + t1Bytes.byteLength
@@ -134,6 +139,34 @@ function computeCentroid(mask, dims) {
     }
   }
   return n > 0 ? [sx / n, sy / n, sz / n, n] : [0, 0, 0, 0];
+}
+
+function computeMaskStats(mask, dims) {
+  const [nx, ny, nz] = dims;
+  let sx = 0, sy = 0, sz = 0, n = 0;
+  const min = [nx, ny, nz];
+  const max = [-1, -1, -1];
+  for (let z = 0; z < nz; z++) {
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; x++) {
+        if (!mask[x + y * nx + z * nx * ny]) continue;
+        sx += x; sy += y; sz += z; n += 1;
+        if (x < min[0]) min[0] = x;
+        if (y < min[1]) min[1] = y;
+        if (z < min[2]) min[2] = z;
+        if (x > max[0]) max[0] = x;
+        if (y > max[1]) max[1] = y;
+        if (z > max[2]) max[2] = z;
+      }
+    }
+  }
+  return {
+    voxelCount: n,
+    centroid: n > 0 ? [sx / n, sy / n, sz / n] : [0, 0, 0],
+    bboxMin: min,
+    bboxMax: max,
+    bboxSize: n > 0 ? max.map((v, i) => v - min[i] + 1) : [0, 0, 0]
+  };
 }
 
 (async () => {
@@ -226,6 +259,47 @@ function computeCentroid(mask, dims) {
     'SynthStrip parity OK: end-to-end pipeline runs on a real T1; ' +
     'mask is plausible (size, coverage, centroid, single CC).'
   );
+
+  console.log(`\n[clinical fast-mode case] ${path.relative(ROOT, CLINICAL_T1)}`);
+  const clinical = await decodeT1Fixture(CLINICAL_T1);
+  console.log(
+    `Clinical T1: ${clinical.rasDims.join('x')} @ ` +
+    `${clinical.rasSpacing.map(s => s.toFixed(2)).join('x')}mm, ` +
+    `${clinical.rasData.length.toLocaleString()} voxels`
+  );
+  assert.deepEqual(clinical.rasDims, [160, 256, 256],
+    'clinical regression fixture must stay on the 160x256x256 1mm grid');
+
+  const clinicalResult = await runSynthStrip({
+    rasData: clinical.rasData,
+    rasDims: clinical.rasDims,
+    rasSpacing: clinical.rasSpacing,
+    modelArrayBuffer,
+    ort,
+    executionProviders: ['cpu'],
+    fast: true,
+    dilate: false,
+    onLog: (msg) => console.log(`  [clinical] ${msg}`)
+  });
+  const clinicalStats = computeMaskStats(clinicalResult.mask, clinical.rasDims);
+  const clinicalCoverage = clinicalResult.voxelCount / clinical.rasData.length;
+  console.log(
+    `Clinical mask: ${clinicalResult.voxelCount.toLocaleString()}/${clinical.rasData.length.toLocaleString()} ` +
+    `(${(clinicalCoverage * 100).toFixed(2)}% coverage), ` +
+    `centroid=[${clinicalStats.centroid.map(v => v.toFixed(1)).join(', ')}], ` +
+    `bboxSize=[${clinicalStats.bboxSize.join(', ')}]`
+  );
+
+  assert.ok(clinicalResult.voxelCount < 2_000_000,
+    `clinical fast-mode mask is overgrown: ${clinicalResult.voxelCount.toLocaleString()} voxels ` +
+    '(expected <2,000,000 on ds004884 1mm T1)');
+  assert.ok(clinicalCoverage < 0.20,
+    `clinical fast-mode coverage is too high: ${(clinicalCoverage * 100).toFixed(2)}% (expected <20%)`);
+  assert.ok(clinicalStats.bboxSize[1] <= 180 && clinicalStats.bboxSize[2] <= 165,
+    `clinical fast-mode bbox is too large: [${clinicalStats.bboxSize.join(', ')}] ` +
+    '(expected y<=180 and z<=165)');
+
+  console.log('Clinical SynthStrip regression OK: fast-mode mask is not overgrown.');
 })().catch((err) => {
   console.error(err.stack || err.message);
   process.exit(1);

@@ -649,14 +649,11 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
         t.diagnostic(`SynthStrip elapsed: ${((Date.now() - synthStart) / 1000).toFixed(1)}s`);
 
         await page.click('#runRegistrationButton');
-        // Browser-side WASM SynthMorph one-pass takes 5-10 min on M-series
-        // (much slower than CPU EP in Node ~30 s). Waiting for the full
-        // run to complete makes the smoke suite painful. Instead, this
-        // smoke just confirms the run STARTS cleanly (worker op + UI
-        // wiring + manifest lookup all reach the worker without erroring),
-        // which is what the browser-level wiring needs to validate.
-        // End-to-end correctness is gated by the Node-side
-        // `npm run test:registration-parity` (Phase 3.6).
+        // The browser SynthMorph graph is spatially retargeted to
+        // 48x48x64, so this smoke now requires the registration stage to
+        // complete. The old 160-grid model only validated kickoff because
+        // its first WebGPU activation was multi-gigabyte and failed before
+        // forward completion.
         const START_TIMEOUT_MS = 60000;
         const startedT = Date.now();
         let registerStarted = false;
@@ -679,21 +676,41 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
           );
         }
         t.diagnostic(`Registration started after ${((Date.now() - startedT) / 1000).toFixed(1)}s; ` +
-          'completion gated by test:registration-parity (Node).');
+          'waiting for browser completion.');
 
-        // Wait briefly to surface immediate WIRING errors (manifest miss,
-        // worker dispatch typo, etc.). Tolerate the actual SynthMorph
-        // forward erroring out — headless Chromium may not have WebGPU
-        // and the WASM heap can't hold the model + intermediates. Real
-        // forward correctness is gated by test:registration-parity (Node).
-        await sleep(5000);
+        const COMPLETE_TIMEOUT_MS = 180000;
+        const completeT = Date.now();
+        let registerComplete = false;
+        let registerError = null;
+        while (Date.now() - completeT < COMPLETE_TIMEOUT_MS) {
+          registerComplete = await page.evaluate(
+            () => Boolean(
+              window.app &&
+              window.app.executor &&
+              window.app.executor.stepStatus &&
+              window.app.executor.stepStatus.register === 'complete'
+            )
+          );
+          if (registerComplete) break;
+          registerError = consoleMessages.find(m =>
+            m.includes('Register error:') ||
+            m.includes('Worker error:') ||
+            m.startsWith('[main:log] Error:') ||
+            m.includes('[main:pageerror]') ||
+            m.includes('[worker:error]')
+          );
+          if (registerError) break;
+          await sleep(500);
+        }
+        assert.ok(registerComplete,
+          `Registration did not complete in browser within ${COMPLETE_TIMEOUT_MS}ms` +
+          (registerError ? `\nfirst error: ${registerError}` : '') +
+          `\nconsole: ${consoleMessages.slice(-60).join('\n')}`);
+        t.diagnostic(`Registration completed after ${((Date.now() - completeT) / 1000).toFixed(1)}s.`);
+
         const wiringErrs = consoleMessages.filter(m =>
           m.includes('pageerror') ||
-          (m.includes(':error]') &&
-           // ORT's WASM-side OOM surfaces as a numeric error code (the
-           // pointer to the C++ exception object). Anything else is a
-           // genuine wiring bug we want to flag.
-           !/Register error: \d+$/.test(m))
+          m.includes(':error]')
         );
         assert.equal(wiringErrs.length, 0,
           `unexpected wiring errors after registration kickoff:\n${wiringErrs.join('\n')}`);
