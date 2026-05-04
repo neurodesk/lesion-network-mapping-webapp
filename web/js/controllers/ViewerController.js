@@ -81,7 +81,7 @@ export class ViewerController {
           entry.file,
           entry.colormap || 'sct-spinalcord',
           entry.opacity ?? 0.5,
-          { stage: entry.stage }
+          { stage: entry.stage, scalar: entry.scalar, symmetricCal: entry.symmetricCal }
         );
       }
     } catch (error) {
@@ -131,6 +131,26 @@ export class ViewerController {
     }
   }
 
+  configureScalarVolume(index, colormap, options = {}) {
+    const volume = this.nv.volumes[index];
+    if (!volume) return;
+
+    const range = this.getVolumeDataRange(volume);
+    if (options.symmetricCal) {
+      const limit = Math.max(range.maxAbs, 1e-6);
+      volume.cal_min = -limit;
+      volume.cal_max = limit;
+    } else {
+      volume.cal_min = range.min;
+      volume.cal_max = range.max > range.min ? range.max : range.min + 1;
+    }
+    volume.colormap = colormap;
+    volume.interpolation = true;
+    if (typeof this.nv.setColormap === 'function' && volume.id) {
+      this.nv.setColormap(volume.id, colormap);
+    }
+  }
+
   async loadOverlay(file, colormap = 'red', opacity = 0.5, options = {}) {
     try {
       const url = URL.createObjectURL(file);
@@ -144,7 +164,13 @@ export class ViewerController {
 
       const overlayIndex = this.nv.volumes.length - 1;
       if (overlayIndex > 0) {
-        this.configureSegmentationVolume(overlayIndex, colormap);
+        if (options.scalar) {
+          this.configureScalarVolume(overlayIndex, colormap, {
+            symmetricCal: options.symmetricCal
+          });
+        } else {
+          this.configureSegmentationVolume(overlayIndex, colormap);
+        }
         this.nv.setOpacity(overlayIndex, opacity);
         this.nv.updateGLVolume();
         this.nv.drawScene?.();
@@ -245,6 +271,28 @@ export class ViewerController {
       if (Number.isFinite(maxValue)) return maxValue;
     }
     return volume?.global_max ?? 1;
+  }
+
+  getVolumeDataRange(volume) {
+    let minValue = Infinity;
+    let maxValue = -Infinity;
+    if (volume?.img?.length) {
+      for (let i = 0; i < volume.img.length; i++) {
+        const value = volume.img[i];
+        if (!Number.isFinite(value)) continue;
+        if (value < minValue) minValue = value;
+        if (value > maxValue) maxValue = value;
+      }
+    }
+    if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+      minValue = Number.isFinite(volume?.global_min) ? volume.global_min : 0;
+      maxValue = Number.isFinite(volume?.global_max) ? volume.global_max : 1;
+    }
+    return {
+      min: minValue,
+      max: maxValue,
+      maxAbs: Math.max(Math.abs(minValue), Math.abs(maxValue))
+    };
   }
 
   getCurrentFile() {

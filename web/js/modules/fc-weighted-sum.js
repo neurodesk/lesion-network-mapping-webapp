@@ -6,9 +6,10 @@
 //     (output of summaryToNetworkWeights below). Order matches
 //     `networkOrder` from the FC pack's index.json (Visual, Somatomotor,
 //     DorsalAttention, VentralAttention, Limbic, Frontoparietal, Default).
-//   - tMaps: array of 7 Float32Arrays, each length X*Y*Z, one per network.
-//     Per-network group t-statistic against zero of the seed-to-voxel
-//     Fisher-z connectivity. Decoded from the packed .bin via decodeFcPack.
+//   - tMaps: array of 7 Float32Arrays, each length X*Y*Z in NIfTI voxel
+//     order (x + y*X + z*X*Y), one per network. Per-network group
+//     t-statistic against zero of the seed-to-voxel Fisher-z connectivity.
+//     Decoded from the packed .bin via decodeFcPack.
 //   - dims: [X, Y, Z] — the atlas grid (Yeo7 = 99x117x95 2mm).
 //
 // Output:
@@ -46,12 +47,46 @@ export function fcWeightedSum(networkWeights, tMaps, dims) {
   return out;
 }
 
-// Read the packed .bin contents into 7 typed-array views, no copy. The
-// arrayBuffer is the result of fetch(...).arrayBuffer(). The index JSON
-// is the companion file emitted by scripts/build_yeo7_connectome.py.
+export function rowMajorToNiftiOrder(data, dims) {
+  if (!Array.isArray(dims) || dims.length !== 3) {
+    throw new Error('rowMajorToNiftiOrder: dims must be [X, Y, Z]');
+  }
+  const [X, Y, Z] = dims;
+  const expected = X * Y * Z;
+  if (data.length !== expected) {
+    throw new Error(`rowMajorToNiftiOrder: data length ${data.length} != ${expected}`);
+  }
+
+  const out = new Float32Array(expected);
+  for (let x = 0; x < X; x++) {
+    const srcX = x * Y * Z;
+    for (let y = 0; y < Y; y++) {
+      const srcXY = srcX + y * Z;
+      for (let z = 0; z < Z; z++) {
+        out[x + y * X + z * X * Y] = data[srcXY + z];
+      }
+    }
+  }
+  return out;
+}
+
+function fcPackVoxelOrder(index) {
+  const order = index.voxelOrder || index.storageOrder || 'row-major';
+  if (order === 'row-major' || order === 'c-order') return 'row-major';
+  if (order === 'nifti' || order === 'f-order' || order === 'fortran') return 'nifti';
+  throw new Error(`decodeFcPack: unsupported voxelOrder '${order}'`);
+}
+
+// Read the packed .bin contents into 7 typed arrays. The arrayBuffer is the
+// result of fetch(...).arrayBuffer(). The index JSON is the companion file
+// emitted by scripts/build_yeo7_connectome.py.
 //
 // Returns:
 //   { tMaps: Float32Array[7], byNetwork: { [name]: Float32Array }, voxelsPerMap }
+//
+// Current Yeo7 packs were written by NumPy's ndarray.tofile(), which emits
+// C/row-major bytes. The rest of this app uses NIfTI order, so decode at the
+// asset boundary before any thresholding or NIfTI serialization happens.
 export function decodeFcPack(arrayBuffer, index) {
   if (!index || !Array.isArray(index.shape) || index.shape.length !== 4) {
     throw new Error('decodeFcPack: index.shape must be [7, X, Y, Z]');
@@ -67,9 +102,12 @@ export function decodeFcPack(arrayBuffer, index) {
       `decodeFcPack: voxelsPerMap mismatch ${voxelsPerMap} vs ${index.voxelsPerMap}`
     );
   }
+  const voxelOrder = fcPackVoxelOrder(index);
+  const dims = [X, Y, Z];
   const tMaps = [];
   for (let k = 0; k < 7; k++) {
-    tMaps.push(new Float32Array(arrayBuffer, k * voxelsPerMap * 4, voxelsPerMap));
+    const raw = new Float32Array(arrayBuffer, k * voxelsPerMap * 4, voxelsPerMap);
+    tMaps.push(voxelOrder === 'row-major' ? rowMajorToNiftiOrder(raw, dims) : raw);
   }
   const byNetwork = {};
   if (index.networkLabels) {

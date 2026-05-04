@@ -93,6 +93,8 @@ assert.ok(yeoFc.indexFilename && /\.json$/i.test(yeoFc.indexFilename),
   'yeo7-fc-pack must declare an indexFilename (byte-offsets JSON)');
 assert.equal(yeoFc.parcelCount, 7, "Yeo7 FC pack must declare parcelCount=7");
 assert.equal(yeoFc.dtype, 'float32');
+assert.equal(yeoFc.voxelOrder, 'row-major',
+  'Yeo7 FC pack must declare its NumPy row-major storage order');
 assert.equal(yeoFc.statistic, 'tstat');
 
 // Phase 2a.2: lesion-segmentation model (SynthStroke baseline) registered.

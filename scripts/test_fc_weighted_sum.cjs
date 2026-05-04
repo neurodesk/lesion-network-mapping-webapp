@@ -14,7 +14,8 @@ const { pathToFileURL } = require('node:url');
   const {
     fcWeightedSum,
     summaryToNetworkWeights,
-    decodeFcPack
+    decodeFcPack,
+    rowMajorToNiftiOrder
   } = await import(moduleUrl);
 
   // ---- decodeFcPack: split a packed .bin into 7 channel views ----
@@ -44,6 +45,47 @@ const { pathToFileURL } = require('node:url');
     // network-name lookup preserved.
     assert.equal(pack.byNetwork['Visual'], pack.tMaps[0]);
     assert.equal(pack.byNetwork['Default'], pack.tMaps[6]);
+  }
+
+  // ---- decodeFcPack: row-major asset bytes are converted to NIfTI order ----
+  // The Yeo7 development FC pack was emitted by NumPy tofile(), which stores
+  // each [X,Y,Z] map with z as the fastest axis. The app writes NIfTI and
+  // runs connected components in x-fast order, so decodeFcPack must transpose
+  // the map at the asset boundary.
+  {
+    const dims = [2, 3, 4];
+    const voxelsPerMap = dims[0] * dims[1] * dims[2];
+    const raw = new Float32Array(7 * voxelsPerMap);
+    const rowMajorIndex = (x, y, z) => x * dims[1] * dims[2] + y * dims[2] + z;
+    const niftiIndex = (x, y, z) => x + y * dims[0] + z * dims[0] * dims[1];
+    for (let k = 0; k < 7; k++) {
+      for (let x = 0; x < dims[0]; x++)
+        for (let y = 0; y < dims[1]; y++)
+          for (let z = 0; z < dims[2]; z++)
+            raw[k * voxelsPerMap + rowMajorIndex(x, y, z)] =
+              1000 * k + 100 * x + 10 * y + z;
+    }
+    const index = {
+      shape: [7, ...dims],
+      voxelsPerMap,
+      dtype: 'float32',
+      voxelOrder: 'row-major'
+    };
+    const pack = decodeFcPack(raw.buffer, index);
+    assert.equal(pack.tMaps.length, 7);
+    for (let k = 0; k < 7; k++) {
+      for (let x = 0; x < dims[0]; x++)
+        for (let y = 0; y < dims[1]; y++)
+          for (let z = 0; z < dims[2]; z++)
+            assert.equal(
+              pack.tMaps[k][niftiIndex(x, y, z)],
+              1000 * k + 100 * x + 10 * y + z,
+              `channel ${k} voxel ${x},${y},${z} must be x-fast after decode`
+            );
+    }
+
+    const direct = rowMajorToNiftiOrder(raw.subarray(0, voxelsPerMap), dims);
+    assert.equal(direct[niftiIndex(1, 2, 3)], 123);
   }
 
   // ---- summaryToNetworkWeights: convert summarizeNetworkOverlap output
@@ -142,7 +184,7 @@ const { pathToFileURL } = require('node:url');
     );
   }
 
-  console.log('fc-weighted-sum OK: 4 functional cases + decodeFcPack + summaryToNetworkWeights.');
+  console.log('fc-weighted-sum OK: 5 functional cases + decodeFcPack voxel order + summaryToNetworkWeights.');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

@@ -180,9 +180,10 @@
       "atlasResolutionMm": 2,
       "parcelCount": 7,
       "dtype": "float32",
+      "voxelOrder": "row-major",
       "statistic": "tstat",
       "supportStatus": "supported",
-      "_comment": "Phase 38 group-FC pack. 7 brain-wide one-sample t-maps (one per Yeo network) stacked Float32 in row-major order. Computed by scripts/build_yeo7_connectome.py from development_fmri 155 subjects via nilearn fetch_development_fmri (Richardson 2018, movie-watching task, CC0 — no DUT required). Per-subject Yeo7 ROI mean -> Pearson r-map vs every brain voxel -> Fisher-z -> group t-stat. Same 99x117x95 2mm grid as the yeo7-2mm atlas. Group t-stat range observed [-13.47, 30.72] (vs [-13.85, 19.74] for the prior ADHD-200 N=40 pack — peak +stat ~55% higher with the larger sample)."
+      "_comment": "Phase 38 group-FC pack. 7 brain-wide one-sample t-maps (one per Yeo network) stacked Float32 in NumPy row-major order; decodeFcPack transposes channels to NIfTI x-fast order before thresholding or display. Computed by scripts/build_yeo7_connectome.py from development_fmri 155 subjects via nilearn fetch_development_fmri (Richardson 2018, movie-watching task, CC0 — no DUT required). Per-subject Yeo7 ROI mean -> Pearson r-map vs every brain voxel -> Fisher-z -> group t-stat. Same 99x117x95 2mm grid as the yeo7-2mm atlas. Group t-stat range observed [-13.47, 30.72] (vs [-13.85, 19.74] for the prior ADHD-200 N=40 pack — peak +stat ~55% higher with the larger sample)."
     },
     {
       "id": "gsp1000-schaefer400-4mm",

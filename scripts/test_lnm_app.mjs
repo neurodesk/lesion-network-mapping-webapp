@@ -155,6 +155,12 @@ assert.match(src, /['"]yeo7-fc-pack['"]/,
   'orchestrator must reference the yeo7-fc-pack connectome asset id literal');
 assert.match(src, /\bloadConnectomeFromManifest\s*\(/,
   'orchestrator must load the FC pack via loadConnectomeFromManifest');
+assert.match(src, /this\.networkMapAffine\s*=\s*flatAffine/,
+  'runFcNetworkMap must retain the atlas affine for network-map NIfTI outputs');
+assert.match(src, /affine:\s*this\.networkMapAffine/,
+  'network-map NIfTI writers must use the Yeo atlas affine, not a default centered grid');
+assert.match(src, /scalar:\s*true[\s\S]*?symmetricCal:\s*true/,
+  'network-map overlay must render as a scalar t-map with symmetric calibration');
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
 

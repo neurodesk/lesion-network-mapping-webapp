@@ -166,6 +166,7 @@ def main(n_subjects: int = 30, do_upload: bool = False, dataset: str = "adhd"):
         "atlasAssetId": "yeo7-2mm",
         "networkLabels": {str(k + 1): name for k, name in enumerate(NETWORK_NAMES)},
         "statistic": "group-tstat",
+        "voxelOrder": "row-major",
         "source": f"{dataset_label}, {n_subjects} subjects, nilearn fetch_{dataset}",
         "atlasResolutionMm": 2,
     }

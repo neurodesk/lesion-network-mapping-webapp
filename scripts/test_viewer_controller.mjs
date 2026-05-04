@@ -65,7 +65,10 @@ function makeNv() {
         id: `vol-${nv.volumes.length}`,
         url: opts.url, name: opts.name,
         cal_min: 0, cal_max: 1, colormap: opts.colormap || 'gray',
-        interpolation: true, img: new Float32Array([1])
+        interpolation: true,
+        img: opts.name === 'network.nii'
+          ? new Float32Array([-2, 0, 4])
+          : new Float32Array([1])
       });
     },
     setOpacity(idx, op) { calls.setOpacity.push([idx, op]); },
@@ -220,4 +223,26 @@ function fakeFile(name) {
   );
 }
 
-console.log('ViewerController OK: 9 cases (Phase 4 call-shape, overlay path, view + stage + colormap).');
+// ---- Test 10: scalar overlays keep signed range and interpolation ----
+{
+  const { nv, calls } = makeNv();
+  const vc = new ViewerController({ nv });
+  await vc.loadBaseVolume(fakeFile('t1.nii'));
+  await vc.loadOverlay(fakeFile('network.nii'), 'blue2red', 0.5, {
+    stage: 'network-map',
+    scalar: true,
+    symmetricCal: true
+  });
+  assert.equal(nv.volumes.length, 2);
+  assert.equal(nv.volumes[1].interpolation, true,
+    'scalar t-map overlay must keep interpolation enabled');
+  assert.equal(nv.volumes[1].cal_min, -4,
+    'scalar t-map overlay must use symmetric negative cal_min');
+  assert.equal(nv.volumes[1].cal_max, 4,
+    'scalar t-map overlay must use symmetric positive cal_max');
+  assert.equal(nv.volumes[1].colormap, 'blue2red');
+  assert.deepEqual(calls.setColormap.at(-1), ['vol-1', 'blue2red']);
+  assert.equal(vc.volumeStageIndices.get('network-map'), 1);
+}
+
+console.log('ViewerController OK: 10 cases (Phase 4 call-shape, overlay path, scalar overlays, view + stage + colormap).');

@@ -43,6 +43,14 @@ function dimsEqual(a, b) {
     a.every((value, index) => value === b[index]);
 }
 
+function flattenAffine3Rows(affine) {
+  return [
+    affine[0][0], affine[0][1], affine[0][2], affine[0][3],
+    affine[1][0], affine[1][1], affine[1][2], affine[1][3],
+    affine[2][0], affine[2][1], affine[2][2], affine[2][3]
+  ];
+}
+
 function computeNetworkSizes(atlasData, networkLabels) {
   const sizes = {};
   for (let i = 0; i < atlasData.length; i++) {
@@ -84,6 +92,7 @@ export class LesionNetworkMappingApp {
     this.networkMapData = null;    // Phase 5: raw Float32Array for re-thresholding
     this.networkMapDims = null;
     this.networkMapSpacing = null;
+    this.networkMapAffine = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.mniLesionFile = null;       // Phase 6: warped lesion at MNI160 1mm (pre-resample)
     this._mniLesionResolver = null;  // Phase 6: one-shot promise for warp-mask stage data
@@ -733,7 +742,10 @@ export class LesionNetworkMappingApp {
           }
         }
       });
-    const pack = decodeFcPack(arrayBuffer, index);
+    const pack = decodeFcPack(arrayBuffer, {
+      voxelOrder: manifestEntry.voxelOrder,
+      ...index
+    });
 
     const NETWORK_ORDER = [
       'Visual', 'Somatomotor', 'DorsalAttention', 'VentralAttention',
@@ -741,6 +753,16 @@ export class LesionNetworkMappingApp {
     ];
     const weights = summaryToNetworkWeights(this.overlapResult.summary, NETWORK_ORDER);
     const dims = index.shape.slice(1);   // shape = [7, X, Y, Z]
+    const atlasAssetId = index.atlasAssetId || manifestEntry.atlasAssetId || 'yeo7-2mm';
+    const atlas = await loadAtlasFromManifest(atlasAssetId);
+    if (!dimsEqual(dims, atlas.dims)) {
+      throw new Error(
+        `FC pack grid ${dims.join('x')} does not match ${atlasAssetId} atlas ` +
+        `${atlas.dims.join('x')}`
+      );
+    }
+    const atlasAffine = affineFromHeader(atlas.header);
+    const flatAffine = flattenAffine3Rows(atlasAffine);
     this.updateOutput(
       `Computing network map: weights=[${
         Array.from(weights).map(w => w.toFixed(2)).join(', ')
@@ -751,8 +773,9 @@ export class LesionNetworkMappingApp {
     // Stash for Phase 5 re-thresholding without recomputing the FC sum.
     this.networkMapData = fcMap;
     this.networkMapDims = dims;
-    const spacingMm = manifestEntry.atlasResolutionMm || 2;
+    const spacingMm = manifestEntry.atlasResolutionMm || atlas.manifestEntry?.resolutionMm || 2;
     this.networkMapSpacing = [spacingMm, spacingMm, spacingMm];
+    this.networkMapAffine = flatAffine;
 
     // Wrap as a NIfTI for download / overlay. The Yeo atlas's spacing /
     // affine is the canonical pose for the FC pack — manifestEntry from
@@ -761,6 +784,7 @@ export class LesionNetworkMappingApp {
     const niftiBuffer = writeNifti1(fcMap, {
       dims,
       spacing: this.networkMapSpacing,
+      affine: this.networkMapAffine,
       description: 'LNM Yeo7 FC weighted sum'
     });
     this.networkMapFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map.nii');
@@ -768,7 +792,11 @@ export class LesionNetworkMappingApp {
     // Render as overlay on the structural / lesion view, blue-red diverging.
     if (this.structuralFile || this.lesionFile) {
       this.viewerController
-        .loadOverlay(this.networkMapFile, 'redyell', 0.5, { stage: 'network-map' })
+        .loadOverlay(this.networkMapFile, 'blue2red', 0.5, {
+          stage: 'network-map',
+          scalar: true,
+          symmetricCal: true
+        })
         .catch(err => this.updateOutput(`Network-map render error: ${err.message}`));
     }
     const dlBtn = document.getElementById('downloadNetworkMapButton');
@@ -840,6 +868,7 @@ export class LesionNetworkMappingApp {
     const niftiBuffer = writeNifti1(mask, {
       dims: this.networkMapDims,
       spacing: this.networkMapSpacing,
+      affine: this.networkMapAffine,
       description: `LNM thresholded ${mode}=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
     });
     this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii');
@@ -1079,11 +1108,7 @@ export class LesionNetworkMappingApp {
     );
 
     // Wrap the Yeo-grid mask as a NIfTI and adopt it as the lesion file.
-    const flatAffine = [
-      atlasAffine[0][0], atlasAffine[0][1], atlasAffine[0][2], atlasAffine[0][3],
-      atlasAffine[1][0], atlasAffine[1][1], atlasAffine[1][2], atlasAffine[1][3],
-      atlasAffine[2][0], atlasAffine[2][1], atlasAffine[2][2], atlasAffine[2][3]
-    ];
+    const flatAffine = flattenAffine3Rows(atlasAffine);
     const yeoNifti = writeNifti1(yeoMask, {
       dims: atlas.dims,
       spacing: [2, 2, 2],

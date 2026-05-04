@@ -49,6 +49,7 @@ Common issues it catches:
 - The old full-resolution SynthMorph ONNX graph OOMed browser runtimes because its first activation was ~4.7 GiB. Keep `npm run test:synthmorph-browser-model` green whenever the registration manifest or converter changes; it pins the browser graph dimensions, cache key, provider routing, and activation budget. The current 48×48×64 graph still contains 3D MaxPool nodes, so `browserRuntime.executionProviders` is `['wasm']`; ORT WebGPU rejects NHWC 3D pooling.
 - 2-channel softmax outputs (e.g. SynthStroke baseline) must be collapsed to a single logit (`logit_stroke - logit_bg`) before `runPatch` consumes them. Treating them as a 1-channel logit produces whole-brain coverage as a regression.
 - F-order NIfTI vs row-major NDHWC tensor layout: registration.js operates on F-order voxel arrays; SynthMorph forward consumes NDHWC; the worker handles both transpositions. Do not change the layout contract without updating `test_registration.cjs` + the parity fixture.
+- Yeo7 FC packs are stored as NumPy row-major channels. `decodeFcPack()` transposes each map to NIfTI x-fast order, and `runFcNetworkMap()` writes network-map and threshold-map NIfTIs with the Yeo atlas affine; otherwise NiiVue renders striped or spatially misplaced scalar overlays.
 - Bridge from MNI160 1mm warp output to Yeo7 atlas grid: `applyRegistrationToLesion()` invokes `runWarpMask` (worker), awaits the `'mni-lesion'` stage data via a one-shot resolver, and resamples onto the atlas with `resampleAffine(..., 'nearest')`. The output replaces `this.lesionFile` so downstream stages run unchanged.
 - `runFullPipeline()` has two branches. (a) Manual: a Yeo-grid (99×117×95) lesion mask is already loaded → skip seg/register/bridge. (b) Auto: structural T1 only → full chain. The dim-probe gate enforces 99×117×95 exactly to match the overlap reducer.
 - Loading a structural image must never start SynthStrip or any other processing automatically. `setStructural()` may load the viewer and auto-select `lnm-yeo-auto`, but computation starts only from `Run analysis` or an explicit per-stage button.
@@ -70,7 +71,7 @@ Common issues it catches:
 | `npm run test:volume-utils` | 3D resample / connectedComponents3D / removeSmallComponents reused across pipeline stages |
 | `npm run test:brain-extraction` | SynthStrip orchestration helpers (header round-trip, RAS reorientation, conform/center-pad) plus adaptive fast-mode target spacing regression |
 | `npm run test:registration` | SVF integration (scaling-and-squaring), displacement-field upsample, warpVolume — synthetic-warp roundtrip |
-| `npm run test:fc-weighted-sum` | fcWeightedSum + decodeFcPack + summaryToNetworkWeights, synthetic 3-parcel toy connectome |
+| `npm run test:fc-weighted-sum` | fcWeightedSum + decodeFcPack row-major→NIfTI voxel-order conversion + summaryToNetworkWeights, synthetic 3-parcel toy connectome |
 | `npm run test:threshold` | applyThreshold (absolute / percentile, one-sided / symmetric, with minClusterVoxels) + quantileAbsValue |
 | `npm run test:resample` | affineFromHeader + invertAffine + resampleAffine (5 cases: identity, downsample, oob, trilinear, validation) |
 | `npm run test:resample-parity` | Yeo grid → MNI160 1mm → Yeo grid roundtrip on a 6³ phantom: Dice = 1.0 + centroid drift < 1 voxel |
