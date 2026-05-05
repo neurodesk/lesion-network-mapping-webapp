@@ -25,6 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as niftiModule from 'nifti-reader-js';
 import { writeNifti1 } from '../web/js/modules/nifti-writer.js';
+import { LESION_MASK_COLORMAP_ID } from '../web/js/app/lnm-labels.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -324,6 +325,37 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'setStructural must still select the auto T1 pipeline for the later Run analysis click');
   assert.equal(synthStripCalls, 0,
     'setStructural must not call runBrainExtraction; users explicitly start processing');
+}
+
+// ---- Test 7a: lesion masks render with the dedicated blue colormap ----
+{
+  const app = makeApp();
+  const overlayCalls = [];
+  const renderedStacks = [];
+  app.structuralFile = { name: 'subject-t1.nii' };
+  app.networkMapFile = { name: 'network-map.nii' };
+  app.networkMapSpacing = [1, 1, 1];
+  app.viewerController = {
+    loadOverlay: async (...args) => { overlayCalls.push(args); },
+    loadVolumeStack: async (entries) => { renderedStacks.push(entries); }
+  };
+  const lesion = { name: 'manual-lesion.nii' };
+
+  await app.setLesion(lesion);
+  assert.equal(overlayCalls.at(-1)[1], LESION_MASK_COLORMAP_ID,
+    'manual lesion overlays must render with the blue lesion colormap');
+
+  await app.displayNetworkMapOnYeoTemplate({
+    data: new Uint8Array([0, 1, 1, 0, 0, 1, 0, 0]),
+    dims: [2, 2, 2]
+  }, [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ]);
+  const lesionEntry = renderedStacks.at(-1).find(entry => entry.stage === 'lesion');
+  assert.equal(lesionEntry.colormap, LESION_MASK_COLORMAP_ID,
+    'Yeo-grid lesion overlays must render with the blue lesion colormap');
 }
 
 // ---- Test 8: worker-backed stages resolve only after their output arrives ----
@@ -1011,6 +1043,9 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
 {
   const app = makeApp();
   app.structuralFile = { name: 't1.nii' };
+  app.viewerController = {
+    getVolumeIndexForStage: stage => stage === 'structural' ? 0 : null
+  };
 
   const makeToggle = () => ({
     checked: true,
@@ -1124,7 +1159,9 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const restoreDocument = useMockElements(toggles);
   const stageVisibilityCalls = [];
   const drawingVisibilityCalls = [];
+  const activeStages = new Set(['structural', 'brainmask', 'segmentation', 'lesion', 'threshold-preview', 'atlas-qc']);
   app.viewerController = {
+    getVolumeIndexForStage: stage => activeStages.has(stage) ? 1 : null,
     setStageVisible: (stage, visible) => {
       stageVisibilityCalls.push([stage, visible]);
       return true;
@@ -1157,12 +1194,126 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       'lesion toggle must hide the active editable drawing overlay');
 
     listeners['layerToggleLesionMask:change']({ target: { checked: true } });
+    await waitForMicrotaskCondition(() => drawingVisibilityCalls.at(-1) === true,
+      'lesion toggle must restore the active editable drawing overlay');
     assert.equal(drawingVisibilityCalls.at(-1), true,
       'lesion toggle must restore the active editable drawing overlay');
 
     listeners['layerToggleAtlasQc:change']({ target: { checked: false } });
     assert.deepEqual(stageVisibilityCalls.at(-1), ['atlas-qc', false],
       'atlas QC toggle must target the subject-space atlas viewer stage');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 16a: layer controls reflect the active viewer stack, not stale files ----
+{
+  const app = makeApp();
+  app.structuralFile = { name: 't1.nii' };
+  app.brainmaskFile = { name: 'brainmask.nii' };
+  app.lesionMaskFile = { name: 'lesion-mask.nii' };
+  app.lesionFile = { name: 'lesion.nii' };
+  app.patientAtlasFile = { name: 'atlas-patient.nii' };
+  app.patientThresholdedMaskFile = { name: 'threshold-patient.nii' };
+  const activeStages = new Set(['structural', 'threshold-preview']);
+  app.viewerController = {
+    getVolumeIndexForStage: stage => activeStages.has(stage) ? 1 : null
+  };
+  const makeToggle = () => ({ checked: true, disabled: false });
+  const toggles = {
+    layerToggleT1: makeToggle(),
+    layerToggleBrainMask: makeToggle(),
+    layerToggleLesionMask: makeToggle(),
+    layerToggleThresholdMap: makeToggle(),
+    layerToggleAtlasQc: makeToggle()
+  };
+  const restoreDocument = useMockElements(toggles);
+
+  try {
+    app.refreshViewerLayerControls();
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(toggles).map(([id, el]) => [id, { checked: el.checked, disabled: el.disabled }])),
+      {
+        layerToggleT1: { checked: true, disabled: false },
+        layerToggleBrainMask: { checked: false, disabled: false },
+        layerToggleLesionMask: { checked: false, disabled: false },
+        layerToggleThresholdMap: { checked: true, disabled: false },
+        layerToggleAtlasQc: { checked: false, disabled: false }
+      },
+      'final threshold view controls must be unchecked for inactive layers but enabled when data exists'
+    );
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 16b: checking an available inactive layer adds it to the viewer stack ----
+{
+  const app = makeApp();
+  app.structuralFile = { name: 't1.nii' };
+  app.brainmaskFile = { name: 'brainmask.nii' };
+  app.lesionMaskFile = { name: 'lesion-mask.nii' };
+  app.patientAtlasFile = { name: 'atlas-patient.nii' };
+  app.patientThresholdedMaskFile = { name: 'threshold-patient.nii' };
+  const activeStages = new Set(['structural', 'threshold-preview']);
+  const listeners = {};
+  const overlayCalls = [];
+  const visibilityCalls = [];
+  const makeToggle = id => ({
+    checked: true,
+    disabled: false,
+    addEventListener: (eventName, handler) => { listeners[`${id}:${eventName}`] = handler; }
+  });
+  const toggles = {
+    layerToggleT1: makeToggle('layerToggleT1'),
+    layerToggleBrainMask: makeToggle('layerToggleBrainMask'),
+    layerToggleLesionMask: makeToggle('layerToggleLesionMask'),
+    layerToggleThresholdMap: makeToggle('layerToggleThresholdMap'),
+    layerToggleAtlasQc: makeToggle('layerToggleAtlasQc')
+  };
+  const restoreDocument = useMockElements(toggles);
+  app.viewerController = {
+    getVolumeIndexForStage: stage => activeStages.has(stage) ? 1 : null,
+    loadOverlay: async (file, colormap, opacity, options = {}) => {
+      overlayCalls.push([file, colormap, opacity, options]);
+      if (options.stage) activeStages.add(options.stage);
+    },
+    setStageVisible: (stage, visible) => {
+      visibilityCalls.push([stage, visible]);
+      return activeStages.has(stage);
+    }
+  };
+
+  try {
+    app.bindViewerLayerToggles();
+    assert.equal(toggles.layerToggleBrainMask.checked, false,
+      'inactive-but-available brain mask starts unchecked');
+    assert.equal(toggles.layerToggleBrainMask.disabled, false,
+      'inactive-but-available brain mask can be activated');
+
+    listeners['layerToggleBrainMask:change']({ target: { checked: true } });
+    await waitForMicrotaskCondition(() => activeStages.has('brainmask') && toggles.layerToggleBrainMask.checked,
+      'checking brain mask must load the brainmask overlay and refresh the checkbox');
+    assert.equal(overlayCalls.at(-1)[0], app.brainmaskFile,
+      'brain-mask activation must load the stored brain mask file');
+    assert.equal(overlayCalls.at(-1)[3].stage, 'brainmask');
+    assert.equal(toggles.layerToggleBrainMask.checked, true,
+      'brain-mask checkbox must become checked after the overlay is loaded');
+
+    listeners['layerToggleLesionMask:change']({ target: { checked: true } });
+    await waitForMicrotaskCondition(() => activeStages.has('segmentation') && toggles.layerToggleLesionMask.checked,
+      'checking lesion mask must load the lesion overlay and refresh the checkbox');
+    assert.equal(overlayCalls.at(-1)[0], app.lesionMaskFile,
+      'lesion activation must prefer the confirmed MNI160 lesion mask');
+    assert.equal(overlayCalls.at(-1)[3].stage, 'segmentation');
+
+    listeners['layerToggleAtlasQc:change']({ target: { checked: true } });
+    await waitForMicrotaskCondition(() => activeStages.has('atlas-qc') && toggles.layerToggleAtlasQc.checked,
+      'checking Yeo atlas must load the atlas-QC overlay and refresh the checkbox');
+    assert.equal(overlayCalls.at(-1)[0], app.patientAtlasFile,
+      'Yeo atlas activation must load the projected patient-space atlas');
+    assert.equal(overlayCalls.at(-1)[3].stage, 'atlas-qc');
   } finally {
     restoreDocument();
   }
@@ -1194,6 +1345,28 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'patient-space projection must render the patient layer stack');
   assert.equal(atlasRenders, 0,
     'patient-space projection must not fall back to the atlas preview');
+}
+
+// ---- Test 17a: final patient-space threshold view only shows T1 + threshold ----
+{
+  const app = makeApp();
+  app.structuralFile = { name: 't1.nii' };
+  app.brainmaskFile = { name: 'brainmask.nii' };
+  app.lesionMaskFile = { name: 'lesion-mask.nii' };
+  app.lesionFile = { name: 'lesion.nii' };
+  app.patientAtlasFile = { name: 'atlas-patient.nii' };
+  app.patientThresholdedMaskFile = { name: 'threshold-patient.nii' };
+  const renderedStacks = [];
+  app.viewerController = {
+    loadVolumeStack: async (entries) => { renderedStacks.push(entries); },
+    setStageVisible: () => true
+  };
+
+  await app.renderPatientLayerStack();
+
+  const stages = renderedStacks.at(-1).map(entry => entry.stage);
+  assert.deepEqual(stages, ['structural', 'threshold-preview'],
+    'final patient-space threshold view must load only the structural T1 and threshold map');
 }
 
 // ---- Test 17b: advanced atlas-alignment QC button mirrors subject-atlas
@@ -1400,17 +1573,15 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   await app.renderMniRegistrationQc();
   assert.deepEqual(renderedStacks.at(-1).map(entry => entry.stage), [
     'registration-template',
-    'registered-t1-mni160',
-    'atlas-qc'
-  ], 'MNI QC view must show fixed template, registered T1, and full Yeo atlas');
+    'registered-t1-mni160'
+  ], 'MNI QC view must show only the fixed template and registered T1');
   assert.equal(renderedStacks.at(-1).find(entry => entry.stage === 'registered-t1-mni160').opacity, 0.8,
     'MNI QC view must use the Patient/MNI blend slider for registered T1 opacity');
 
   await app.renderCheckerboardRegistrationQc();
   assert.deepEqual(renderedStacks.at(-1).map(entry => entry.stage), [
-    'registration-checkerboard',
-    'atlas-qc'
-  ], 'checkerboard QC view must show checkerboard plus full Yeo atlas');
+    'registration-checkerboard'
+  ], 'checkerboard QC view must show only the fixed-template/registered-T1 checkerboard');
   assert.ok(app.registrationCheckerboardFile,
     'checkerboard QC view must cache the generated checkerboard NIfTI');
 

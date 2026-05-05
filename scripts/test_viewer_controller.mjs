@@ -381,6 +381,7 @@ function fakeFile(name) {
     setDrawingEnabled: [],
     setPenValue: [],
     setDrawOpacity: [],
+    setDrawColormap: [],
     drawUndo: 0,
     drawAddUndoBitmap: 0,
     refreshDrawing: [],
@@ -415,6 +416,7 @@ function fakeFile(name) {
       this.opts.isFilledPen = filled;
     },
     setDrawOpacity(opacity) { calls.setDrawOpacity.push(opacity); },
+    setDrawColormap(colormap) { calls.setDrawColormap.push(colormap); },
     drawAddUndoBitmap() {
       calls.drawAddUndoBitmap += 1;
       this.currentDrawUndoBitmap += 1;
@@ -434,8 +436,17 @@ function fakeFile(name) {
     drawScene() { calls.drawScene += 1; }
   };
   const messages = [];
+  const lesionDrawColormap = {
+    R: [0, 0],
+    G: [0, 140],
+    B: [0, 255],
+    A: [0, 255],
+    I: [0, 1],
+    labels: ['Background', 'Lesion mask']
+  };
   const controller = new MaskDrawingController({
     nv,
+    defaultColormap: lesionDrawColormap,
     defaultOpacity: 0.65,
     updateOutput: (message) => messages.push(message)
   });
@@ -445,6 +456,8 @@ function fakeFile(name) {
     'ensureDrawing must create an empty drawing when none exists');
   assert.deepEqual(calls.setDrawOpacity.at(-1), 0.65,
     'ensureDrawing must set drawing opacity');
+  assert.equal(calls.setDrawColormap.at(-1), lesionDrawColormap,
+    'ensureDrawing must pass the lesion drawing colormap object to NiiVue');
   assert.equal(calls.setDrawingEnabled.at(-1), true,
     'ensureDrawing must enable drawing mode');
   assert.deepEqual(calls.setPenValue.at(-1), [1, false],
@@ -462,6 +475,8 @@ function fakeFile(name) {
     'seed masks must load through NiiVue loadDrawingFromUrl');
   assert.equal(calls.loadDrawingFromUrl[0][0], 'blob:fake-seed.nii');
   assert.equal(calls.loadDrawingFromUrl[0][1], true);
+  assert.equal(calls.setDrawColormap.at(-1), lesionDrawColormap,
+    'seed drawings must pass the lesion drawing colormap object to NiiVue');
   assert.ok(messages.at(-1).includes('Editable lesion seed loaded'),
     'seed load should report an editable drawing');
 
@@ -511,6 +526,8 @@ function fakeFile(name) {
   controller.setVisible(true);
   assert.equal(calls.setDrawOpacity.at(-1), 0.65,
     'setVisible(true) must restore the editable drawing opacity');
+  assert.equal(calls.setDrawColormap.at(-1), lesionDrawColormap,
+    'setVisible(true) must restore the editable drawing colormap object');
   controller.close({ clearDrawing: true });
   assert.equal(calls.closeDrawing, 1,
     'accepted masks must be able to close and clear the drawing bitmap');

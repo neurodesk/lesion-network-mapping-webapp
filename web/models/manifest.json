@@ -83,34 +83,34 @@
     },
     {
       "id": "lnm-synthmorph-mni",
-      "filename": "models/lnm-synthmorph-mni-48x48x64.onnx",
-      "sizeBytes": 85116577,
-      "checksum": "sha256:d57442183d2d4ab2d579205807b8c72f5ca6b26e8178d64d74c66eabb6e32bba",
-      "cacheKey": "lnm-synthmorph-mni-brains-browser-48x48x64-v1",
-      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-synthmorph-mni-48x48x64.onnx",
-      "sourceVersion": "SynthMorph-brains-dice-vel-0.5-res-16-256f-Apache-2.0 spatially-retargeted-48x48x64",
+      "filename": "models/lnm-synthmorph-mni-48x64x80.onnx",
+      "sizeBytes": 85119961,
+      "checksum": "sha256:25ce269d060ee19228e78f9eaa0902e7094cdeab5fb20856ae771d9b6930652f",
+      "cacheKey": "lnm-synthmorph-mni-brains-browser-48x64x80-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-synthmorph-mni-48x64x80.onnx",
+      "sourceVersion": "SynthMorph-brains-dice-vel-0.5-res-16-256f-Apache-2.0 spatially-retargeted-48x64x80",
       "browserFormat": "onnx-fp32",
       "supportStatus": "supported",
-      "inputShape": [1, 48, 48, 64, 1],
-      "svfShape":   [1, 24, 24, 32, 3],
+      "inputShape": [1, 48, 64, 80, 1],
+      "svfShape":   [1, 24, 32, 40, 3],
       "targetSpacing": [1.0, 1.0, 1.0],
       "browserRuntime": {
         "sourceGrid": [160, 160, 192],
-        "inputDims": [48, 48, 64],
-        "svfDims": [24, 24, 32],
-        "downsampleSpacingMm": [3.3333333333, 3.3333333333, 3.0],
+        "inputDims": [48, 64, 80],
+        "svfDims": [24, 32, 40],
+        "downsampleSpacingMm": [3.3333333333, 2.5, 2.4],
         "executionProviders": ["wasm"],
         "webgpuUnsupportedOps": ["MaxPool3D"],
         "firstConvChannels": 256,
-        "maxActivationBytes": 150994944
+        "maxActivationBytes": 251658240
       },
       "preprocessing": {
         "axisOrder": "channelLast",
-        "normalize": "minmax",
+        "normalize": "masked-robust-p01-p99",
         "resample": "mni160-to-browserRuntime.inputDims",
         "padding": "center"
       },
-      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser model reuses the original SynthMorph weights on a 48x48x64 static graph so the largest first-conv activation is 144 MiB instead of ~4.7 GiB. The graph still contains 3D MaxPool nodes, so the worker routes it through WASM because ORT WebGPU does not support NHWC 3D pooling. The worker downsamples the MNI160 source/reference pair to 48x48x64, runs ONNX, then performs scaling-and-squaring SVF integration, 24x24x32 -> 160x160x192 displacement upsample, and spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py."
+      "_comment": "Phase 3 MNI registration. Exported from voxelmorph/synthmorph 'brains-dice-vel-0.5-res-16-256f.h5' (Hoffmann et al. 2022, Apache-2.0). Only the UNet backbone (layers 0-33 of the full network) is in the ONNX — output is the raw stationary velocity field at half-resolution. The browser model reuses the original SynthMorph weights on a 48x64x80 static graph so the largest first-conv activation is 240 MiB instead of ~4.7 GiB. The graph still contains 3D MaxPool nodes, so the worker routes it through WASM because ORT WebGPU does not support NHWC 3D pooling. The worker downsamples the MNI160 source/reference pair to 48x64x80, runs ONNX, then performs scaling-and-squaring SVF integration, 24x32x40 -> 160x160x192 displacement upsample, and spatial warp in pure JS (web/js/modules/registration.js); see scripts/convert_registration_model.py."
     }
   ],
   "atlasAssets": [

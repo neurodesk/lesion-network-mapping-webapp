@@ -3,6 +3,7 @@ export class MaskDrawingController {
     this.nv = options.nv;
     this.updateOutput = options.updateOutput || (() => {});
     this.defaultOpacity = options.defaultOpacity ?? 0.7;
+    this.defaultColormap = options.defaultColormap || 'gray';
     this.manualUndoSnapshots = [];
   }
 
@@ -14,10 +15,15 @@ export class MaskDrawingController {
     return globalThis.niivue?.PEN_TYPE || { PEN: 0, RECTANGLE: 1, ELLIPSE: 2 };
   }
 
+  applyDrawingStyle() {
+    this.nv?.setDrawColormap?.(this.defaultColormap);
+    this.nv?.setDrawOpacity?.(this.defaultOpacity);
+  }
+
   ensureDrawing() {
     if (!this.nv) throw new Error('MaskDrawingController: NiiVue instance is required');
     if (!this.nv.drawBitmap) this.nv.createEmptyDrawing?.();
-    this.nv.setDrawOpacity?.(this.defaultOpacity);
+    this.applyDrawingStyle();
     this.nv.setDrawingEnabled?.(true);
     this.setTool('paint');
   }
@@ -86,7 +92,7 @@ export class MaskDrawingController {
       this.nv.createEmptyDrawing?.();
       this.manualUndoSnapshots = [];
     }
-    this.nv?.setDrawOpacity?.(this.defaultOpacity);
+    this.applyDrawingStyle();
     this.nv?.setDrawingEnabled?.(true);
     this.setTool('paint');
     this.updateOutput('Blank editable lesion mask ready.');
@@ -101,7 +107,7 @@ export class MaskDrawingController {
     } finally {
       URL.revokeObjectURL(url);
     }
-    this.nv.setDrawOpacity?.(this.defaultOpacity);
+    this.applyDrawingStyle();
     this.nv.setDrawingEnabled?.(true);
     this.setTool('paint');
     this.updateOutput(`Editable lesion seed loaded: ${file.name}`);
@@ -175,6 +181,7 @@ export class MaskDrawingController {
   }
 
   setVisible(visible) {
+    if (visible) this.nv?.setDrawColormap?.(this.defaultColormap);
     this.nv?.setDrawOpacity?.(visible ? this.defaultOpacity : 0);
     this.nv?.drawScene?.();
   }

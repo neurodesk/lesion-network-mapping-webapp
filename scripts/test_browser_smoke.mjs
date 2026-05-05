@@ -645,7 +645,7 @@ test('Phase 3.7 browser smoke: structural T1 -> SynthMorph MNI registration',
         await page.setInputFiles('#structuralFileInput', structuralPath);
         await page.click('#runRegistrationButton');
         // The browser SynthMorph graph is spatially retargeted to
-        // 48x48x64, so this smoke now requires the registration stage to
+        // the manifest browser grid, so this smoke now requires the registration stage to
         // complete. The old 160-grid model only validated kickoff because
         // its first WebGPU activation was multi-gigabyte and failed before
         // forward completion.

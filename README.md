@@ -55,9 +55,9 @@ combination via [`web/js/modules/fc-weighted-sum.js`](web/js/modules/fc-weighted
 **SynthMorph** (Hoffmann 2022, Apache-2.0). Click "Run MNI registration"
 on a 160×160×192 1mm structural T1; the app fetches the SynthMorph
 ONNX (81 MB) + the lnm-mni160 reference (8 MB), downsamples the
-source/reference pair to the browser graph's 48×48×64 grid, runs the
+source/reference pair to the browser graph's 48×64×80 grid, runs the
 SVF-only sub-network in the worker, then performs scaling-and-squaring
-SVF integration + 24×24×32→160×160×192 upsample + the spatial warp in pure JS
+SVF integration + 24×32×40→160×160×192 upsample + the spatial warp in pure JS
 ([`web/js/modules/registration.js`](web/js/modules/registration.js)).
 WebGPU execution provider when available; falls back to WASM.
 
@@ -288,7 +288,7 @@ issues I'd been carrying:
 
 2. **Browser-runnable SynthMorph graph** — the original 160×160×192 ONNX
    graph hit a multi-gigabyte first Conv3D activation in ORT WebGPU/WASM.
-   The registered browser asset is now `lnm-synthmorph-mni-48x48x64.onnx`:
+   The registered browser asset is now `lnm-synthmorph-mni-48x64x80.onnx`:
    same SynthMorph weights, smaller static graph, source/reference
    downsampled before ONNX, and displacement upsampled back to MNI160.
    `npm run test:synthmorph-browser-model` gates the activation budget,

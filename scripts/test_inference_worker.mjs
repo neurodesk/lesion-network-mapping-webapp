@@ -197,7 +197,7 @@ assert.match(
 );
 
 // ---- (8) Phase 28/31: SynthMorph EP routing ----
-// The current 48x48x64 SynthMorph graph contains 3D MaxPool nodes, which
+// The current browser SynthMorph graph contains 3D MaxPool nodes, which
 // ORT WebGPU cannot run in NHWC layout. The worker must respect the
 // manifest-declared provider order, keep WASM as the fallback provider,
 // and log 'SynthMorph EP=<name>' so the smoke test can read the chosen EP.

@@ -34,7 +34,7 @@ Usage:
   pip install --user tensorflow tf2onnx voxelmorph
   python3 scripts/convert_registration_model.py
   # then upload /tmp/lnm_synthmorph_svf.onnx to
-  # huggingface.co/datasets/sbollmann/lnm-webapp-models/models/lnm-synthmorph-mni-48x48x64.onnx
+  # huggingface.co/datasets/sbollmann/lnm-webapp-models/models/lnm-synthmorph-mni-48x64x80.onnx
 """
 import argparse
 import hashlib
@@ -58,7 +58,7 @@ def parse_args():
     p.add_argument(
         "--input-dims",
         default="x".join(str(v) for v in DEFAULT_INPUT_DIMS),
-        help="Static browser ONNX input grid, e.g. 48x48x64. Each dim must be divisible by 16."
+        help="Static browser ONNX input grid, e.g. 48x64x80. Each dim must be divisible by 16."
     )
     p.add_argument(
         "--output",

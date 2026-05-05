@@ -27,6 +27,22 @@ export const YEO7_COLORMAP = {
   labels: YEO7_LABELS.map(label => label.name)
 };
 
+const LESION_MASK_LABELS = [
+  { index: 0, name: 'Background', color: '#000000', alpha: 0 },
+  { index: 1, name: 'Lesion mask', color: '#008cff', alpha: 255 }
+];
+
+export const LESION_MASK_COLORMAP_ID = 'lnm-lesion-blue';
+
+export const LESION_MASK_COLORMAP = {
+  R: LESION_MASK_LABELS.map(label => hexToRgb(label.color)[0]),
+  G: LESION_MASK_LABELS.map(label => hexToRgb(label.color)[1]),
+  B: LESION_MASK_LABELS.map(label => hexToRgb(label.color)[2]),
+  A: LESION_MASK_LABELS.map(label => label.alpha),
+  I: LESION_MASK_LABELS.map(label => label.index),
+  labels: LESION_MASK_LABELS.map(label => label.name)
+};
+
 export const YEO7_NETWORK_LABELS = Object.fromEntries(
   YEO7_LABELS
     .filter(label => label.index > 0)

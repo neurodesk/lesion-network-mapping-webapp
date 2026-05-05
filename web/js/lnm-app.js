@@ -3,7 +3,7 @@ import { ViewerController } from './controllers/ViewerController.js';
 import { InferenceExecutor } from './controllers/InferenceExecutor.js';
 import { MaskDrawingController } from './controllers/MaskDrawingController.js';
 import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
-import { YEO7_COLORMAP } from './app/lnm-labels.js';
+import { LESION_MASK_COLORMAP, LESION_MASK_COLORMAP_ID, YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
@@ -220,6 +220,7 @@ export class LesionNetworkMappingApp {
     });
     this.maskDrawingController = new MaskDrawingController({
       nv: this.nv,
+      defaultColormap: LESION_MASK_COLORMAP,
       updateOutput: (msg) => this.updateOutput(msg)
     });
 
@@ -229,6 +230,7 @@ export class LesionNetworkMappingApp {
 
     await this.setupViewer();
     this.viewerController.registerSctColormap(YEO7_COLORMAP, 'lnm-yeo7');
+    this.viewerController.registerSctColormap(LESION_MASK_COLORMAP, LESION_MASK_COLORMAP_ID);
     this.bindEvents();
     this.populateVersionLabel();
     this.updateOutput('Ready.');
@@ -633,34 +635,127 @@ export class LesionNetworkMappingApp {
       if (!el) continue;
       el.addEventListener('change', (event) => {
         this.viewerLayerVisibility[config.layer] = !!event.target.checked;
-        this.applyViewerLayerVisibility(config.layer);
-        this.refreshViewerLayerControls();
+        if (event.target.checked) {
+          this.ensureViewerLayerLoaded(config.layer)
+            .then(() => {
+              this.applyViewerLayerVisibility(config.layer);
+              this.refreshViewerLayerControls();
+            })
+            .catch(err => {
+              this.viewerLayerVisibility[config.layer] = false;
+              this.updateOutput(`Could not show ${this.getViewerLayerLabel(config.layer)}: ${err.message}`);
+              this.refreshViewerLayerControls();
+            });
+        } else {
+          this.applyViewerLayerVisibility(config.layer);
+          this.refreshViewerLayerControls();
+        }
       });
     }
     this.refreshViewerLayerControls();
   }
 
-  getViewerLayerAvailable(layer) {
+  isViewerStageLoaded(stage) {
+    if (!stage || !this.viewerController?.getVolumeIndexForStage) return false;
+    return this.viewerController.getVolumeIndexForStage(stage) !== null;
+  }
+
+  getViewerLayerAvailable(layer, config = null) {
+    const layerConfig = config || this.getViewerLayerControlConfig().find(item => item.layer === layer);
+    const stageLoaded = layerConfig?.stages?.some(stage => this.isViewerStageLoaded(stage)) || false;
+    if (layer === 'lesion') {
+      return stageLoaded || !!(
+        (this.maskReviewActive && this.maskDrawingController?.hasDrawing) ||
+        this.lesionMaskFile ||
+        this.lesionFile
+      );
+    }
+    if (stageLoaded) return true;
     switch (layer) {
       case 'structural':
         return !!this.structuralFile;
       case 'brainmask':
         return !!this.brainmaskFile;
-      case 'lesion':
-        return !!(
-          this.maskReviewActive ||
-          this.maskDrawingController?.hasDrawing ||
-          this.lesionMaskFile ||
-          this.autoLesionSeedFile ||
-          this.confirmedNativeLesionFile ||
-          this.lesionFile
-        );
       case 'threshold':
         return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
       case 'atlasQc':
-        return !!(this.patientAtlasFile || (this.hasRegistrationDisplacement && this.yeoAtlasMni160File));
+        return !!(
+          this.patientAtlasFile ||
+          (this.structuralFile && this.hasRegistrationDisplacement && this.executor?.runInverseWarpMask)
+        );
       default:
         return false;
+    }
+  }
+
+  isViewerLayerLoaded(layer, config = null) {
+    const layerConfig = config || this.getViewerLayerControlConfig().find(item => item.layer === layer);
+    const stageLoaded = layerConfig?.stages?.some(stage => this.isViewerStageLoaded(stage)) || false;
+    if (layer === 'lesion') {
+      return stageLoaded || !!(this.maskReviewActive && this.maskDrawingController?.hasDrawing);
+    }
+    return stageLoaded;
+  }
+
+  getViewerLayerLabel(layer) {
+    return {
+      structural: 'T1',
+      brainmask: 'brain mask',
+      lesion: 'lesion mask',
+      threshold: 'threshold map',
+      atlasQc: 'Yeo atlas'
+    }[layer] || layer;
+  }
+
+  async ensureViewerLayerLoaded(layer) {
+    if (this.isViewerLayerLoaded(layer)) return;
+    if (layer === 'structural') {
+      if (!this.structuralFile) throw new Error('No structural T1 is available.');
+      await this.viewerController.loadBaseVolume(this.structuralFile, {
+        stage: 'structural',
+        visible: this.layerVisible('structural')
+      });
+      return;
+    }
+    if (!this.isViewerStageLoaded('structural')) {
+      throw new Error('Load a structural T1 base before adding overlays.');
+    }
+    if (layer === 'brainmask') {
+      if (!this.brainmaskFile) throw new Error('No brain mask is available.');
+      await this.viewerController.loadOverlay(this.brainmaskFile, 'green', 0.4, {
+        stage: 'brainmask',
+        visible: this.layerVisible('brainmask')
+      });
+      return;
+    }
+    if (layer === 'lesion') {
+      if (this.maskReviewActive && this.maskDrawingController?.hasDrawing) return;
+      const lesionOverlay = this.lesionMaskFile || this.lesionFile;
+      if (!lesionOverlay) throw new Error('No lesion mask is available.');
+      await this.viewerController.loadOverlay(lesionOverlay, LESION_MASK_COLORMAP_ID, 0.5, {
+        stage: this.lesionMaskFile ? 'segmentation' : 'lesion',
+        visible: this.layerVisible('lesion')
+      });
+      return;
+    }
+    if (layer === 'threshold') {
+      const thresholdFile = this.patientThresholdedMaskFile || this.thresholdedMaskFile;
+      if (!thresholdFile) throw new Error('No threshold map is available.');
+      await this.viewerController.loadOverlay(thresholdFile, 'red', 0.65, {
+        stage: 'threshold-preview',
+        visible: this.layerVisible('threshold')
+      });
+      return;
+    }
+    if (layer === 'atlasQc') {
+      if (!this.patientAtlasFile) {
+        await this.projectAtlasToPatientSpace();
+      }
+      if (!this.patientAtlasFile) throw new Error('No Yeo atlas projection is available.');
+      await this.viewerController.loadOverlay(this.patientAtlasFile, 'lnm-yeo7', 0.45, {
+        stage: 'atlas-qc',
+        visible: this.layerVisible('atlasQc')
+      });
     }
   }
 
@@ -668,9 +763,11 @@ export class LesionNetworkMappingApp {
     for (const config of this.getViewerLayerControlConfig()) {
       const el = document.getElementById(config.id);
       if (!el) continue;
-      const available = this.getViewerLayerAvailable(config.layer);
+      const available = this.getViewerLayerAvailable(config.layer, config);
       el.disabled = !available;
-      el.checked = available && this.viewerLayerVisibility[config.layer] !== false;
+      el.checked = available &&
+        this.isViewerLayerLoaded(config.layer, config) &&
+        this.viewerLayerVisibility[config.layer] !== false;
     }
     this.refreshSubjectAtlasControls();
   }
@@ -777,7 +874,7 @@ export class LesionNetworkMappingApp {
     if (!file) return;
     this.lesionFile = file;
     if (this.structuralFile) {
-      await this.viewerController.loadOverlay(file, 'red', 0.5, {
+      await this.viewerController.loadOverlay(file, LESION_MASK_COLORMAP_ID, 0.5, {
         stage: 'lesion',
         visible: this.layerVisible('lesion')
       });
@@ -1466,7 +1563,7 @@ export class LesionNetworkMappingApp {
       if (this.lesionFile) {
         entries.push({
           file: this.lesionFile,
-          colormap: 'red',
+          colormap: LESION_MASK_COLORMAP_ID,
           opacity: 0.35,
           stage: 'lesion',
           visible: this.layerVisible('lesion')
@@ -1793,7 +1890,7 @@ export class LesionNetworkMappingApp {
       await this.projectAtlasToPatientSpace();
     }
     this.viewerLayerVisibility.atlasQc = true;
-    await this.renderPatientLayerStack();
+    await this.renderPatientLayerStack({ includeAtlas: true, includeThreshold: false });
     this.refreshViewerLayerControls();
     this.updateOutput('Atlas alignment QC overlay displayed. This is a visual check, not an automated pass/fail score.');
     return this.patientAtlasFile;
@@ -1940,10 +2037,7 @@ export class LesionNetworkMappingApp {
     if (!this.registeredT1MniFile) {
       throw new Error('Registered T1 QC volume is not available; rerun MNI registration.');
     }
-    const [templateFile, atlasFile] = await Promise.all([
-      this.ensureRegistrationTemplateFile(),
-      this.ensureYeoAtlasMni160File()
-    ]);
+    const templateFile = await this.ensureRegistrationTemplateFile();
     const blend = this.getRegistrationBlendValue();
     this.registrationBlendValue = blend;
     this.updateRegistrationBlendLabel(blend);
@@ -1955,36 +2049,19 @@ export class LesionNetworkMappingApp {
         opacity: blend,
         scalar: true,
         stage: 'registered-t1-mni160'
-      },
-      {
-        file: atlasFile,
-        colormap: 'lnm-yeo7',
-        opacity: 0.35,
-        stage: 'atlas-qc',
-        visible: this.layerVisible('atlasQc')
       }
     ];
     await this.viewerController.loadVolumeStack(entries);
     this.applyViewerLayerVisibility();
     this.applyRegistrationBlend(blend);
     this.refreshViewerLayerControls();
-    this.updateOutput('Registration QC: MNI-space registered T1, fixed template, and full Yeo atlas displayed. Use the Patient/MNI blend slider for visual QC.');
+    this.updateOutput('Registration QC: MNI-space registered T1 and fixed template displayed. Use the Patient/MNI blend slider for visual QC.');
   }
 
   async renderCheckerboardRegistrationQc() {
-    const [checkerboardFile, atlasFile] = await Promise.all([
-      this.ensureRegistrationCheckerboardFile(),
-      this.ensureYeoAtlasMni160File()
-    ]);
+    const checkerboardFile = await this.ensureRegistrationCheckerboardFile();
     await this.viewerController.loadVolumeStack([
-      { file: checkerboardFile, stage: 'registration-checkerboard' },
-      {
-        file: atlasFile,
-        colormap: 'lnm-yeo7',
-        opacity: 0.25,
-        stage: 'atlas-qc',
-        visible: this.layerVisible('atlasQc')
-      }
+      { file: checkerboardFile, stage: 'registration-checkerboard' }
     ]);
     this.applyViewerLayerVisibility();
     this.refreshViewerLayerControls();
@@ -2023,23 +2100,14 @@ export class LesionNetworkMappingApp {
     this.updateOutput('Registration QC: SynthMorph displacement magnitude displayed on the fixed MNI template.');
   }
 
-  async renderPatientLayerStack() {
+  async renderPatientLayerStack({ includeAtlas = false, includeThreshold = true } = {}) {
     if (!this.structuralFile) return;
     const entries = [{
       file: this.structuralFile,
       stage: 'structural',
       visible: this.layerVisible('structural')
     }];
-    if (this.brainmaskFile) {
-      entries.push({
-        file: this.brainmaskFile,
-        colormap: 'green',
-        opacity: 0.4,
-        stage: 'brainmask',
-        visible: this.layerVisible('brainmask')
-      });
-    }
-    if (this.patientAtlasFile) {
+    if (includeAtlas && this.patientAtlasFile) {
       entries.push({
         file: this.patientAtlasFile,
         colormap: 'lnm-yeo7',
@@ -2048,17 +2116,7 @@ export class LesionNetworkMappingApp {
         visible: this.layerVisible('atlasQc')
       });
     }
-    const lesionOverlay = this.lesionMaskFile || this.lesionFile;
-    if (lesionOverlay) {
-      entries.push({
-        file: lesionOverlay,
-        colormap: 'red',
-        opacity: 0.5,
-        stage: this.lesionMaskFile ? 'segmentation' : 'lesion',
-        visible: this.layerVisible('lesion')
-      });
-    }
-    if (this.patientThresholdedMaskFile) {
+    if (includeThreshold && this.patientThresholdedMaskFile) {
       entries.push({
         file: this.patientThresholdedMaskFile,
         colormap: 'red',
@@ -2070,7 +2128,9 @@ export class LesionNetworkMappingApp {
     await this.viewerController.loadVolumeStack(entries);
     this.applyViewerLayerVisibility();
     this.refreshViewerLayerControls();
-    this.updateOutput('Patient-space viewer stack displayed.');
+    this.updateOutput(includeAtlas
+      ? 'Patient-space atlas QC stack displayed.'
+      : 'Final patient-space view displayed: structural T1 with threshold map.');
   }
 
   async renderAtlasThresholdPreviewOverlay(version) {
