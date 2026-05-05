@@ -1,7 +1,7 @@
 import { FileIOController } from './controllers/FileIOController.js';
 import { ViewerController } from './controllers/ViewerController.js';
 import { InferenceExecutor } from './controllers/InferenceExecutor.js';
-import { LNM_PIPELINES, getPipelineById, isPipelineRunnable } from './app/lnm-tasks.js';
+import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
 import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
@@ -98,9 +98,12 @@ export class LesionNetworkMappingApp {
     this.networkMapAffine = null;
     this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
+    this.patientThresholdedMaskFile = null;
     this._thresholdPreviewTimer = null;
     this._thresholdPreviewRenderPromise = Promise.resolve();
     this._thresholdPreviewVersion = 0;
+    this._thresholdProjectionWarningShown = false;
+    this.hasRegistrationDisplacement = false;
     this.mniLesionFile = null;       // Phase 6: warped lesion at MNI160 1mm (pre-resample)
     this._mniLesionResolver = null;  // Phase 6: one-shot promise for warp-mask stage data
     this._perfStats = [];            // Phase 19: per-stage runtime markers
@@ -108,14 +111,15 @@ export class LesionNetworkMappingApp {
     this._stageDataResolvers = new Map();
     this._stepCompleteResolvers = new Map();
     this.manifest = null;          // populated lazily by ensureManifest()
-    this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
-    // Phase 31: track whether the user has manually picked a pipeline
-    // via the dropdown. If not, setStructural/setLesion auto-promote
-    // to the pipeline that best matches the loaded input — so clicking
-    // "Run full pipeline" with a manual mask gets the full overlap+FC+
-    // threshold chain (lnm-network-map), and a structural T1 gets the
-    // full auto chain (lnm-yeo-auto).
-    this._userPickedPipeline = false;
+    // Run analysis is input-driven: structural T1 uses the full auto chain,
+    // while researcher-mode Yeo masks auto-select the manual network-map path.
+    this.selectedPipeline = getPipelineById('lnm-yeo-auto') || LNM_PIPELINES[0];
+    this.viewerLayerVisibility = {
+      structural: true,
+      brainmask: true,
+      lesion: true,
+      threshold: true
+    };
 
     this.executor = new InferenceExecutor({
       updateOutput: (msg) => this.updateOutput(msg),
@@ -151,7 +155,6 @@ export class LesionNetworkMappingApp {
     await this.setupViewer();
     this.viewerController.registerSctColormap(YEO7_COLORMAP, 'lnm-yeo7');
     this.bindEvents();
-    this.populatePipelineSelect();
     this.populateVersionLabel();
     this.updateOutput('Ready.');
   }
@@ -176,14 +179,6 @@ export class LesionNetworkMappingApp {
     if (lesionInput) {
       lesionInput.addEventListener('change', (event) => {
         this.lesionFileIO.handleFiles(event.target.files);
-      });
-    }
-
-    const pipelineSelect = document.getElementById('pipelineSelect');
-    if (pipelineSelect) {
-      pipelineSelect.addEventListener('change', () => {
-        this.selectedPipeline = getPipelineById(pipelineSelect.value) || this.selectedPipeline;
-        this._userPickedPipeline = true;
       });
     }
 
@@ -348,6 +343,8 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    this.bindViewerLayerToggles();
+
     const interpolation = document.getElementById('interpolation');
     if (interpolation) {
       interpolation.addEventListener('change', (event) => {
@@ -399,23 +396,66 @@ export class LesionNetworkMappingApp {
     if (button) button.addEventListener('click', () => modal.close());
   }
 
-  populatePipelineSelect() {
-    const pipelineSelect = document.getElementById('pipelineSelect');
-    if (!pipelineSelect) return;
+  getViewerLayerControlConfig() {
+    return [
+      { layer: 'structural', id: 'layerToggleT1', stages: ['structural'] },
+      { layer: 'brainmask', id: 'layerToggleBrainMask', stages: ['brainmask'] },
+      { layer: 'lesion', id: 'layerToggleLesionMask', stages: ['segmentation', 'lesion'] },
+      { layer: 'threshold', id: 'layerToggleThresholdMap', stages: ['threshold-preview'] }
+    ];
+  }
 
-    pipelineSelect.innerHTML = '';
-    // Phase 13: surface every fully-runnable pipeline (every required
-    // stage's module is implemented + has its asset). The 'Run full
-    // pipeline' button auto-detects manual-mask vs auto-T1 input
-    // regardless of selection; the dropdown is informational for now.
-    const runnable = LNM_PIPELINES.filter(isPipelineRunnable);
-    for (const pipeline of runnable) {
-      const option = document.createElement('option');
-      option.value = pipeline.id;
-      option.textContent = pipeline.displayName;
-      pipelineSelect.appendChild(option);
+  bindViewerLayerToggles() {
+    for (const config of this.getViewerLayerControlConfig()) {
+      const el = document.getElementById(config.id);
+      if (!el) continue;
+      el.addEventListener('change', (event) => {
+        this.viewerLayerVisibility[config.layer] = !!event.target.checked;
+        this.applyViewerLayerVisibility(config.layer);
+        this.refreshViewerLayerControls();
+      });
     }
-    pipelineSelect.value = this.selectedPipeline?.id || 'lnm-yeo-only';
+    this.refreshViewerLayerControls();
+  }
+
+  getViewerLayerAvailable(layer) {
+    switch (layer) {
+      case 'structural':
+        return !!this.structuralFile;
+      case 'brainmask':
+        return !!this.brainmaskFile;
+      case 'lesion':
+        return !!(this.lesionMaskFile || this.lesionFile);
+      case 'threshold':
+        return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
+      default:
+        return false;
+    }
+  }
+
+  refreshViewerLayerControls() {
+    for (const config of this.getViewerLayerControlConfig()) {
+      const el = document.getElementById(config.id);
+      if (!el) continue;
+      const available = this.getViewerLayerAvailable(config.layer);
+      el.disabled = !available;
+      el.checked = this.viewerLayerVisibility[config.layer] !== false;
+    }
+  }
+
+  applyViewerLayerVisibility(layer = null) {
+    if (!this.viewerController?.setStageVisible) return;
+    for (const config of this.getViewerLayerControlConfig()) {
+      if (layer && config.layer !== layer) continue;
+      const visible = this.viewerLayerVisibility[config.layer] !== false;
+      for (const stage of config.stages) {
+        this.viewerController.setStageVisible(stage, visible);
+      }
+    }
+  }
+
+  layerVisible(layer) {
+    return this.viewerLayerVisibility[layer] !== false;
   }
 
   // Phase 13 + Phase 40: populate every visible version slot from
@@ -450,7 +490,14 @@ export class LesionNetworkMappingApp {
   async setStructural(file) {
     if (!file) return;
     this.structuralFile = file;
-    await this.viewerController.loadBaseVolume(file, { stage: 'structural' });
+    this.hasRegistrationDisplacement = false;
+    this.patientThresholdedMaskFile = null;
+    this._thresholdProjectionWarningShown = false;
+    await this.viewerController.loadBaseVolume(file, {
+      stage: 'structural',
+      visible: this.layerVisible('structural')
+    });
+    this.refreshViewerLayerControls();
     this.updateOutput(`Structural image ready: ${file.name}`);
     // Phase 31: auto-promote the pipeline selection. A structural T1
     // means the explicit Run analysis action should use the full auto chain.
@@ -461,10 +508,17 @@ export class LesionNetworkMappingApp {
     if (!file) return;
     this.lesionFile = file;
     if (this.structuralFile) {
-      await this.viewerController.loadOverlay(file, 'red', 0.5, { stage: 'lesion' });
+      await this.viewerController.loadOverlay(file, 'red', 0.5, {
+        stage: 'lesion',
+        visible: this.layerVisible('lesion')
+      });
     } else {
-      await this.viewerController.loadBaseVolume(file, { stage: 'lesion' });
+      await this.viewerController.loadBaseVolume(file, {
+        stage: 'lesion',
+        visible: this.layerVisible('lesion')
+      });
     }
+    this.refreshViewerLayerControls();
     this.updateOutput(`Lesion mask ready: ${file.name}`);
     // Phase 31: a manual lesion mask without a structural T1 means the
     // user wants the manual-mask network-map chain (overlap + FC +
@@ -475,17 +529,13 @@ export class LesionNetworkMappingApp {
     }
   }
 
-  // Phase 31: promote the dropdown selection if the user hasn't manually
-  // overridden it. Keeps the dropdown a source-of-truth when the user
-  // cares, but defaults to the right full-chain pipeline based on what
-  // they dropped first.
+  // Phase 31 + selector cleanup: Run analysis is driven by the loaded input.
+  // Structural T1 promotes to the full auto chain; a researcher-mode Yeo mask
+  // promotes to the manual network-map path.
   _autoPromotePipeline(pipelineId) {
-    if (this._userPickedPipeline) return;
     const pipeline = getPipelineById(pipelineId);
     if (!pipeline) return;
     this.selectedPipeline = pipeline;
-    const pipelineSelect = document.getElementById('pipelineSelect');
-    if (pipelineSelect) pipelineSelect.value = pipelineId;
   }
 
   async runYeoOverlap() {
@@ -654,11 +704,15 @@ export class LesionNetworkMappingApp {
       // re-renders normally on its next setLesion() call.
       if (this.structuralFile) {
         this.viewerController
-          .loadOverlay(file, 'green', 0.4, { stage: 'brainmask' })
+          .loadOverlay(file, 'green', 0.4, {
+            stage: 'brainmask',
+            visible: this.layerVisible('brainmask')
+          })
           .catch(err => this.updateOutput(`Brain mask render error: ${err.message}`));
       }
       const btn = document.getElementById('downloadBrainMaskButton');
       if (btn) btn.disabled = false;
+      this.refreshViewerLayerControls();
       this.updateOutput('Brain mask ready.');
       this._resolveStageData(data.stage, data);
       return;
@@ -668,11 +722,15 @@ export class LesionNetworkMappingApp {
       this.lesionMaskFile = file;
       if (this.structuralFile) {
         this.viewerController
-          .loadOverlay(file, 'red', 0.5, { stage: 'segmentation' })
+          .loadOverlay(file, 'red', 0.5, {
+            stage: 'segmentation',
+            visible: this.layerVisible('lesion')
+          })
           .catch(err => this.updateOutput(`Lesion mask render error: ${err.message}`));
       }
       const btn = document.getElementById('downloadLesionMaskButton');
       if (btn) btn.disabled = false;
+      this.refreshViewerLayerControls();
       this.updateOutput('Lesion segmentation ready.');
       this._resolveStageData(data.stage, data);
       return;
@@ -688,6 +746,13 @@ export class LesionNetworkMappingApp {
         this._mniLesionResolver = null;
         r.resolve(data.niftiData);
       }
+      this._resolveStageData(data.stage, data);
+      return;
+    }
+    if (data.stage === 'threshold-patient' && data.niftiData) {
+      this.patientThresholdedMaskFile = arrayBufferToFile(data.niftiData, 'lnm-network-map-thresh-patient.nii');
+      this.refreshViewerLayerControls();
+      this.updateOutput('Threshold map projected to patient T1 space.');
       this._resolveStageData(data.stage, data);
     }
   }
@@ -901,7 +966,8 @@ export class LesionNetworkMappingApp {
           file: this.lesionFile,
           colormap: 'red',
           opacity: 0.35,
-          stage: 'lesion'
+          stage: 'lesion',
+          visible: this.layerVisible('lesion')
         });
       }
       entries.push({
@@ -913,6 +979,8 @@ export class LesionNetworkMappingApp {
         symmetricCal: true
       });
       await this.viewerController.loadVolumeStack(entries);
+      this.applyViewerLayerVisibility();
+      this.refreshViewerLayerControls();
       this.updateOutput('Network map displayed on the Yeo atlas grid.');
     } catch (err) {
       this.updateOutput(`Network-map render error: ${err.message}`);
@@ -991,6 +1059,7 @@ export class LesionNetworkMappingApp {
         : `LNM thresholded ${mode}=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
     });
     this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii');
+    this.patientThresholdedMaskFile = null;
     const dlBtn = document.getElementById('downloadThresholdedNetworkMapButton');
     if (dlBtn) dlBtn.disabled = false;
     const summaryEl = document.getElementById('networkThresholdSummary');
@@ -1013,6 +1082,7 @@ export class LesionNetworkMappingApp {
           clusterText;
       }
     }
+    this.refreshViewerLayerControls();
     this.scheduleThresholdPreviewOverlay();
     return mask;
   }
@@ -1044,17 +1114,154 @@ export class LesionNetworkMappingApp {
   async renderThresholdPreviewOverlay(version = this._thresholdPreviewVersion) {
     const file = this.thresholdedMaskFile;
     if (version !== this._thresholdPreviewVersion || !file) return;
+    if (!this.viewerController) return;
+    if (this.canProjectThresholdToPatientSpace()) {
+      try {
+        await this.projectThresholdToPatientSpace(version);
+        if (version !== this._thresholdPreviewVersion || !this.patientThresholdedMaskFile) return;
+        await this.renderPatientLayerStack();
+        return;
+      } catch (err) {
+        this.patientThresholdedMaskFile = null;
+        this.refreshViewerLayerControls();
+        this.updateOutput(`Patient-space threshold projection failed: ${err.message}`);
+      }
+    } else {
+      this.noteThresholdProjectionUnavailable();
+    }
+    await this.renderAtlasThresholdPreviewOverlay(version);
+  }
+
+  canProjectThresholdToPatientSpace() {
+    return !!(
+      this.structuralFile &&
+      this.thresholdedMaskFile &&
+      this.networkMapAffine &&
+      this.hasRegistrationDisplacement &&
+      this.executor?.runInverseWarpMask
+    );
+  }
+
+  noteThresholdProjectionUnavailable() {
+    this.patientThresholdedMaskFile = null;
+    this.refreshViewerLayerControls();
+    if (!this.thresholdedMaskFile || this._thresholdProjectionWarningShown) return;
+    if (!this.structuralFile) {
+      this.updateOutput('Patient-space threshold map unavailable: no structural T1 is loaded; showing atlas-space threshold preview.');
+    } else if (!this.hasRegistrationDisplacement) {
+      this.updateOutput('Patient-space threshold map unavailable: run registration first; showing atlas-space threshold preview.');
+    }
+    this._thresholdProjectionWarningShown = true;
+  }
+
+  async projectThresholdToPatientSpace(version) {
+    const { mask, dims } = await this.resampleThresholdMaskToStructuralGrid();
+    if (version !== this._thresholdPreviewVersion) return null;
+
+    const thresholdReady = this._waitForStageData('threshold-patient');
+    const inverseWarpDone = this._waitForStepComplete('inverse-warp-mask');
+    const maskBuffer = mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
+    await this.executor.runInverseWarpMask({
+      maskBuffer,
+      maskDims: dims,
+      stage: 'threshold-patient',
+      description: 'Threshold map projected to patient T1 space'
+    });
+    await Promise.all([thresholdReady, inverseWarpDone]);
+    return this.patientThresholdedMaskFile;
+  }
+
+  async resampleThresholdMaskToStructuralGrid() {
+    if (!this.thresholdedMaskFile) {
+      throw new Error('No thresholded network map is available.');
+    }
+    if (!this.structuralFile) {
+      throw new Error('No structural T1 is available.');
+    }
+    const [thresholdBuf, structuralBuf] = await Promise.all([
+      this.thresholdedMaskFile.arrayBuffer(),
+      this.structuralFile.arrayBuffer()
+    ]);
+    const threshold = await decodeNiftiBuffer(thresholdBuf);
+    const structural = await decodeNiftiBuffer(structuralBuf);
+    if (!dimsEqual(structural.dims, [160, 160, 192])) {
+      throw new Error(
+        `Patient-space threshold projection requires a 160x160x192 registration grid; ` +
+        `got ${structural.dims.join('x')}.`
+      );
+    }
+    const thresholdMask = threshold.data instanceof Uint8Array
+      ? threshold.data
+      : binarise(threshold.data);
+    const thresholdAffine = affineFromHeader(threshold.header);
+    const structuralAffine = affineFromHeader(structural.header);
+    const resampled = resampleAffine(
+      thresholdMask,
+      threshold.dims, thresholdAffine,
+      structural.dims, structuralAffine,
+      'nearest'
+    );
+    const mask = resampled instanceof Uint8Array ? resampled : binarise(resampled);
+    return { mask, dims: structural.dims };
+  }
+
+  async renderPatientLayerStack() {
+    if (!this.structuralFile) return;
+    const entries = [{
+      file: this.structuralFile,
+      stage: 'structural',
+      visible: this.layerVisible('structural')
+    }];
+    if (this.brainmaskFile) {
+      entries.push({
+        file: this.brainmaskFile,
+        colormap: 'green',
+        opacity: 0.4,
+        stage: 'brainmask',
+        visible: this.layerVisible('brainmask')
+      });
+    }
+    const lesionOverlay = this.lesionMaskFile || this.lesionFile;
+    if (lesionOverlay) {
+      entries.push({
+        file: lesionOverlay,
+        colormap: 'red',
+        opacity: 0.5,
+        stage: this.lesionMaskFile ? 'segmentation' : 'lesion',
+        visible: this.layerVisible('lesion')
+      });
+    }
+    if (this.patientThresholdedMaskFile) {
+      entries.push({
+        file: this.patientThresholdedMaskFile,
+        colormap: 'red',
+        opacity: 0.65,
+        stage: 'threshold-preview',
+        visible: this.layerVisible('threshold')
+      });
+    }
+    await this.viewerController.loadVolumeStack(entries);
+    this.applyViewerLayerVisibility();
+    this.refreshViewerLayerControls();
+    this.updateOutput('Patient-space viewer stack displayed.');
+  }
+
+  async renderAtlasThresholdPreviewOverlay(version) {
+    const file = this.thresholdedMaskFile;
+    if (version !== this._thresholdPreviewVersion || !file) return;
     if (!this.viewerController?.replaceOverlayForStage) return;
     try {
       await this.viewerController.replaceOverlayForStage(
         'threshold-preview',
         file,
         'red',
-        0.65
+        0.65,
+        { visible: this.layerVisible('threshold') }
       );
       if (version !== this._thresholdPreviewVersion) {
         this.viewerController?.removeVolumeForStage?.('threshold-preview');
       }
+      this.refreshViewerLayerControls();
     } catch (err) {
       this.updateOutput(`Threshold preview render error: ${err.message}`);
     }
@@ -1117,6 +1324,8 @@ export class LesionNetworkMappingApp {
       nbSteps: 7
     });
     await registrationReady;
+    this.hasRegistrationDisplacement = true;
+    this._thresholdProjectionWarningShown = false;
   }
 
   // Phase 16.2: in-browser affine pre-registration (centroid match) so
@@ -1211,6 +1420,8 @@ export class LesionNetworkMappingApp {
 
     this.structuralFile = arrayBufferToFile(t1Nifti, 'lnm-prealign-t1.nii');
     this.brainmaskFile = arrayBufferToFile(maskNifti, 'lnm-prealign-brainmask.nii');
+    this.hasRegistrationDisplacement = false;
+    this._thresholdProjectionWarningShown = false;
     // Stale results from the pre-prealign space.
     this.lesionMaskFile = null;
     this.lesionFile = null;
@@ -1219,17 +1430,25 @@ export class LesionNetworkMappingApp {
     this.networkMapFile = null;
     this.networkMapData = null;
     this.thresholdedMaskFile = null;
+    this.patientThresholdedMaskFile = null;
     this.networkMapBaseFile = null;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
 
     // Refresh viewer with the aligned T1 + brainmask overlay.
-    await this.viewerController.loadBaseVolume(this.structuralFile, { stage: 'structural' });
+    await this.viewerController.loadBaseVolume(this.structuralFile, {
+      stage: 'structural',
+      visible: this.layerVisible('structural')
+    });
     try {
-      await this.viewerController.loadOverlay(this.brainmaskFile, 'green', 0.4, { stage: 'brainmask' });
+      await this.viewerController.loadOverlay(this.brainmaskFile, 'green', 0.4, {
+        stage: 'brainmask',
+        visible: this.layerVisible('brainmask')
+      });
     } catch (err) {
       // Non-fatal: the overlay is cosmetic.
       this.updateOutput(`Brainmask overlay re-render warning: ${err.message}`);
     }
+    this.refreshViewerLayerControls();
     this.updateOutput('Prealign complete: T1 + brainmask resampled to 160x160x192 1mm.');
     return this.structuralFile;
   }
@@ -1417,7 +1636,7 @@ export class LesionNetworkMappingApp {
       case 'threshold':
         // applyNetworkThreshold is sync and reads UI controls. If the
         // stage carries `defaults`, push them into the controls before
-        // computing so the dropdown's choice is honoured even when the
+        // computing so the selected pipeline's defaults are honoured when the
         // user hasn't touched the threshold UI.
         this._applyThresholdDefaults(stage.defaults);
         this.applyNetworkThreshold();
@@ -1467,6 +1686,9 @@ export class LesionNetworkMappingApp {
     this.networkMapAffine = null;
     this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null;
+    this.patientThresholdedMaskFile = null;
+    this.hasRegistrationDisplacement = false;
+    this._thresholdProjectionWarningShown = false;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
     this.mniLesionFile = null;
     if (full) {
@@ -1504,9 +1726,13 @@ export class LesionNetworkMappingApp {
     if (full || !this.structuralFile) {
       try { this.viewerController.clearAll?.(); } catch (e) { /* non-fatal */ }
     } else if (this.structuralFile) {
-      this.viewerController.loadBaseVolume(this.structuralFile, { stage: 'structural' })
+      this.viewerController.loadBaseVolume(this.structuralFile, {
+        stage: 'structural',
+        visible: this.layerVisible('structural')
+      })
         .catch(err => this.updateOutput(`Viewer reload after reset failed: ${err.message}`));
     }
+    this.refreshViewerLayerControls();
     this.updateOutput(full ? 'All state cleared.' : 'Results cleared (structural retained).');
   }
 

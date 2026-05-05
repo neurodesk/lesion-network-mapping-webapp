@@ -56,6 +56,7 @@ function makeNv() {
         id: `vol-${nv.volumes.length}`,
         url: e.url, name: e.name,
         cal_min: 0, cal_max: 1, colormap: 'gray', interpolation: true,
+        opacity: e.opacity ?? 1,
         img: new Float32Array([0.5])
       }));
     },
@@ -66,12 +67,16 @@ function makeNv() {
         url: opts.url, name: opts.name,
         cal_min: 0, cal_max: 1, colormap: opts.colormap || 'gray',
         interpolation: true,
+        opacity: opts.opacity ?? 1,
         img: opts.name === 'network.nii'
           ? new Float32Array([-2, 0, 4])
           : new Float32Array([1])
       });
     },
-    setOpacity(idx, op) { calls.setOpacity.push([idx, op]); },
+    setOpacity(idx, op) {
+      calls.setOpacity.push([idx, op]);
+      if (nv.volumes[idx]) nv.volumes[idx].opacity = op;
+    },
     setColormap(volId, cm) { calls.setColormap.push([volId, cm]); },
     setSliceType(t) { calls.setSliceType.push(t); },
     updateGLVolume() { calls.updateGLVolume++; },
@@ -276,4 +281,51 @@ function fakeFile(name) {
   assert.deepEqual(calls.setOpacity.at(-1), [2, 0.65]);
 }
 
-console.log('ViewerController OK: 11 cases (Phase 4 call-shape, overlay replace path, scalar overlays, view + stage + colormap).');
+// ---- Test 12: per-stage visibility hides without removing volumes ----
+{
+  const { nv, calls } = makeNv();
+  const vc = new ViewerController({ nv });
+  await vc.loadBaseVolume(fakeFile('t1.nii'), { stage: 'structural' });
+  await vc.loadOverlay(fakeFile('brainmask.nii'), 'green', 0.4, { stage: 'brainmask' });
+  await vc.loadOverlay(fakeFile('lesion.nii'), 'red', 0.5, { stage: 'segmentation' });
+
+  assert.equal(vc.setStageVisible('brainmask', false), true);
+  assert.equal(nv.volumes.length, 3, 'hiding a stage must not remove its volume');
+  assert.equal(vc.getVolumeIndexForStage('brainmask'), 1);
+  assert.equal(vc.getVolumeIndexForStage('segmentation'), 2,
+    'stage indices must stay stable when a layer is hidden');
+  assert.deepEqual(calls.setOpacity.at(-1), [1, 0],
+    'hidden stage opacity must be set to 0');
+
+  vc.setOverlayOpacity(0.25);
+  assert.equal(nv.volumes[1].opacity, 0,
+    'global overlay opacity must keep hidden stages invisible');
+  assert.equal(nv.volumes[2].opacity, 0.25,
+    'global overlay opacity must still update visible overlays');
+
+  vc.setStageVisible('brainmask', true);
+  assert.equal(nv.volumes[1].opacity, 0.25,
+    'restoring a hidden stage should use the remembered overlay opacity');
+}
+
+// ---- Test 13: base-stage visibility and hidden replacement state ----
+{
+  const { nv, calls } = makeNv();
+  const vc = new ViewerController({ nv });
+  await vc.loadBaseVolume(fakeFile('t1.nii'), { stage: 'structural' });
+  vc.setStageVisible('structural', false);
+  assert.equal(nv.volumes.length, 1, 'hiding the base must not clear the viewer');
+  assert.deepEqual(calls.setOpacity.at(-1), [0, 0],
+    'hidden base opacity must be set to 0');
+
+  await vc.loadOverlay(fakeFile('threshold-a.nii'), 'red', 0.65, { stage: 'threshold-preview' });
+  vc.setStageVisible('threshold-preview', false);
+  await vc.replaceOverlayForStage('threshold-preview', fakeFile('threshold-b.nii'), 'red', 0.65);
+  assert.equal(vc.isStageVisible('threshold-preview'), false,
+    'overlay replacement must preserve hidden stage state');
+  assert.equal(nv.volumes[1].name, 'threshold-b.nii');
+  assert.equal(nv.volumes[1].opacity, 0,
+    'replacement overlay must remain hidden when its stage is hidden');
+}
+
+console.log('ViewerController OK: 13 cases (Phase 4 call-shape, overlay replace path, scalar overlays, visibility, view + stage + colormap).');

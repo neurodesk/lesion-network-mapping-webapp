@@ -19,7 +19,8 @@ import { runSynthStrip } from './modules/brain-extraction.js';
 import {
   integrateSvf,
   upsampleDisplacementField,
-  warpVolume
+  warpVolume,
+  inverseWarpVolume
 } from './modules/registration.js';
 
 // nifti-reader-js is a UMD bundle that installs `self.nifti` as a side-
@@ -1530,6 +1531,41 @@ async function stepWarpMask(params = {}) {
   postStepComplete('warp-mask');
 }
 
+async function stepInverseWarpMask(params = {}) {
+  if (!workerState.displacementField) {
+    throw new Error('No displacement available. Run Register first.');
+  }
+  const {
+    maskBuffer,
+    maskDims = [160, 160, 192],
+    stage = 'threshold-patient',
+    description = 'Threshold map projected to patient T1 space',
+    iterations = 8
+  } = params;
+  if (!maskBuffer) throw new Error('inverse-warp-mask requires maskBuffer');
+
+  postProgress(0.10, 'Projecting threshold map to patient space...');
+  const mask = new Uint8Array(maskBuffer);
+  const maskF32 = new Float32Array(mask.length);
+  for (let i = 0; i < mask.length; i++) maskF32[i] = mask[i];
+  const projected = inverseWarpVolume(
+    maskF32,
+    maskDims,
+    workerState.displacementField,
+    workerState.displacementDims,
+    { mode: 'nearest', iterations }
+  );
+  const projectedBin = new Uint8Array(projected.length);
+  for (let i = 0; i < projected.length; i++) projectedBin[i] = projected[i] > 0.5 ? 1 : 0;
+
+  postProgress(0.85, 'Wrapping patient-space threshold map as NIfTI...');
+  const outNifti = createOutputNifti(projectedBin, workerState.origHeaderBytes, workerState.origDims);
+  postStageData(stage, outNifti, description);
+
+  postProgress(1.0, 'Threshold projection complete');
+  postStepComplete('inverse-warp-mask');
+}
+
 // ==================== Message Handler ====================
 
 self.onmessage = async (e) => {
@@ -1598,6 +1634,15 @@ self.onmessage = async (e) => {
         await stepWarpMask(data || {});
       } catch (error) {
         console.error('Warp-mask error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'inverse-warp-mask':
+      try {
+        await stepInverseWarpMask(data || {});
+      } catch (error) {
+        console.error('Inverse-warp-mask error:', error);
         postError(error?.message || String(error));
       }
       break;

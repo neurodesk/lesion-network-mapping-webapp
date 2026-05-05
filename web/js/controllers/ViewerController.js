@@ -13,6 +13,8 @@ export class ViewerController {
     this.currentOverlayFile = null;
     this.currentOverlayIndex = null;
     this.volumeStageIndices = new Map();
+    this.stageVisibility = new Map();
+    this.stageOpacity = new Map();
     this.sctColormapsRegistered = new Set();
   }
 
@@ -43,7 +45,12 @@ export class ViewerController {
       this.currentOverlayFile = null;
       this.currentOverlayIndex = null;
       this.volumeStageIndices.clear();
-      if (options.stage) this.volumeStageIndices.set(options.stage, 0);
+      if (options.stage) {
+        this.volumeStageIndices.set(options.stage, 0);
+        this.setStageOpacity(options.stage, options.opacity ?? 1);
+        this.setStageVisibilityState(options.stage, options.visible !== false, options.visible !== undefined);
+        this.applyStageOpacity(options.stage);
+      }
       this.updateOutput(`${file.name} loaded`);
     } catch (error) {
       this.updateOutput(`Error loading ${file.name}: ${error.message}`);
@@ -68,7 +75,11 @@ export class ViewerController {
     try {
       const [baseEntry, ...overlayEntries] = entries;
 
-      await this.loadBaseVolume(baseEntry.file, { stage: baseEntry.stage });
+      await this.loadBaseVolume(baseEntry.file, {
+        stage: baseEntry.stage,
+        visible: baseEntry.visible,
+        opacity: baseEntry.opacity
+      });
 
       if (baseEntry.labelMask) {
         this.configureSegmentationVolume(0, baseEntry.colormap || 'sct-spinalcord');
@@ -81,7 +92,12 @@ export class ViewerController {
           entry.file,
           entry.colormap || 'sct-spinalcord',
           entry.opacity ?? 0.5,
-          { stage: entry.stage, scalar: entry.scalar, symmetricCal: entry.symmetricCal }
+          {
+            stage: entry.stage,
+            scalar: entry.scalar,
+            symmetricCal: entry.symmetricCal,
+            visible: entry.visible
+          }
         );
       }
     } catch (error) {
@@ -201,7 +217,12 @@ export class ViewerController {
 
       this.currentOverlayFile = file;
       this.currentOverlayIndex = overlayIndex > 0 ? overlayIndex : null;
-      if (options.stage) this.volumeStageIndices.set(options.stage, overlayIndex);
+      if (options.stage) {
+        this.volumeStageIndices.set(options.stage, overlayIndex);
+        this.setStageOpacity(options.stage, opacity);
+        this.setStageVisibilityState(options.stage, options.visible !== false, options.visible !== undefined);
+        this.applyStageOpacity(options.stage);
+      }
     } catch (error) {
       this.updateOutput(`Error loading overlay: ${error.message}`);
       console.error(error);
@@ -245,7 +266,9 @@ export class ViewerController {
 
   setBaseOpacity(value) {
     if (this.nv.volumes.length > 0) {
-      this.nv.setOpacity(0, value);
+      const stage = this.getStageForVolumeIndex(0);
+      if (stage) this.setStageOpacity(stage, value);
+      this.nv.setOpacity(0, this.isStageVisible(stage) ? value : 0);
       this.nv.updateGLVolume();
     }
   }
@@ -253,9 +276,58 @@ export class ViewerController {
   setOverlayOpacity(value) {
     const overlayIndices = this.getOverlayIndices();
     if (overlayIndices.length) {
-      overlayIndices.forEach(index => this.nv.setOpacity(index, value));
+      overlayIndices.forEach(index => {
+        const stage = this.getStageForVolumeIndex(index);
+        if (stage) this.setStageOpacity(stage, value);
+        this.nv.setOpacity(index, this.isStageVisible(stage) ? value : 0);
+      });
       this.nv.updateGLVolume();
     }
+  }
+
+  setStageOpacity(stage, opacity) {
+    if (!stage || !Number.isFinite(opacity)) return;
+    this.stageOpacity.set(stage, opacity);
+  }
+
+  setStageVisibilityState(stage, visible, force = false) {
+    if (!stage) return;
+    if (force || !this.stageVisibility.has(stage)) {
+      this.stageVisibility.set(stage, visible);
+    }
+  }
+
+  setStageVisible(stage, visible) {
+    if (!stage) return false;
+    this.stageVisibility.set(stage, !!visible);
+    const applied = this.applyStageOpacity(stage);
+    if (applied) {
+      this.nv.updateGLVolume?.();
+      this.nv.drawScene?.();
+    }
+    return applied;
+  }
+
+  isStageVisible(stage) {
+    if (!stage) return true;
+    return this.stageVisibility.get(stage) !== false;
+  }
+
+  applyStageOpacity(stage) {
+    const index = this.getVolumeIndexForStage(stage);
+    if (index === null) return false;
+    const opacity = this.isStageVisible(stage)
+      ? (this.stageOpacity.get(stage) ?? (index === 0 ? 1 : 0.5))
+      : 0;
+    this.nv.setOpacity(index, opacity);
+    return true;
+  }
+
+  getStageForVolumeIndex(index) {
+    for (const [stage, mappedIndex] of this.volumeStageIndices.entries()) {
+      if (mappedIndex === index) return stage;
+    }
+    return null;
   }
 
   setOverlayColormap(colormap) {

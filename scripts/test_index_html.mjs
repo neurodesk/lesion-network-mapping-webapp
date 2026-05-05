@@ -26,8 +26,8 @@ const requiredIds = [
   // the orchestrator's bindings keep working without dominating the UI.
   '#stepLoadSection',
   '#stepLesionSection',
-  // (#stepNetworkSection removed; pipelineSelect + computeOverlapButton moved
-  //  under the Run section's Advanced disclosure.)
+  // (#stepNetworkSection removed; computeOverlapButton moved under the Run
+  //  section's Advanced disclosure.)
   '#resultsSection',
   '#networkOverlapTable',
   '#downloadOverlapCsv',
@@ -35,7 +35,6 @@ const requiredIds = [
   '#outsideAtlasWarning',
   '#structuralFileInput',
   '#lesionFileInput',
-  '#pipelineSelect',
   // Phase 2a.1.4b additions: brain-extraction button (explicit trigger) and
   // the brain-mask download button.
   '#runBrainExtractionButton',
@@ -63,7 +62,12 @@ const requiredIds = [
   // Phase 21 addition: clear-results / new-run UX control.
   '#clearResultsButton',
   // Phase 32 additions: Advanced disclosure container.
-  '#advancedStageControls'
+  '#advancedStageControls',
+  // Patient-space viewer layer toggles.
+  '#layerToggleT1',
+  '#layerToggleBrainMask',
+  '#layerToggleLesionMask',
+  '#layerToggleThresholdMap'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);
@@ -80,13 +84,10 @@ assert.doesNotMatch(prealignButton[1], /<sup\b/i,
 assert.match(prealignButton[0], /title=["']Pre-align T1 to the MNI160 1 mm grid["']/,
   '#prealignToMniButton title must retain the MNI160 1 mm detail');
 
-// Pipeline selector must offer at least the Phase 1 pipeline.
-// Phase 39: visible UI assumes raw T1 input; manual-mask pipelines
-// (lnm-yeo-only, lnm-network-map) are flagged hidden in lnm-tasks.js
-// and drop out of the dropdown. The static fallback option (rendered
-// only when JS doesn't run) is now lnm-yeo-auto — the auto chain.
-assert.match(html, /value=["']lnm-yeo-auto["']/,
-  '#pipelineSelect static fallback must be lnm-yeo-auto (auto T1 chain)');
+assert.doesNotMatch(html, /id=["']pipelineSelect["']/,
+  'Pipeline selector must not be visible; Run analysis is input-driven');
+assert.doesNotMatch(html, /for=["']pipelineSelect["']/,
+  'Pipeline label must not be visible; internal pipeline selection is not a user-facing control');
 
 // Helper copy should live behind compact inline help popovers, following the
 // QSMbly-style "i" affordance, rather than always-visible paragraphs.

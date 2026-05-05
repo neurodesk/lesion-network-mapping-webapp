@@ -157,8 +157,8 @@ for (const pipeline of manifest.pipelines) {
 }
 
 // Cross-check with lnm-tasks.js: every pipeline declared in code must exist
-// in the manifest (so the UI's pipeline dropdown can't list a pipeline whose
-// assets aren't fetchable).
+// in the manifest so internal pipeline dispatch cannot select a pipeline whose
+// assets aren't fetchable.
 const tasks = await import(pathToFileURL(path.join(ROOT, 'web/js/app/lnm-tasks.js')));
 const codePipelineIds = new Set(tasks.LNM_PIPELINES.map(p => p.id));
 const manifestPipelineIds = new Set(manifest.pipelines.map(p => p.id));

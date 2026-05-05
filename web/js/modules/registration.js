@@ -87,6 +87,15 @@ function sampleVolumeZeroTri(vol, dims, x, y, z) {
   return c0 * (1 - wz) + c1 * wz;
 }
 
+function sampleVolumeZeroNearest(vol, dims, x, y, z) {
+  const [X, Y, Z] = dims;
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  const iz = Math.round(z);
+  if (ix < 0 || ix >= X || iy < 0 || iy >= Y || iz < 0 || iz >= Z) return 0;
+  return vol[ix + iy * X + iz * X * Y];
+}
+
 // ---------------- public API ----------------
 
 // Scaling-and-squaring integration of a stationary velocity field.
@@ -212,6 +221,55 @@ export function warpVolume(volume, volDims, disp, dispDims) {
         const sy = y + disp[di + 1];
         const sz = z + disp[di + 2];
         out[x + y * X + z * X * Y] = sampleVolumeZeroTri(volume, volDims, sx, sy, sz);
+      }
+    }
+  }
+  return out;
+}
+
+// Approximate inverse application of the forward sampling transform used by
+// warpVolume(). warpVolume samples source at target + disp(target); this
+// helper walks each source-space output voxel and solves
+//   source = target + disp(target)
+// by fixed-point iteration, then samples the target-space input volume there.
+export function inverseWarpVolume(volume, volDims, disp, dispDims, options = {}) {
+  const [X, Y, Z] = volDims;
+  if (volume.length !== X * Y * Z) {
+    throw new Error(`inverseWarpVolume: volume length ${volume.length} != ${X * Y * Z}`);
+  }
+  if (disp.length !== dispDims[0] * dispDims[1] * dispDims[2] * 3) {
+    throw new Error('inverseWarpVolume: disp length does not match dispDims');
+  }
+  if (volDims[0] !== dispDims[0] || volDims[1] !== dispDims[1] || volDims[2] !== dispDims[2]) {
+    throw new Error(`inverseWarpVolume: volDims ${volDims} must equal dispDims ${dispDims}`);
+  }
+
+  const iterations = Number.isInteger(options.iterations) ? options.iterations : 8;
+  if (iterations < 0) {
+    throw new Error(`inverseWarpVolume: iterations must be non-negative, got ${iterations}`);
+  }
+  const mode = options.mode || 'trilinear';
+  if (mode !== 'nearest' && mode !== 'trilinear') {
+    throw new Error(`inverseWarpVolume: unknown mode '${mode}'`);
+  }
+  const sampleVolume = mode === 'nearest' ? sampleVolumeZeroNearest : sampleVolumeZeroTri;
+
+  const out = new Float32Array(X * Y * Z);
+  for (let z = 0; z < Z; z++) {
+    for (let y = 0; y < Y; y++) {
+      for (let x = 0; x < X; x++) {
+        let qx = x;
+        let qy = y;
+        let qz = z;
+        for (let i = 0; i < iterations; i++) {
+          const dx = sampleDispChannelClampTri(disp, dispDims, qx, qy, qz, 0);
+          const dy = sampleDispChannelClampTri(disp, dispDims, qx, qy, qz, 1);
+          const dz = sampleDispChannelClampTri(disp, dispDims, qx, qy, qz, 2);
+          qx = x - dx;
+          qy = y - dy;
+          qz = z - dz;
+        }
+        out[x + y * X + z * X * Y] = sampleVolume(volume, volDims, qx, qy, qz);
       }
     }
   }

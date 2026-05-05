@@ -155,6 +155,41 @@ function makeExecutor() {
     'stageOrder must dedupe by stage name');
 }
 
+// ---- Test 4b: runInverseWarpMask posts inverse-warp-mask + transfers mask ----
+{
+  const { exec, getWorker } = makeExecutor();
+  const initP = exec.initialize();
+  getWorker()._deliver({ type: 'initialized' });
+  await initP;
+  const maskBuffer = new Uint8Array([1, 0, 1, 0]).buffer;
+  await exec.runInverseWarpMask({
+    maskBuffer,
+    maskDims: [2, 2, 1],
+    stage: 'threshold-patient'
+  });
+  const w = getWorker();
+  const msg = w.posted.find(p => p.msg.type === 'inverse-warp-mask');
+  assert.ok(msg, 'inverse-warp-mask message must be sent');
+  assert.equal(msg.msg.data.stage, 'threshold-patient');
+  assert.deepEqual(msg.transfer, [maskBuffer],
+    'inverse-warp-mask must transfer the mask buffer');
+  assert.equal(exec.getStepStatus('inverse-warp-mask'), 'running');
+  assert.equal(exec.currentRunningStep, 'inverse-warp-mask');
+}
+
+// ---- Test 4c: inverse-warp step-complete updates status ----
+{
+  const { exec, events, getWorker } = makeExecutor();
+  const initP = exec.initialize();
+  getWorker()._deliver({ type: 'initialized' });
+  await initP;
+  await exec.runInverseWarpMask({ maskBuffer: new Uint8Array([1]).buffer });
+  getWorker()._deliver({ type: 'step-complete', step: 'inverse-warp-mask' });
+  assert.equal(exec.getStepStatus('inverse-warp-mask'), 'complete');
+  assert.equal(exec.isRunning(), false);
+  assert.deepEqual(events.stepComplete, ['inverse-warp-mask']);
+}
+
 // ---- Test 5: step-complete updates status + invokes onStepComplete ----
 {
   const { exec, events, getWorker } = makeExecutor();
@@ -257,4 +292,4 @@ function makeExecutor() {
   assert.equal(exec.currentRunningStep, null);
 }
 
-console.log('InferenceExecutor OK: 11 cases (init/load/run/stageData/step/error/cancel/clear/volumeInfo).');
+console.log('InferenceExecutor OK: 13 cases (init/load/run/stageData/step/error/cancel/clear/volumeInfo/inverse-warp).');

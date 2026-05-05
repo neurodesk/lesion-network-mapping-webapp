@@ -28,7 +28,8 @@ const { pathToFileURL } = require('node:url');
   const {
     integrateSvf,
     upsampleDisplacementField,
-    warpVolume
+    warpVolume,
+    inverseWarpVolume
   } = await import(moduleUrl);
 
   function dispIdx(dims, x, y, z, c) {
@@ -217,7 +218,40 @@ const { pathToFileURL } = require('node:url');
     }
   }
 
-  console.log('registration helpers OK: 8 cases (integrate, upsample, warp).');
+  // ---- inverseWarpVolume ----
+
+  // (9) Identity displacement: inverseWarpVolume returns the input.
+  {
+    const dims = [6, 6, 6];
+    const vol = new Float32Array(6 * 6 * 6);
+    for (let i = 0; i < vol.length; i++) vol[i] = i + 1;
+    const zeroDisp = new Float32Array(6 * 6 * 6 * 3);
+    const out = inverseWarpVolume(vol, dims, zeroDisp, dims, { mode: 'nearest' });
+    for (let i = 0; i < vol.length; i++) {
+      assert.ok(Math.abs(out[i] - vol[i]) < 1e-6,
+        `identity inverse warp must reproduce input; idx ${i}: ${out[i]} vs ${vol[i]}`);
+    }
+  }
+
+  // (10) Constant forward displacement of (+2, 0, 0) maps source x=3 to
+  //      target x=1. Inverse warp must bring a target-space mask at x=1
+  //      back to source x=3.
+  {
+    const dims = [6, 6, 6];
+    const target = new Float32Array(6 * 6 * 6);
+    target[fIdx(dims, 1, 3, 3)] = 1;
+    const disp = constField(dims, 2, 0, 0);
+    const out = inverseWarpVolume(target, dims, disp, dims, {
+      mode: 'nearest',
+      iterations: 4
+    });
+    assert.equal(out[fIdx(dims, 3, 3, 3)], 1,
+      'inverse warp must recover the source-space voxel for a constant translation');
+    assert.equal(out[fIdx(dims, 1, 3, 3)], 0,
+      'target-space location should not remain at the unprojected coordinate');
+  }
+
+  console.log('registration helpers OK: 10 cases (integrate, upsample, warp, inverse-warp).');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

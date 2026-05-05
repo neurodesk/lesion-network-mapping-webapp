@@ -232,7 +232,34 @@ assert.match(
   'stepRegister must log the chosen EP as "SynthMorph EP=<name>"'
 );
 
+// ---- (9) Patient-space threshold projection ----
+assert.match(
+  worker,
+  /inverseWarpVolume/,
+  'worker must import/use inverseWarpVolume for patient-space threshold projection'
+);
+assert.match(
+  worker,
+  /case\s+['"]inverse-warp-mask['"]/,
+  "worker dispatch must handle 'inverse-warp-mask'"
+);
+assert.match(
+  worker,
+  /stage\s*=\s*['"]threshold-patient['"]/,
+  "inverse-warp-mask must default its output stage to 'threshold-patient'"
+);
+assert.match(
+  executor,
+  /\brunInverseWarpMask\s*\(/,
+  'InferenceExecutor must expose runInverseWarpMask(...)'
+);
+assert.match(
+  executor,
+  /['"]inverse-warp-mask['"]/,
+  'runInverseWarpMask must post the inverse-warp-mask message type'
+);
+
 console.log(
-  'inference-worker module-worker migration OK: 8 invariants, ' +
-  '20+ source-grep assertions.'
+  'inference-worker module-worker migration OK: 9 invariants, ' +
+  '25+ source-grep assertions.'
 );

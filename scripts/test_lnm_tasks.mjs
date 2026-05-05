@@ -128,14 +128,10 @@ assert.equal(isStageRunnable(brainmaskStage), true,
 assert.equal(isStageRunnable(segStage), true,
   'segment stage must be runnable (Phase 2a.2 module + asset are wired)');
 
-// Phase 13: pipeline-level runnability for the dropdown filter.
-// lnm-yeo-only + lnm-yeo-auto must surface; lnm-default (Schaefer400 +
-// GSP1000 placeholder) must stay hidden until those assets ship.
-// Phase 39: visible UI assumes raw T1 input. Manual-mask pipelines
-// (lnm-yeo-only + lnm-network-map) are flagged hidden:true so they
-// drop out of the dropdown — they're still reachable via setLesion()
-// auto-promote when a researcher loads a Yeo-grid mask through the
-// Advanced disclosure.
+// Pipeline-level runnability remains an internal guard even though the
+// selector is no longer visible. Manual-mask pipelines stay hidden:true
+// and are reached only through setLesion() auto-promote when a researcher
+// loads a Yeo-grid mask through the Advanced disclosure.
 assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-only')), false,
   'lnm-yeo-only must be HIDDEN (manual-mask path moved to Advanced)');
 assert.equal(isPipelineRunnable(getPipelineById('lnm-network-map')), false,

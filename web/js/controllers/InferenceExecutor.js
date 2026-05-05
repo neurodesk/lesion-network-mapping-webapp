@@ -40,7 +40,8 @@ export class InferenceExecutor {
       inference: 'pending',
       processing: 'pending',
       register: 'pending',
-      'warp-mask': 'pending'
+      'warp-mask': 'pending',
+      'inverse-warp-mask': 'pending'
     };
     this.volumeInfo = null;
   }
@@ -376,6 +377,16 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'warp-mask', data: settings }, transferList);
   }
 
+  async runInverseWarpMask(settings = {}) {
+    await this.initialize();
+    this.running = true;
+    this.currentRunningStep = 'inverse-warp-mask';
+    this.stepStatus['inverse-warp-mask'] = 'running';
+    const transferList = [];
+    if (settings.maskBuffer instanceof ArrayBuffer) transferList.push(settings.maskBuffer);
+    this.worker.postMessage({ type: 'inverse-warp-mask', data: settings }, transferList);
+  }
+
   async resetWorkerState() {
     await this.initialize();
     this.worker.postMessage({ type: 'reset-state' });
@@ -385,7 +396,8 @@ export class InferenceExecutor {
       inference: 'pending',
       processing: 'pending',
       register: 'pending',
-      'warp-mask': 'pending'
+      'warp-mask': 'pending',
+      'inverse-warp-mask': 'pending'
     };
     this.volumeInfo = null;
     this.results = {};

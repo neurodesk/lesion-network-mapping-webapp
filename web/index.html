@@ -99,22 +99,6 @@
                 </div>
                 <input type="file" id="lesionFileInput" accept=".nii,.gz">
               </div>
-              <div class="param-group">
-                <div class="param-label-row">
-                  <label class="param-label" for="pipelineSelect">Pipeline</label>
-                  <button type="button" class="help-icon" aria-label="Pipeline selection help">i
-                    <span class="help-popover" role="tooltip">
-                      The app picks the matching chain for the loaded input unless you choose a pipeline here.
-                    </span>
-                  </button>
-                </div>
-                <select id="pipelineSelect">
-                  <!-- populatePipelineSelect() in lnm-app.js rewrites these
-                       options at boot from the runnable LNM_PIPELINES set;
-                       the static option is just a no-JS fallback. -->
-                  <option value="lnm-yeo-auto">Auto Yeo overlap (T1)</option>
-                </select>
-              </div>
               <div class="step-buttons">
                 <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">Brain extraction</button>
                 <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">Pre-align T1</button>
@@ -239,6 +223,25 @@
           <label>Overlay opacity</label>
           <input type="range" id="overlayOpacity" min="0" max="1" step="0.05" value="0.7">
           <span id="overlayOpacityValue">70%</span>
+        </div>
+
+        <div class="layer-controls" aria-label="Viewer layers">
+          <label class="viewer-checkbox">
+            <input type="checkbox" id="layerToggleT1" checked disabled>
+            <span>T1</span>
+          </label>
+          <label class="viewer-checkbox">
+            <input type="checkbox" id="layerToggleBrainMask" checked disabled>
+            <span>Brain mask</span>
+          </label>
+          <label class="viewer-checkbox">
+            <input type="checkbox" id="layerToggleLesionMask" checked disabled>
+            <span>Lesion mask</span>
+          </label>
+          <label class="viewer-checkbox">
+            <input type="checkbox" id="layerToggleThresholdMap" checked disabled>
+            <span>Threshold map</span>
+          </label>
         </div>
 
         <label class="viewer-checkbox">

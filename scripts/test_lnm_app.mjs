@@ -47,8 +47,8 @@ for (const method of [
   'renderThresholdPreviewOverlay', 'downloadThresholdedNetworkMap',
   // Phase 6 additions: warp+resample bridge + one-click full chain.
   'applyRegistrationToLesion', 'runFullPipeline',
-  // Phase 13 additions: dropdown surface + about-modal version wiring.
-  'populatePipelineSelect', 'populateVersionLabel',
+  // Phase 13 additions: about-modal version wiring.
+  'populateVersionLabel',
   // Phase 15 additions: stage dispatch + threshold-default helper.
   '_runStage', '_applyThresholdDefaults',
   // Phase 19 additions: per-stage perf instrumentation helpers.
@@ -177,17 +177,10 @@ assert.match(src, /stage:\s*['"]yeo-brain-mask['"]/,
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
 
-// Phase 13: the pipeline dropdown must surface every LNM_PIPELINES entry —
-// no `.filter(p => p.id === 'lnm-yeo-only')` (or any single-id filter) is
-// allowed. We keep this assertion source-grep-based because the runtime
-// behaviour is "render every pipeline" and the negative form is what
-// catches a regression to the Phase 1 hard-filter.
-assert.doesNotMatch(src, /LNM_PIPELINES\.filter\(\s*p\s*=>\s*p\.id\s*===/,
-  'populatePipelineSelect must not hard-filter LNM_PIPELINES to a single id');
-// Confirm both pipelines exist in the source we ship to the browser so
-// the dropdown can offer them.
-assert.match(src, /populatePipelineSelect\s*\(/,
-  'populatePipelineSelect must be defined');
+assert.doesNotMatch(src, /pipelineSelect/,
+  'lnm-app.js must not bind a visible pipeline selector; Run analysis is input-driven');
+assert.match(src, /getPipelineById\(['"]lnm-yeo-auto['"]\)/,
+  'default Run analysis pipeline must be the structural-T1 auto chain');
 assert.match(src, /populateVersionLabel\s*\(/,
   'populateVersionLabel must be defined');
 assert.match(src, /aboutAppVersion/,
@@ -280,6 +273,16 @@ assert.match(src, /\bscheduleThresholdPreviewOverlay\s*\(/,
   'applyNetworkThreshold must schedule a live threshold preview overlay');
 assert.match(src, /replaceOverlayForStage\s*\(\s*['"]threshold-preview['"]/,
   'threshold preview must replace the existing threshold-preview overlay stage');
+assert.match(src, /\bprojectThresholdToPatientSpace\s*\(/,
+  'threshold preview must project final threshold masks back to patient T1 space when registration is available');
+assert.match(src, /\brunInverseWarpMask\s*\(/,
+  'patient-space threshold projection must dispatch the inverse-warp worker path');
+assert.match(src, /stage:\s*['"]threshold-patient['"]/,
+  'patient-space threshold projection must wait for the threshold-patient stage output');
+assert.match(src, /\brenderPatientLayerStack\s*\(/,
+  'patient-space threshold projection must render the structural/brainmask/lesion/threshold viewer stack');
+assert.match(src, /layerToggleT1[\s\S]*?layerToggleThresholdMap/,
+  'lnm-app.js must bind viewer layer toggles for T1, brain mask, lesion mask, and threshold map');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

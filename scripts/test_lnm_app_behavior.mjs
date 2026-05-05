@@ -192,22 +192,19 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     `brain-extraction-first pipeline must NOT run without structural; got ${JSON.stringify(calls)}`);
 }
 
-// ---- Test 5: _autoPromotePipeline only fires before user manual pick ----
+// ---- Test 5: _autoPromotePipeline follows the currently loaded input ----
 {
   const app = makeApp();
-  // Initial state: no user override.
-  app._userPickedPipeline = false;
-  // Auto-promote on file drop.
+  assert.equal(app.selectedPipeline?.id, 'lnm-yeo-auto',
+    'default Run analysis pipeline should be the structural-T1 auto chain');
+
   app._autoPromotePipeline('lnm-yeo-auto');
   assert.equal(app.selectedPipeline?.id, 'lnm-yeo-auto',
-    'auto-promote should switch to lnm-yeo-auto on first call');
+    'structural T1 input should select the full auto pipeline');
 
-  // Now simulate the user manually picking via the dropdown.
-  app._userPickedPipeline = true;
-  // Subsequent auto-promote calls must be no-ops.
   app._autoPromotePipeline('lnm-network-map');
-  assert.equal(app.selectedPipeline?.id, 'lnm-yeo-auto',
-    'auto-promote must NOT override a user-picked pipeline');
+  assert.equal(app.selectedPipeline?.id, 'lnm-network-map',
+    'researcher-mode Yeo mask input should select the manual network-map pipeline');
 }
 
 // ---- Test 6: _runStage rejects unknown modules (catches manifest typos) ----
@@ -573,4 +570,84 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: 15 dispatch + precondition + explicit-start + worker-wait + threshold-preview + min-cluster-input + top-percent + auto-promote + coverage-note + version-label cases.');
+// ---- Test 16: viewer layer toggles bind to stage visibility ----
+{
+  const app = makeApp();
+  app.structuralFile = { name: 't1.nii' };
+  app.brainmaskFile = { name: 'brainmask.nii' };
+  app.lesionMaskFile = { name: 'lesion.nii' };
+  app.thresholdedMaskFile = { name: 'threshold.nii' };
+
+  const listeners = {};
+  const makeToggle = id => ({
+    checked: true,
+    disabled: true,
+    addEventListener: (eventName, handler) => { listeners[`${id}:${eventName}`] = handler; }
+  });
+  const toggles = {
+    layerToggleT1: makeToggle('layerToggleT1'),
+    layerToggleBrainMask: makeToggle('layerToggleBrainMask'),
+    layerToggleLesionMask: makeToggle('layerToggleLesionMask'),
+    layerToggleThresholdMap: makeToggle('layerToggleThresholdMap')
+  };
+  const restoreDocument = useMockElements(toggles);
+  const stageVisibilityCalls = [];
+  app.viewerController = {
+    setStageVisible: (stage, visible) => {
+      stageVisibilityCalls.push([stage, visible]);
+      return true;
+    }
+  };
+
+  try {
+    app.bindEvents();
+    for (const el of Object.values(toggles)) {
+      assert.equal(el.disabled, false, 'available layer toggles must be enabled');
+      assert.equal(el.checked, true, 'available layer toggles default visible');
+    }
+
+    listeners['layerToggleBrainMask:change']({ target: { checked: false } });
+    assert.equal(app.viewerLayerVisibility.brainmask, false,
+      'brain-mask toggle must persist app-level visibility state');
+    assert.deepEqual(stageVisibilityCalls.at(-1), ['brainmask', false],
+      'brain-mask toggle must target the brainmask viewer stage');
+
+    listeners['layerToggleLesionMask:change']({ target: { checked: false } });
+    assert.ok(stageVisibilityCalls.some(call => call[0] === 'segmentation' && call[1] === false),
+      'lesion toggle must hide the native segmentation stage');
+    assert.ok(stageVisibilityCalls.some(call => call[0] === 'lesion' && call[1] === false),
+      'lesion toggle must hide the Yeo/manual lesion stage');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 17: threshold preview chooses patient-space projection when available ----
+{
+  const app = makeApp();
+  app.structuralFile = { name: 't1.nii' };
+  app.thresholdedMaskFile = { name: 'threshold.nii' };
+  app.networkMapAffine = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+  app.hasRegistrationDisplacement = true;
+  app.viewerController = {};
+  const projected = [];
+  let patientStackRenders = 0;
+  let atlasRenders = 0;
+  app.projectThresholdToPatientSpace = async (version) => {
+    projected.push(version);
+    app.patientThresholdedMaskFile = { name: 'patient-threshold.nii' };
+  };
+  app.renderPatientLayerStack = async () => { patientStackRenders += 1; };
+  app.renderAtlasThresholdPreviewOverlay = async () => { atlasRenders += 1; };
+
+  await app.renderThresholdPreviewOverlay(app._thresholdPreviewVersion);
+
+  assert.equal(projected.length, 1,
+    'registered structural runs must project threshold masks to patient space');
+  assert.equal(patientStackRenders, 1,
+    'patient-space projection must render the patient layer stack');
+  assert.equal(atlasRenders, 0,
+    'patient-space projection must not fall back to the atlas preview');
+}
+
+console.log('lnm-app behavior OK: 17 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label cases.');
