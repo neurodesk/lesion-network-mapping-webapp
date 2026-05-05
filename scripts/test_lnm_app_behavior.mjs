@@ -887,12 +887,16 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   });
   const controls = {
     checkAtlasAlignmentButton: makeButton('checkAtlasAlignmentButton'),
+    registrationQcMode: {
+      value: 'mni',
+      addEventListener: (eventName, handler) => { listeners[`registrationQcMode:${eventName}`] = handler; }
+    },
     showSubjectAtlasButton: makeButton('showSubjectAtlasButton'),
     downloadSubjectAtlasButton: makeButton('downloadSubjectAtlasButton')
   };
   const restoreDocument = useMockElements(controls);
   let qcCalls = 0;
-  app.showSubjectSpaceAtlas = async () => { qcCalls += 1; };
+  app.showRegistrationQc = async () => { qcCalls += 1; };
 
   try {
     app.bindEvents();
@@ -918,10 +922,79 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
 
     listeners['checkAtlasAlignmentButton:click']();
     await waitForMicrotaskCondition(() => qcCalls === 1,
-      'advanced atlas QC button must invoke showSubjectSpaceAtlas');
+      'advanced atlas QC button must invoke showRegistrationQc');
   } finally {
     restoreDocument();
   }
+}
+
+// ---- Test 17c: registration QC render modes use MNI-space artifacts ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const affine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  const templateBuffer = writeNifti1(new Float32Array([0, 1]), {
+    dims: [2, 1, 1],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'qc template'
+  });
+  const registeredBuffer = writeNifti1(new Float32Array([1, 0]), {
+    dims: [2, 1, 1],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'qc registered'
+  });
+  const displacementBuffer = writeNifti1(new Float32Array([0, 3]), {
+    dims: [2, 1, 1],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'qc displacement'
+  });
+  const atlasBuffer = writeNifti1(new Uint8Array([1, 2]), {
+    dims: [2, 1, 1],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'qc yeo atlas'
+  });
+
+  app.registrationTemplateFile = makeNiftiFile('template.nii', templateBuffer);
+  app.yeoAtlasMni160File = makeNiftiFile('yeo-mni.nii', atlasBuffer);
+  app.handleStageData({ stage: 'registered-t1-mni160', niftiData: registeredBuffer });
+  app.handleStageData({ stage: 'registration-displacement-mag', niftiData: displacementBuffer });
+  assert.equal(app.registeredT1MniFile.name, 'lnm-registered-t1-mni160.nii',
+    'registered T1 QC stage must be cached as a File');
+  assert.equal(app.displacementMagnitudeFile.name, 'lnm-registration-displacement-mag.nii',
+    'displacement magnitude QC stage must be cached as a File');
+
+  const renderedStacks = [];
+  app.viewerController = {
+    loadVolumeStack: async (entries) => { renderedStacks.push(entries); },
+    setStageVisible: () => true
+  };
+
+  await app.renderMniRegistrationQc();
+  assert.deepEqual(renderedStacks.at(-1).map(entry => entry.stage), [
+    'registration-template',
+    'registered-t1-mni160',
+    'atlas-qc'
+  ], 'MNI QC view must show fixed template, registered T1, and full Yeo atlas');
+
+  await app.renderCheckerboardRegistrationQc();
+  assert.deepEqual(renderedStacks.at(-1).map(entry => entry.stage), [
+    'registration-checkerboard',
+    'atlas-qc'
+  ], 'checkerboard QC view must show checkerboard plus full Yeo atlas');
+  assert.ok(app.registrationCheckerboardFile,
+    'checkerboard QC view must cache the generated checkerboard NIfTI');
+
+  await app.renderDisplacementRegistrationQc();
+  assert.ok(renderedStacks.at(-1).some(entry => entry.stage === 'registration-displacement' && entry.scalar),
+    'displacement QC view must render the displacement magnitude map as a scalar overlay');
 }
 
 // ---- Test 18: patient projection resamples Yeo threshold onto lnm-mni160,
@@ -1234,4 +1307,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + registration QC modes + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

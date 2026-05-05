@@ -295,6 +295,18 @@ assert.match(src, /layerToggleT1[\s\S]*?layerToggleThresholdMap[\s\S]*?layerTogg
   'lnm-app.js must bind viewer layer toggles for T1, brain mask, lesion mask, threshold map, and Yeo atlas QC');
 assert.match(src, /showSubjectAtlasButton/,
   'lnm-app.js must bind the subject-space atlas QC button');
+assert.match(src, /registrationQcMode/,
+  'lnm-app.js must bind the registration QC mode selector');
+assert.match(src, /\brenderMniRegistrationQc\s*\(/,
+  'registration QC must expose an MNI-space template/registered-T1 view');
+assert.match(src, /\brenderCheckerboardRegistrationQc\s*\(/,
+  'registration QC must expose a fixed-template/registered-T1 checkerboard view');
+assert.match(src, /\brenderDisplacementRegistrationQc\s*\(/,
+  'registration QC must expose a displacement-magnitude view');
+assert.match(src, /['"]registered-t1-mni160['"]/,
+  'orchestrator must store the registered T1 MNI-space QC output');
+assert.match(src, /['"]registration-displacement-mag['"]/,
+  'orchestrator must store the registration displacement-magnitude QC output');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

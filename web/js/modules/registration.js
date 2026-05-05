@@ -192,6 +192,27 @@ export function upsampleDisplacementField(svf, srcDims, dstDims) {
   return out;
 }
 
+export function displacementMagnitudeField(disp, dims) {
+  const [X, Y, Z] = dims;
+  const expected = X * Y * Z * 3;
+  if (disp.length !== expected) {
+    throw new Error(`displacementMagnitudeField: disp length ${disp.length} != ${expected}`);
+  }
+  const out = new Float32Array(X * Y * Z);
+  for (let z = 0; z < Z; z++) {
+    for (let y = 0; y < Y; y++) {
+      for (let x = 0; x < X; x++) {
+        const di = ((x * Y + y) * Z + z) * 3;
+        const dx = disp[di];
+        const dy = disp[di + 1];
+        const dz = disp[di + 2];
+        out[x + y * X + z * X * Y] = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+    }
+  }
+  return out;
+}
+
 // Apply a full-resolution displacement field to a scalar volume. For each
 // output voxel (x, y, z), sample input volume at (x + dx, y + dy, z + dz)
 // using trilinear interpolation; out-of-bounds returns zero.

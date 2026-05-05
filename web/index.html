@@ -99,6 +99,15 @@
                 </div>
                 <input type="file" id="lesionFileInput" accept=".nii,.gz">
               </div>
+              <div class="param-group">
+                <label class="param-label" for="registrationQcMode">Registration QC view</label>
+                <select id="registrationQcMode" class="select-input">
+                  <option value="patient">Patient space</option>
+                  <option value="mni">MNI space</option>
+                  <option value="checkerboard">Checkerboard</option>
+                  <option value="displacement">Displacement</option>
+                </select>
+              </div>
               <div class="step-buttons advanced-workflow" aria-label="Advanced workflow order">
                 <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">1 Brain extraction</button>
                 <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">2 Pre-align T1</button>

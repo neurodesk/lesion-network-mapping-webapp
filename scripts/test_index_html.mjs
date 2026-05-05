@@ -47,6 +47,7 @@ const requiredIds = [
   '#downloadLesionMaskButton',
   // Phase 3.4 additions: registration button.
   '#runRegistrationButton',
+  '#registrationQcMode',
   '#checkAtlasAlignmentButton',
   // Phase 4.4 additions: Network map subsection.
   '#computeNetworkMapButton',
@@ -106,6 +107,14 @@ assert.match(
   /id=["']runRegistrationButton["'][\s\S]*id=["']checkAtlasAlignmentButton["'][\s\S]*id=["']applyRegistrationToLesionButton["']/,
   'atlas alignment QC button must sit between registration and lesion warp'
 );
+assert.match(html, /<option\s+value=["']patient["']>Patient space<\/option>/,
+  'registration QC selector must offer patient-space view');
+assert.match(html, /<option\s+value=["']mni["']>MNI space<\/option>/,
+  'registration QC selector must offer MNI-space view');
+assert.match(html, /<option\s+value=["']checkerboard["']>Checkerboard<\/option>/,
+  'registration QC selector must offer checkerboard view');
+assert.match(html, /<option\s+value=["']displacement["']>Displacement<\/option>/,
+  'registration QC selector must offer displacement view');
 
 assert.doesNotMatch(html, /id=["']pipelineSelect["']/,
   'Pipeline selector must not be visible; Run analysis is input-driven');

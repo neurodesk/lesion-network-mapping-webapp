@@ -19,6 +19,7 @@ import { runSynthStrip } from './modules/brain-extraction.js';
 import {
   integrateSvf,
   upsampleDisplacementField,
+  displacementMagnitudeField,
   warpVolume,
   inverseWarpVolume
 } from './modules/registration.js';
@@ -1514,6 +1515,33 @@ async function stepRegister(params = {}) {
   workerState.displacementField = fullDisp;
   workerState.displacementDims = fullDims;
   postLog(`Displacement field: ${fullDisp.length.toLocaleString()} floats stored on worker state`);
+
+  postProgress(0.98, 'Preparing registration QC outputs...');
+  const registeredT1 = warpVolume(sourceNormalized, fullDims, fullDisp, fullDims);
+  const registeredNifti = createFloat32Nifti(
+    registeredT1,
+    workerState.referenceHeaderBytes,
+    workerState.referenceDims || fullDims,
+    [1, 1, 1]
+  );
+  postStageData(
+    'registered-t1-mni160',
+    registeredNifti,
+    'Moving T1 warped to the fixed MNI160 grid'
+  );
+
+  const displacementMagnitude = displacementMagnitudeField(fullDisp, fullDims);
+  const displacementNifti = createFloat32Nifti(
+    displacementMagnitude,
+    workerState.referenceHeaderBytes,
+    workerState.referenceDims || fullDims,
+    [1, 1, 1]
+  );
+  postStageData(
+    'registration-displacement-mag',
+    displacementNifti,
+    'SynthMorph displacement magnitude on the fixed MNI160 grid'
+  );
   postProgress(1.0, 'Registration complete');
   postStepComplete('register');
 }

@@ -118,6 +118,12 @@ export class LesionNetworkMappingApp {
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
+    this.registrationTemplateFile = null;
+    this.registeredT1MniFile = null;
+    this.displacementMagnitudeFile = null;
+    this.yeoAtlasMni160File = null;
+    this.registrationCheckerboardFile = null;
+    this.registrationQcMode = 'patient';
     this.affectedNetworkResult = null;
     this.functionProfiles = null;
     this._functionalProfileRenderPromise = Promise.resolve();
@@ -256,9 +262,22 @@ export class LesionNetworkMappingApp {
     if (checkAtlasAlignmentBtn) {
       checkAtlasAlignmentBtn.disabled = true;
       checkAtlasAlignmentBtn.addEventListener('click', () => {
-        this.showSubjectSpaceAtlas().catch(
+        this.showRegistrationQc().catch(
           err => this.updateOutput(`Atlas alignment QC failed: ${err.message}`)
         );
+      });
+    }
+
+    const registrationQcMode = document.getElementById('registrationQcMode');
+    if (registrationQcMode) {
+      this.registrationQcMode = registrationQcMode.value || this.registrationQcMode;
+      registrationQcMode.addEventListener('change', () => {
+        this.registrationQcMode = registrationQcMode.value || 'patient';
+        if (this.hasRegistrationDisplacement) {
+          this.showRegistrationQc().catch(
+            err => this.updateOutput(`Registration QC failed: ${err.message}`)
+          );
+        }
       });
     }
 
@@ -480,7 +499,7 @@ export class LesionNetworkMappingApp {
       case 'threshold':
         return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
       case 'atlasQc':
-        return !!this.patientAtlasFile;
+        return !!(this.patientAtlasFile || (this.hasRegistrationDisplacement && this.yeoAtlasMni160File));
       default:
         return false;
     }
@@ -561,6 +580,9 @@ export class LesionNetworkMappingApp {
     this.hasRegistrationDisplacement = false;
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
+    this.registeredT1MniFile = null;
+    this.displacementMagnitudeFile = null;
+    this.registrationCheckerboardFile = null;
     this._thresholdProjectionWarningShown = false;
     await this.viewerController.loadBaseVolume(file, {
       stage: 'structural',
@@ -891,6 +913,19 @@ export class LesionNetworkMappingApp {
         this._mniLesionResolver = null;
         r.resolve(data.niftiData);
       }
+      this._resolveStageData(data.stage, data);
+      return;
+    }
+    if (data.stage === 'registered-t1-mni160' && data.niftiData) {
+      this.registeredT1MniFile = arrayBufferToFile(data.niftiData, 'lnm-registered-t1-mni160.nii');
+      this.registrationCheckerboardFile = null;
+      this.updateOutput('Registered T1 QC volume ready on the MNI160 grid.');
+      this._resolveStageData(data.stage, data);
+      return;
+    }
+    if (data.stage === 'registration-displacement-mag' && data.niftiData) {
+      this.displacementMagnitudeFile = arrayBufferToFile(data.niftiData, 'lnm-registration-displacement-mag.nii');
+      this.updateOutput('Registration displacement QC map ready.');
       this._resolveStageData(data.stage, data);
       return;
     }
@@ -1438,7 +1473,8 @@ export class LesionNetworkMappingApp {
     );
     return {
       labels: resampled instanceof Uint8Array ? resampled : new Uint8Array(resampled),
-      dims: mni160.dims
+      dims: mni160.dims,
+      affine: mni160Affine
     };
   }
 
@@ -1471,6 +1507,178 @@ export class LesionNetworkMappingApp {
     this.refreshViewerLayerControls();
     this.updateOutput('Atlas alignment QC overlay displayed. This is a visual check, not an automated pass/fail score.');
     return this.patientAtlasFile;
+  }
+
+  getRegistrationQcMode() {
+    const el = document.getElementById('registrationQcMode');
+    const mode = el?.value || this.registrationQcMode || 'patient';
+    return ['patient', 'mni', 'checkerboard', 'displacement'].includes(mode) ? mode : 'patient';
+  }
+
+  async showRegistrationQc(mode = this.getRegistrationQcMode()) {
+    this.registrationQcMode = mode;
+    if (mode === 'patient') {
+      return this.showSubjectSpaceAtlas();
+    }
+    if (!this.hasRegistrationDisplacement) {
+      throw new Error('Run MNI registration first.');
+    }
+    if (mode === 'mni') return this.renderMniRegistrationQc();
+    if (mode === 'checkerboard') return this.renderCheckerboardRegistrationQc();
+    if (mode === 'displacement') return this.renderDisplacementRegistrationQc();
+    return this.showSubjectSpaceAtlas();
+  }
+
+  async ensureRegistrationTemplateFile() {
+    if (this.registrationTemplateFile) return this.registrationTemplateFile;
+    const mni160 = await loadAtlasFromManifest('lnm-mni160');
+    const affine = flattenAffine3Rows(affineFromHeader(mni160.header));
+    const data = mni160.data instanceof Float32Array
+      ? Float32Array.from(mni160.data)
+      : Float32Array.from(mni160.data, Number);
+    const niftiBuffer = writeNifti1(data, {
+      dims: mni160.dims,
+      spacing: [1, 1, 1],
+      affine,
+      description: 'LNM fixed MNI160 registration QC template'
+    });
+    this.registrationTemplateFile = arrayBufferToFile(niftiBuffer, 'lnm-mni160-template.nii');
+    return this.registrationTemplateFile;
+  }
+
+  async ensureYeoAtlasMni160File() {
+    if (this.yeoAtlasMni160File) return this.yeoAtlasMni160File;
+    const { labels, dims, affine } = await this.projectYeoAtlasToMni160Grid();
+    const niftiBuffer = writeNifti1(labels, {
+      dims,
+      spacing: [1, 1, 1],
+      affine: flattenAffine3Rows(affine),
+      description: 'LNM Yeo7 label atlas resampled to fixed MNI160 grid'
+    });
+    this.yeoAtlasMni160File = arrayBufferToFile(niftiBuffer, 'lnm-yeo7-atlas-mni160.nii');
+    return this.yeoAtlasMni160File;
+  }
+
+  async ensureRegistrationCheckerboardFile(blockSize = 8) {
+    if (this.registrationCheckerboardFile) return this.registrationCheckerboardFile;
+    if (!this.registeredT1MniFile) {
+      throw new Error('Registered T1 QC volume is not available; rerun MNI registration.');
+    }
+    await this.ensureRegistrationTemplateFile();
+    const [templateBuf, registeredBuf] = await Promise.all([
+      this.registrationTemplateFile.arrayBuffer(),
+      this.registeredT1MniFile.arrayBuffer()
+    ]);
+    const template = await decodeNiftiBuffer(templateBuf);
+    const registered = await decodeNiftiBuffer(registeredBuf);
+    if (!dimsEqual(template.dims, registered.dims)) {
+      throw new Error(
+        `Registration checkerboard requires matching dims; ` +
+        `template=${template.dims.join('x')} registered=${registered.dims.join('x')}`
+      );
+    }
+    const [X, Y, Z] = template.dims;
+    const out = new Float32Array(template.data.length);
+    for (let z = 0; z < Z; z++) {
+      for (let y = 0; y < Y; y++) {
+        for (let x = 0; x < X; x++) {
+          const i = x + y * X + z * X * Y;
+          const useRegistered = (
+            Math.floor(x / blockSize) +
+            Math.floor(y / blockSize) +
+            Math.floor(z / blockSize)
+          ) % 2 === 0;
+          out[i] = Number(useRegistered ? registered.data[i] : template.data[i]) || 0;
+        }
+      }
+    }
+    const niftiBuffer = writeNifti1(out, {
+      dims: template.dims,
+      spacing: [1, 1, 1],
+      affine: flattenAffine3Rows(affineFromHeader(template.header)),
+      description: 'LNM registration QC checkerboard: fixed MNI template and registered T1'
+    });
+    this.registrationCheckerboardFile = arrayBufferToFile(niftiBuffer, 'lnm-registration-checkerboard.nii');
+    return this.registrationCheckerboardFile;
+  }
+
+  async renderMniRegistrationQc() {
+    if (!this.registeredT1MniFile) {
+      throw new Error('Registered T1 QC volume is not available; rerun MNI registration.');
+    }
+    const [templateFile, atlasFile] = await Promise.all([
+      this.ensureRegistrationTemplateFile(),
+      this.ensureYeoAtlasMni160File()
+    ]);
+    const entries = [
+      { file: templateFile, stage: 'registration-template' },
+      {
+        file: this.registeredT1MniFile,
+        colormap: 'gray',
+        opacity: 0.5,
+        scalar: true,
+        stage: 'registered-t1-mni160'
+      },
+      {
+        file: atlasFile,
+        colormap: 'lnm-yeo7',
+        opacity: 0.35,
+        stage: 'atlas-qc',
+        visible: this.layerVisible('atlasQc')
+      }
+    ];
+    await this.viewerController.loadVolumeStack(entries);
+    this.applyViewerLayerVisibility();
+    this.refreshViewerLayerControls();
+    this.updateOutput('Registration QC: MNI-space registered T1, fixed template, and full Yeo atlas displayed.');
+  }
+
+  async renderCheckerboardRegistrationQc() {
+    const [checkerboardFile, atlasFile] = await Promise.all([
+      this.ensureRegistrationCheckerboardFile(),
+      this.ensureYeoAtlasMni160File()
+    ]);
+    await this.viewerController.loadVolumeStack([
+      { file: checkerboardFile, stage: 'registration-checkerboard' },
+      {
+        file: atlasFile,
+        colormap: 'lnm-yeo7',
+        opacity: 0.25,
+        stage: 'atlas-qc',
+        visible: this.layerVisible('atlasQc')
+      }
+    ]);
+    this.applyViewerLayerVisibility();
+    this.refreshViewerLayerControls();
+    this.updateOutput('Registration QC: checkerboard of fixed MNI template and registered T1 displayed.');
+  }
+
+  async renderDisplacementRegistrationQc() {
+    if (!this.displacementMagnitudeFile) {
+      throw new Error('Displacement magnitude QC map is not available; rerun MNI registration.');
+    }
+    const entries = [
+      { file: await this.ensureRegistrationTemplateFile(), stage: 'registration-template' }
+    ];
+    if (this.registeredT1MniFile) {
+      entries.push({
+        file: this.registeredT1MniFile,
+        colormap: 'gray',
+        opacity: 0.25,
+        scalar: true,
+        stage: 'registered-t1-mni160'
+      });
+    }
+    entries.push({
+      file: this.displacementMagnitudeFile,
+      colormap: 'blue2red',
+      opacity: 0.65,
+      scalar: true,
+      stage: 'registration-displacement'
+    });
+    await this.viewerController.loadVolumeStack(entries);
+    this.refreshViewerLayerControls();
+    this.updateOutput('Registration QC: SynthMorph displacement magnitude displayed on the fixed MNI template.');
   }
 
   async renderPatientLayerStack() {
@@ -1599,6 +1807,9 @@ export class LesionNetworkMappingApp {
 
     this.updateOutput('Starting MNI registration (SynthMorph deformable)...');
     this.patientAtlasFile = null;
+    this.registeredT1MniFile = null;
+    this.displacementMagnitudeFile = null;
+    this.registrationCheckerboardFile = null;
     this.refreshViewerLayerControls();
     const registrationReady = this._waitForStepComplete('register');
     const inputBuffer = await this.structuralFile.arrayBuffer();
@@ -1739,6 +1950,9 @@ export class LesionNetworkMappingApp {
     this.thresholdedMaskFile = null;
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
+    this.registeredT1MniFile = null;
+    this.displacementMagnitudeFile = null;
+    this.registrationCheckerboardFile = null;
     this.networkMapBaseFile = null;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
     this.clearAffectedNetworkTable();
@@ -1998,6 +2212,9 @@ export class LesionNetworkMappingApp {
     this.thresholdedMaskFile = null;
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
+    this.registeredT1MniFile = null;
+    this.displacementMagnitudeFile = null;
+    this.registrationCheckerboardFile = null;
     this.hasRegistrationDisplacement = false;
     this._thresholdProjectionWarningShown = false;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });

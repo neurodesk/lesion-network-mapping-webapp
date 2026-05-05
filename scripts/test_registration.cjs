@@ -28,6 +28,7 @@ const { pathToFileURL } = require('node:url');
   const {
     integrateSvf,
     upsampleDisplacementField,
+    displacementMagnitudeField,
     warpVolume,
     inverseWarpVolume
   } = await import(moduleUrl);
@@ -251,7 +252,21 @@ const { pathToFileURL } = require('node:url');
       'target-space location should not remain at the unprojected coordinate');
   }
 
-  console.log('registration helpers OK: 10 cases (integrate, upsample, warp, inverse-warp).');
+  // (11) Displacement magnitude map is F-order and Euclidean per voxel.
+  {
+    const dims = [2, 1, 1];
+    const disp = new Float32Array(dims[0] * dims[1] * dims[2] * 3);
+    disp[dispIdx(dims, 0, 0, 0, 0)] = 3;
+    disp[dispIdx(dims, 0, 0, 0, 1)] = 4;
+    disp[dispIdx(dims, 1, 0, 0, 2)] = 12;
+    const mag = displacementMagnitudeField(disp, dims);
+    assert.equal(mag[fIdx(dims, 0, 0, 0)], 5,
+      'magnitude must use sqrt(dx^2 + dy^2 + dz^2)');
+    assert.equal(mag[fIdx(dims, 1, 0, 0)], 12,
+      'magnitude output must use F-order voxel indexing');
+  }
+
+  console.log('registration helpers OK: 11 cases (integrate, upsample, warp, inverse-warp, magnitude).');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

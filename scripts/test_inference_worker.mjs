@@ -241,6 +241,21 @@ assert.match(
   /referenceDims\s*=\s*\[/,
   'stepRegister must preserve the lnm-mni160 reference dims for target-space outputs'
 );
+assert.match(
+  worker,
+  /postStageData\(\s*['"]registered-t1-mni160['"]/,
+  'stepRegister must emit the moving T1 warped onto the fixed MNI160 grid for QC'
+);
+assert.match(
+  worker,
+  /postStageData\(\s*['"]registration-displacement-mag['"]/,
+  'stepRegister must emit a displacement-magnitude map for registration QC'
+);
+assert.match(
+  worker,
+  /displacementMagnitudeField/,
+  'stepRegister must compute displacement magnitude through the registration helper'
+);
 
 // ---- (9) Patient-space threshold projection ----
 assert.match(
@@ -291,5 +306,5 @@ assert.match(
 
 console.log(
   'inference-worker module-worker migration OK: 9 invariants, ' +
-  '25+ source-grep assertions.'
+  '28+ source-grep assertions.'
 );
