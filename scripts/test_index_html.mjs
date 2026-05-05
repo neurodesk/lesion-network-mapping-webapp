@@ -106,8 +106,18 @@ assert.doesNotMatch(html, /<p\s+class=["']param-help["']/,
   'always-visible param-help paragraphs should be replaced with popovers or status text');
 assert.doesNotMatch(html, /auto-promoted on file drop|auto-fires/i,
   'UI copy must not imply processing starts on file load');
-assert.match(html, /Affected Yeo networks/,
-  'threshold results must include the affected Yeo network table title');
+assert.match(html, /Direct lesion overlap/,
+  'direct lesion result section must clearly label the lesion-overlap table');
+assert.match(html, /Networks listed here contain lesion voxels directly/,
+  'direct lesion help must explain that the first table is direct lesion overlap');
+assert.match(html, /Threshold connectivity map/,
+  'threshold panel must identify the second result source as a connectivity map');
+assert.match(html, /group-FC weighted t-map derived from the direct lesion-overlap profile/,
+  'threshold help must explain the connectivity-map source');
+assert.match(html, /Connectivity-map effects/,
+  'threshold results must clearly label the affected-network table');
+assert.match(html, /surviving the thresholded connectivity map/,
+  'affected-network help must explain that the second table comes from the thresholded map');
 assert.match(html, /Show subject atlas/,
   'results actions must expose subject-space atlas QC');
 

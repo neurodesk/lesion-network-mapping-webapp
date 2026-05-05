@@ -121,6 +121,14 @@
           3. Results
         </h2>
         <div class="section-content">
+          <div class="panel-title-row">
+            <h3>Direct lesion overlap</h3>
+            <button type="button" class="help-icon" aria-label="Direct lesion overlap help">i
+              <span class="help-popover" role="tooltip">
+                Networks listed here contain lesion voxels directly. Lesion % is the share of lesion voxels in each Yeo network.
+              </span>
+            </button>
+          </div>
           <div id="outsideAtlasWarning" class="warning hidden"></div>
           <table id="networkOverlapTable" class="results-table">
             <thead>
@@ -135,10 +143,10 @@
 
           <div class="threshold-controls" id="thresholdControls">
             <div class="panel-title-row">
-              <h3>Threshold network map</h3>
-              <button type="button" class="help-icon" aria-label="Threshold network map help">i
+              <h3>Threshold connectivity map</h3>
+              <button type="button" class="help-icon" aria-label="Threshold connectivity map help">i
                 <span class="help-popover" role="tooltip">
-                  Absolute mode keeps voxels above a t-stat threshold; percentile mode keeps the strongest map values by absolute magnitude.
+                  The connectivity map is a group-FC weighted t-map derived from the direct lesion-overlap profile. Absolute mode keeps voxels above a t-stat threshold; percentile mode keeps the strongest map values by absolute magnitude.
                 </span>
               </button>
             </div>
@@ -166,7 +174,12 @@
             <p class="threshold-summary" id="networkThresholdSummary">Run analysis first to enable thresholding.</p>
             <div id="affectedNetworkResults" class="affected-network-results hidden">
               <div class="panel-title-row">
-                <h3>Affected Yeo networks</h3>
+                <h3>Connectivity-map effects</h3>
+                <button type="button" class="help-icon" aria-label="Connectivity-map effects help">i
+                  <span class="help-popover" role="tooltip">
+                    Networks listed here contain voxels surviving the thresholded connectivity map. Map % is the share of thresholded map voxels in each Yeo network.
+                  </span>
+                </button>
               </div>
               <table id="affectedNetworkTable" class="results-table">
                 <thead>
