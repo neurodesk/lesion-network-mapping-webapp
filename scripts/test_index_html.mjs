@@ -58,7 +58,7 @@ const requiredIds = [
   // Phase 6 additions: warp+resample bridge button + one-click full chain.
   '#applyRegistrationToLesionButton',
   '#runFullPipelineButton',
-  // Phase 16 addition: in-browser affine pre-registration.
+// Phase 16 addition: in-browser affine pre-registration.
   '#prealignToMniButton',
   // Phase 21 addition: clear-results / new-run UX control.
   '#clearResultsButton',
@@ -70,6 +70,15 @@ for (const id of requiredIds) {
   const re = new RegExp(`id=["']${escaped}["']`);
   assert.match(html, re, `index.html must contain element with ${id}`);
 }
+
+const prealignButton = html.match(/<button\b[^>]*id=["']prealignToMniButton["'][^>]*>([\s\S]*?)<\/button>/i);
+assert.ok(prealignButton, '#prealignToMniButton must be a button element');
+assert.equal(prealignButton[1].trim(), 'Pre-align T1',
+  '#prealignToMniButton visible label must stay compact');
+assert.doesNotMatch(prealignButton[1], /<sup\b/i,
+  '#prealignToMniButton must not embed unit/superscript text that wraps into a broken label');
+assert.match(prealignButton[0], /title=["']Pre-align T1 to the MNI160 1 mm grid["']/,
+  '#prealignToMniButton title must retain the MNI160 1 mm detail');
 
 // Pipeline selector must offer at least the Phase 1 pipeline.
 // Phase 39: visible UI assumes raw T1 input; manual-mask pipelines

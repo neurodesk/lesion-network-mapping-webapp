@@ -256,6 +256,14 @@ assert.match(src, /from\s+['"]\.\/modules\/threshold\.js['"]/,
   'lnm-app.js must import threshold.js');
 assert.match(src, /\bapplyThreshold\s*\(/,
   'orchestrator must call applyThreshold(...)');
+assert.match(src, /\bquantileAbsValue\s*\(/,
+  'orchestrator must compute/report the percentile cutoff used for top-percent thresholding');
+assert.match(src, /1\s*-\s*\(topPercent\s*\/\s*100\)/,
+  'percentile UI must convert top-percent slider values to quantile cutoffs');
+assert.match(src, /NETWORK_TOP_PERCENT_MAX\s*=\s*10/,
+  'percentile slider must be scoped to the useful 0..10% range');
+assert.match(src, /NETWORK_TOP_PERCENT_STEP\s*=\s*0\.1/,
+  'percentile slider must allow fine 0.1% adjustment');
 assert.match(src, /['"]thresholdValue['"]|getElementById\(['"]thresholdValue['"]\)|networkThresholdValue/,
   'orchestrator must read the threshold slider value');
 assert.match(src, /thresholdMode|networkThresholdMode/,

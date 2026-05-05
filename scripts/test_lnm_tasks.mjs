@@ -79,6 +79,11 @@ assert.equal(fcStage.module, 'fc-weighted-sum');
 assert.equal(fcStage.connectomeAssetId, 'yeo7-fc-pack');
 assert.equal(isStageRunnable(fcStage), true,
   'fc stage must be runnable (Phase 4 wires fc-weighted-sum)');
+const netMapThreshold = netMap.stages.find(s => s.module === 'threshold');
+assert.equal(netMapThreshold?.defaults?.mode, 'percentile',
+  'lnm-network-map threshold default should use the percentile/top-percent mode');
+assert.ok(netMapThreshold.defaults.value > 0 && netMapThreshold.defaults.value <= 10,
+  `lnm-network-map threshold default uses top-percent semantics; expected a small top %, got ${netMapThreshold.defaults.value}`);
 
 // Phase 3: lnm-yeo-auto pipeline (T1 -> SynthStrip -> seg -> register ->
 // warp lesion to MNI -> Yeo 7-network overlap). Declaring the structure;
@@ -98,6 +103,9 @@ assert.equal(regStage.modelAssetId, 'lnm-synthmorph-mni',
   'register stage must reference the lnm-synthmorph-mni model');
 assert.equal(isStageRunnable(regStage), true,
   'register stage must be runnable (Phase 3.4 module + asset are wired)');
+const autoThreshold = yeoAuto.stages.find(s => s.module === 'threshold');
+assert.ok(autoThreshold.defaults.value > 0 && autoThreshold.defaults.value <= 10,
+  `lnm-yeo-auto threshold default uses top-percent semantics; expected a small top %, got ${autoThreshold.defaults.value}`);
 
 // Phase 2a.2: lnm-segment-only pipeline (T1 -> SynthStrip -> lesion seg ->
 // display + download). No registration / no atlas overlap until Phase 3.

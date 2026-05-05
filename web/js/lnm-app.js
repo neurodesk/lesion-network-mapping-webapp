@@ -6,7 +6,7 @@ import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
-import { applyThreshold } from './modules/threshold.js';
+import { applyThreshold, quantileAbsValue } from './modules/threshold.js';
 import { affineFromHeader, resampleAffine } from './modules/resample.js';
 import { centroidOfMask, applyAffineToVoxel, computePrealignAffine, principalAxisAlign } from './modules/prealign.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
@@ -16,6 +16,9 @@ import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
 import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
+
+const NETWORK_TOP_PERCENT_MAX = 10;
+const NETWORK_TOP_PERCENT_STEP = 0.1;
 
 function splitModelUrl(url) {
   const i = url.lastIndexOf('/');
@@ -293,17 +296,8 @@ export class LesionNetworkMappingApp {
     const thresholdMode = document.getElementById('networkThresholdMode');
     const thresholdSym = document.getElementById('networkThresholdSymmetric');
     const thresholdMinCluster = document.getElementById('networkThresholdMinCluster');
-    const thresholdValueLabel = document.getElementById('networkThresholdValueLabel');
-    const updateThresholdLabel = () => {
-      if (!thresholdValueLabel || !thresholdValue) return;
-      const mode = thresholdMode ? thresholdMode.value : 'absolute';
-      const v = Number(thresholdValue.value);
-      thresholdValueLabel.textContent = mode === 'percentile'
-        ? `${v.toFixed(0)}%`
-        : v.toFixed(2);
-    };
     const triggerRecompute = () => {
-      updateThresholdLabel();
+      this.updateThresholdValueLabel();
       if (this.networkMapData) {
         try { this.applyNetworkThreshold(); }
         catch (err) { this.updateOutput(`Threshold failed: ${err.message}`); }
@@ -311,27 +305,15 @@ export class LesionNetworkMappingApp {
     };
     if (thresholdMode) {
       thresholdMode.addEventListener('change', () => {
-        // Re-tune slider range to match the chosen mode.
-        if (thresholdValue) {
-          if (thresholdMode.value === 'percentile') {
-            thresholdValue.min = '0';
-            thresholdValue.max = '100';
-            thresholdValue.step = '1';
-            thresholdValue.value = '95';
-          } else {
-            thresholdValue.min = '0';
-            thresholdValue.max = '1';
-            thresholdValue.step = '0.01';
-            thresholdValue.value = '0.5';
-          }
-        }
+        this.configureThresholdSliderForMode(thresholdMode.value, { resetValue: true });
         triggerRecompute();
       });
     }
     if (thresholdValue) thresholdValue.addEventListener('input', triggerRecompute);
     if (thresholdSym) thresholdSym.addEventListener('change', triggerRecompute);
     if (thresholdMinCluster) thresholdMinCluster.addEventListener('change', triggerRecompute);
-    updateThresholdLabel();
+    this.configureThresholdSliderForMode(thresholdMode?.value || 'absolute');
+    this.updateThresholdValueLabel();
 
     const downloadThreshBtn = document.getElementById('downloadThresholdedNetworkMapButton');
     if (downloadThreshBtn) {
@@ -932,14 +914,42 @@ export class LesionNetworkMappingApp {
     }
   }
 
+  configureThresholdSliderForMode(mode, { resetValue = false } = {}) {
+    const valueEl = document.getElementById('networkThresholdValue');
+    if (!valueEl) return;
+    if (mode === 'percentile') {
+      valueEl.min = '0';
+      valueEl.max = String(NETWORK_TOP_PERCENT_MAX);
+      valueEl.step = String(NETWORK_TOP_PERCENT_STEP);
+      if (resetValue) valueEl.value = '5';
+    } else {
+      valueEl.min = '0';
+      valueEl.max = '1';
+      valueEl.step = '0.01';
+      if (resetValue) valueEl.value = '0.5';
+    }
+  }
+
+  updateThresholdValueLabel() {
+    const valueEl = document.getElementById('networkThresholdValue');
+    const modeEl = document.getElementById('networkThresholdMode');
+    const labelEl = document.getElementById('networkThresholdValueLabel');
+    if (!valueEl || !labelEl) return;
+    const mode = modeEl ? modeEl.value : 'absolute';
+    const v = Number(valueEl.value);
+    labelEl.textContent = mode === 'percentile'
+      ? `${v.toFixed(Number.isInteger(v) ? 0 : 1)}%`
+      : v.toFixed(2);
+  }
+
   // Phase 5: re-threshold the cached network map, update the
   // thresholded-mask download, and schedule a live binary preview overlay.
   // The scalar FC t-map stays visible as context; the red preview overlay
   // is replaced as the slider/mode/cluster controls change.
   //
   // Reads the threshold UI controls:
-  //   #networkThresholdValue   range slider, 0..100 (% for percentile;
-  //                            t-stat for absolute, scaled by /10).
+  //   #networkThresholdValue   range slider, 0..10 (top % for percentile;
+  //                            t-stat for absolute).
   //   #networkThresholdMode    select: 'absolute' | 'percentile'.
   //   #networkThresholdSymmetric  checkbox.
   //   #networkThresholdMinCluster number input.
@@ -956,9 +966,14 @@ export class LesionNetworkMappingApp {
     const mode = modeEl ? modeEl.value : 'absolute';
     const symmetric = symEl ? !!symEl.checked : false;
     const minClusterVoxels = minClEl ? Number(minClEl.value) || 0 : 0;
-    // For the slider: 'percentile' mode interprets [0..100] as a percentile;
-    // 'absolute' mode interprets the slider value directly as a t-stat.
-    const value = mode === 'percentile' ? rawValue / 100 : rawValue;
+    // The UI label is "Top % of |voxels|": 5 means keep the strongest 5%.
+    // The pure threshold engine takes a percentile cutoff q where q=0.95
+    // keeps roughly the top 5%, so invert the UI value here.
+    const topPercent = Math.max(0, Math.min(NETWORK_TOP_PERCENT_MAX, rawValue));
+    const value = mode === 'percentile' ? 1 - (topPercent / 100) : rawValue;
+    const cutoff = mode === 'percentile'
+      ? quantileAbsValue(this.networkMapData, value)
+      : value;
 
     const mask = applyThreshold(this.networkMapData, this.networkMapDims, {
       mode, value, symmetric, minClusterVoxels
@@ -969,18 +984,30 @@ export class LesionNetworkMappingApp {
       dims: this.networkMapDims,
       spacing: this.networkMapSpacing,
       affine: this.networkMapAffine,
-      description: `LNM thresholded ${mode}=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
+      description: mode === 'percentile'
+        ? `LNM thresholded topPercent=${topPercent} q=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
+        : `LNM thresholded ${mode}=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
     });
     this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii');
     const dlBtn = document.getElementById('downloadThresholdedNetworkMapButton');
     if (dlBtn) dlBtn.disabled = false;
     const summaryEl = document.getElementById('networkThresholdSummary');
     if (summaryEl) {
-      summaryEl.textContent =
-        `${count.toLocaleString()} voxels survive ${mode}` +
-        (symmetric ? ' (|t|)' : ' (t)') +
-        ` > ${value}` +
-        (minClusterVoxels > 1 ? ` + cluster≥${minClusterVoxels}` : '');
+      const clusterText = minClusterVoxels > 1 ? ` + cluster≥${minClusterVoxels}` : '';
+      if (mode === 'percentile') {
+        const topLabel = topPercent.toFixed(Number.isInteger(topPercent) ? 0 : 1);
+        summaryEl.textContent =
+          `${count.toLocaleString()} voxels survive top ${topLabel}%` +
+          (symmetric ? ' (|t|)' : ' (t)') +
+          `; cutoff ${cutoff.toPrecision(3)}` +
+          clusterText;
+      } else {
+        summaryEl.textContent =
+          `${count.toLocaleString()} voxels survive absolute` +
+          (symmetric ? ' (|t|)' : ' (t)') +
+          ` > ${value}` +
+          clusterText;
+      }
     }
     this.scheduleThresholdPreviewOverlay();
     return mask;
@@ -1406,16 +1433,18 @@ export class LesionNetworkMappingApp {
     const symEl = document.getElementById('networkThresholdSymmetric');
     const minClEl = document.getElementById('networkThresholdMinCluster');
     if (modeEl && defaults.mode) modeEl.value = defaults.mode;
+    const mode = modeEl ? modeEl.value : defaults.mode;
+    this.configureThresholdSliderForMode(mode || 'absolute');
     if (valueEl && typeof defaults.value === 'number') {
-      // Slider stores the raw value; percentile mode interprets [0,100],
-      // absolute mode interprets the value directly. Keep the manifest's
-      // convention (percentile = 0..100) consistent.
+      // Slider stores the raw UI value; percentile mode uses top-percent
+      // semantics (5 = strongest 5%), absolute mode uses the t-stat directly.
       valueEl.value = String(defaults.value);
     }
     if (symEl && typeof defaults.symmetric === 'boolean') symEl.checked = defaults.symmetric;
     if (minClEl && typeof defaults.minClusterVoxels === 'number') {
       minClEl.value = String(defaults.minClusterVoxels);
     }
+    this.updateThresholdValueLabel();
   }
 
   // Phase 21: clear all intermediate pipeline state so the user can start

@@ -547,8 +547,8 @@ overlap, FC network map, and threshold (defaults) in one click.
 **Phase 5 complete (v0.5.0)** — thresholding UI + cluster cleanup. The
 "Network map" subsection now exposes a Threshold panel:
 
-- **Mode**: absolute (slider is t-stat) or percentile of |voxels| (slider
-  is 0–100).
+- **Mode**: absolute (slider is t-stat) or top percent of |voxels| (slider
+  is 0–10 in 0.1% steps; `5` keeps roughly the strongest 5% and `0` keeps none).
 - **Symmetric** toggle: `|x| > T` instead of `x > T` for positive/negative
   one-sided.
 - **Min cluster (voxels)**: post-threshold 26-connected component cleanup

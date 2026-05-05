@@ -90,7 +90,7 @@ export const LNM_PIPELINES = [
         id: 'threshold',
         module: 'threshold',
         required: false,
-        defaults: { mode: 'percentile', value: 95, symmetric: true, minClusterVoxels: 0 }
+        defaults: { mode: 'percentile', value: 5, symmetric: true, minClusterVoxels: 0 }
       }
     ]
   },
@@ -149,7 +149,7 @@ export const LNM_PIPELINES = [
         id: 'threshold',
         module: 'threshold',
         required: false,
-        defaults: { mode: 'percentile', value: 95, symmetric: true, minClusterVoxels: 0 }
+        defaults: { mode: 'percentile', value: 5, symmetric: true, minClusterVoxels: 0 }
       }
     ]
   },
@@ -196,7 +196,7 @@ export const LNM_PIPELINES = [
         required: false,
         defaults: {
           mode: 'percentile',
-          value: 95,
+          value: 5,
           symmetric: true,
           minClusterVoxels: 50
         }

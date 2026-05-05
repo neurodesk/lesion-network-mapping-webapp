@@ -246,12 +246,12 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
 
       // Phase 5.4 extension: drive the threshold UI, expect the
       // download-thresholded button to flip to enabled and emit a NIfTI
-      // mask. Switch to percentile mode @ 95 (typical user default for
+      // mask. Switch to top-percent mode @ 5 (typical user default for
       // group-FC LNM) so the threshold is meaningful regardless of the
       // raw t-stat range.
       await page.selectOption('#networkThresholdMode', 'percentile');
-      // The change handler retunes the slider to [0..100]; set 95.
-      await page.fill('#networkThresholdValue', '95');
+      // The change handler retunes the slider to [0..10]; set top 5%.
+      await page.fill('#networkThresholdValue', '5');
       await page.evaluate(() => {
         document.getElementById('networkThresholdValue').dispatchEvent(new Event('input', { bubbles: true }));
       });

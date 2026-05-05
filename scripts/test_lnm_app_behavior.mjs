@@ -433,7 +433,59 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-// ---- Test 12: version label de-duplicates the staging short SHA ----
+// ---- Test 12: percentile UI uses top-percent semantics ----
+{
+  const app = makeApp();
+  const valueEl = { value: '0' };
+  const elements = {
+    networkThresholdValue: valueEl,
+    networkThresholdMode: { value: 'percentile' },
+    networkThresholdSymmetric: { checked: true },
+    networkThresholdMinCluster: { value: '0' },
+    networkThresholdSummary: { textContent: '' },
+    downloadThresholdedNetworkMapButton: { disabled: true }
+  };
+  const restoreDocument = useMockElements(elements);
+  app.viewerController = {
+    replaceOverlayForStage: async () => {},
+    removeVolumeForStage: () => {}
+  };
+  app.networkMapData = new Float32Array([1, 2, 3, 4]);
+  app.networkMapDims = [2, 2, 1];
+  app.networkMapSpacing = [1, 1, 1];
+  app.networkMapAffine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+
+  try {
+    app.configureThresholdSliderForMode('percentile', { resetValue: true });
+    assert.equal(valueEl.min, '0', 'top-percent slider min must be 0');
+    assert.equal(valueEl.max, '10', 'top-percent slider max must be 10 for easier adjustment');
+    assert.equal(valueEl.step, '0.1', 'top-percent slider step must allow fine 0.1% adjustment');
+    assert.equal(valueEl.value, '5', 'top-percent slider reset should land on the 5% default');
+
+    valueEl.value = '0';
+    const mask0 = app.applyNetworkThreshold();
+    assert.equal(mask0.reduce((sum, value) => sum + value, 0), 0,
+      'top 0% must keep no voxels, not the whole map');
+    assert.match(elements.networkThresholdSummary.textContent, /top 0%/,
+      'summary must report user-facing top-percent semantics');
+
+    valueEl.value = '10';
+    const mask10 = app.applyNetworkThreshold();
+    assert.equal(mask10.reduce((sum, value) => sum + value, 0), 1,
+      'top 10% of four ranked voxels should keep only the strongest voxel');
+    assert.match(elements.networkThresholdSummary.textContent, /top 10%/,
+      'summary must track the top-percent slider value');
+  } finally {
+    restoreDocument();
+    app.cancelThresholdPreviewOverlay();
+  }
+}
+
+// ---- Test 13: version label de-duplicates the staging short SHA ----
 {
   assert.equal(
     formatVersionLabel('0.17.1-staging+31ff9d1', {
@@ -455,4 +507,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   );
 }
 
-console.log('lnm-app behavior OK: 12 dispatch + precondition + explicit-start + worker-wait + threshold-preview + auto-promote + version-label cases.');
+console.log('lnm-app behavior OK: 13 dispatch + precondition + explicit-start + worker-wait + threshold-preview + top-percent + auto-promote + version-label cases.');
