@@ -104,16 +104,39 @@ export class ViewerController {
     const overlayIndex = this.getOverlayIndex();
     if (overlayIndex === null) return;
 
+    this.removeVolumeAtIndex(overlayIndex);
+    this.currentOverlayFile = null;
+    this.currentOverlayIndex = null;
+  }
+
+  removeVolumeAtIndex(index) {
+    if (index === null || index === undefined || index < 0 || !this.nv.volumes[index]) return false;
+
     if (typeof this.nv.removeVolumeByIndex === 'function') {
-      this.nv.removeVolumeByIndex(overlayIndex);
+      this.nv.removeVolumeByIndex(index);
     } else {
-      this.nv.volumes.splice(overlayIndex, 1);
+      this.nv.volumes.splice(index, 1);
       this.nv.updateGLVolume();
       this.nv.drawScene?.();
     }
 
-    this.currentOverlayFile = null;
-    this.currentOverlayIndex = null;
+    for (const [stage, mappedIndex] of [...this.volumeStageIndices.entries()]) {
+      if (mappedIndex === index) this.volumeStageIndices.delete(stage);
+      else if (mappedIndex > index) this.volumeStageIndices.set(stage, mappedIndex - 1);
+    }
+    if (this.currentOverlayIndex !== null) {
+      if (this.currentOverlayIndex === index) this.currentOverlayIndex = null;
+      else if (this.currentOverlayIndex > index) this.currentOverlayIndex -= 1;
+    }
+    this.nv.updateGLVolume?.();
+    this.nv.drawScene?.();
+    return true;
+  }
+
+  removeVolumeForStage(stage) {
+    const index = this.getVolumeIndexForStage(stage);
+    if (index === null || index === 0) return false;
+    return this.removeVolumeAtIndex(index);
   }
 
   configureSegmentationVolume(index, colormap) {
@@ -183,6 +206,11 @@ export class ViewerController {
       this.updateOutput(`Error loading overlay: ${error.message}`);
       console.error(error);
     }
+  }
+
+  async replaceOverlayForStage(stage, file, colormap = 'red', opacity = 0.5, options = {}) {
+    this.removeVolumeForStage(stage);
+    await this.loadOverlay(file, colormap, opacity, { ...options, stage });
   }
 
   async loadSegmentationAsBase(file, colormap = 'sct-spinalcord', options = {}) {

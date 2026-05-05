@@ -43,7 +43,8 @@ for (const method of [
   // Phase 4.4 additions:
   'runFcNetworkMap', 'downloadNetworkMap',
   // Phase 5 additions:
-  'applyNetworkThreshold', 'downloadThresholdedNetworkMap',
+  'applyNetworkThreshold', 'scheduleThresholdPreviewOverlay',
+  'renderThresholdPreviewOverlay', 'downloadThresholdedNetworkMap',
   // Phase 6 additions: warp+resample bridge + one-click full chain.
   'applyRegistrationToLesion', 'runFullPipeline',
   // Phase 13 additions: dropdown surface + about-modal version wiring.
@@ -161,6 +162,14 @@ assert.match(src, /affine:\s*this\.networkMapAffine/,
   'network-map NIfTI writers must use the Yeo atlas affine, not a default centered grid');
 assert.match(src, /scalar:\s*true[\s\S]*?symmetricCal:\s*true/,
   'network-map overlay must render as a scalar t-map with symmetric calibration');
+assert.match(src, /\bdisplayNetworkMapOnYeoTemplate\s*\(/,
+  'runFcNetworkMap must display FC maps on a Yeo-grid display base');
+assert.match(src, /\bbuildYeoBrainMaskBaseFile\s*\(/,
+  'network-map display must use a Yeo atlas brain-mask base with matching FOV');
+assert.match(src, /\bloadVolumeStack\s*\(/,
+  'network-map display must replace the patient-space viewer stack with an atlas-space stack');
+assert.match(src, /stage:\s*['"]yeo-brain-mask['"]/,
+  'network-map display base must be stage-tracked as yeo-brain-mask');
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
 
@@ -251,6 +260,10 @@ assert.match(src, /['"]thresholdValue['"]|getElementById\(['"]thresholdValue['"]
   'orchestrator must read the threshold slider value');
 assert.match(src, /thresholdMode|networkThresholdMode/,
   'orchestrator must read the threshold mode (absolute / percentile)');
+assert.match(src, /\bscheduleThresholdPreviewOverlay\s*\(/,
+  'applyNetworkThreshold must schedule a live threshold preview overlay');
+assert.match(src, /replaceOverlayForStage\s*\(\s*['"]threshold-preview['"]/,
+  'threshold preview must replace the existing threshold-preview overlay stage');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

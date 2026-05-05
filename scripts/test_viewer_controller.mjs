@@ -245,4 +245,35 @@ function fakeFile(name) {
   assert.equal(vc.volumeStageIndices.get('network-map'), 1);
 }
 
-console.log('ViewerController OK: 10 cases (Phase 4 call-shape, overlay path, scalar overlays, view + stage + colormap).');
+// ---- Test 11: replacing a stage overlay preserves other stage indices ----
+{
+  const { nv, calls } = makeNv();
+  const vc = new ViewerController({ nv });
+  await vc.loadBaseVolume(fakeFile('yeo-base.nii'), { stage: 'yeo-brain-mask' });
+  await vc.loadOverlay(fakeFile('threshold-a.nii'), 'red', 0.5, { stage: 'threshold-preview' });
+  await vc.loadOverlay(fakeFile('network.nii'), 'blue2red', 0.5, {
+    stage: 'network-map',
+    scalar: true,
+    symmetricCal: true
+  });
+
+  assert.equal(vc.getVolumeIndexForStage('threshold-preview'), 1);
+  assert.equal(vc.getVolumeIndexForStage('network-map'), 2);
+
+  await vc.replaceOverlayForStage('threshold-preview', fakeFile('threshold-b.nii'), 'red', 0.65);
+
+  assert.deepEqual(calls.removeVolumeByIndex, [1],
+    'replaceOverlayForStage must remove the old stage volume before adding the new one');
+  assert.equal(nv.volumes.length, 3,
+    'replacement must not accumulate duplicate threshold overlays');
+  assert.equal(vc.getVolumeIndexForStage('network-map'), 1,
+    'stage indices above the removed overlay must shift down');
+  assert.equal(vc.getVolumeIndexForStage('threshold-preview'), 2,
+    'replacement threshold overlay must be stage-tracked at its new index');
+  assert.equal(calls.addVolumeFromUrl.at(-1).name, 'threshold-b.nii');
+  assert.equal(nv.volumes[2].interpolation, false,
+    'replacement threshold overlay remains a binary/discrete overlay');
+  assert.deepEqual(calls.setOpacity.at(-1), [2, 0.65]);
+}
+
+console.log('ViewerController OK: 11 cases (Phase 4 call-shape, overlay replace path, scalar overlays, view + stage + colormap).');

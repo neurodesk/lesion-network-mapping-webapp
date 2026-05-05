@@ -59,9 +59,14 @@ globalThis.document = {
   body: { appendChild: () => {} }
 };
 globalThis.window = globalThis;
-globalThis.URL = { createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} };
+globalThis.location = { href: 'http://localhost:8080/' };
+globalThis.URL.createObjectURL = () => 'blob:fake';
+globalThis.URL.revokeObjectURL = () => {};
 globalThis.Blob = class { constructor() {} };
-globalThis.File = class { constructor() {} };
+globalThis.File = class {
+  constructor(parts, name) { this.parts = parts; this.name = name; }
+  async arrayBuffer() { return this.parts?.[0] || new ArrayBuffer(0); }
+};
 
 const { LesionNetworkMappingApp, formatVersionLabel } =
   await import(path.join(ROOT, 'web/js/lnm-app.js'));
@@ -73,6 +78,24 @@ function makeApp() {
   app._messages = [];
   app.updateOutput = (m) => { app._messages.push(m); };
   return app;
+}
+
+function useMockElements(elementsById) {
+  const originalGetElementById = globalThis.document.getElementById;
+  globalThis.document.getElementById = (id) => elementsById[id] || null;
+  return () => { globalThis.document.getElementById = originalGetElementById; };
+}
+
+function waitMs(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
+  for (let i = 0; i < attempts; i++) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  assert.fail(message);
 }
 
 // ---- Test 1: runFullPipeline dispatches every stage in declared order ----
@@ -223,7 +246,194 @@ function makeApp() {
     'setStructural must not call runBrainExtraction; users explicitly start processing');
 }
 
-// ---- Test 8: version label de-duplicates the staging short SHA ----
+// ---- Test 8: worker-backed stages resolve only after their output arrives ----
+{
+  const app = makeApp();
+  app.manifest = {
+    modelAssets: [{
+      id: 'lnm-synthstrip',
+      sourceUrl: 'https://example.test/models/synthstrip.onnx',
+      cacheKey: 'synthstrip-v1',
+      supportStatus: 'supported'
+    }]
+  };
+  app.structuralFile = { name: 't1.nii.gz', arrayBuffer: async () => new ArrayBuffer(8) };
+  app.viewerController = { loadOverlay: async () => {} };
+  const calls = [];
+  app.executor = {
+    loadVolume: async () => { calls.push('load'); },
+    runSynthStrip: async () => { calls.push('run-synthstrip'); }
+  };
+
+  let settled = false;
+  const promise = app.runBrainExtraction().then(() => { settled = true; });
+  await waitForMicrotaskCondition(
+    () => calls.includes('run-synthstrip'),
+    'runBrainExtraction must dispatch SynthStrip before waiting for stageData'
+  );
+  assert.equal(settled, false,
+    'runBrainExtraction must not resolve before brainmask stageData arrives');
+  assert.deepEqual(calls, ['load', 'run-synthstrip']);
+
+  app.handleStageData({
+    stage: 'brainmask',
+    niftiData: new ArrayBuffer(8),
+    description: 'synthetic brainmask'
+  });
+  await Promise.resolve();
+  assert.equal(settled, false,
+    'runBrainExtraction must also wait for brainmask step-complete after stageData');
+  app.handleStepComplete('brainmask');
+  await promise;
+  assert.equal(settled, true,
+    'runBrainExtraction must resolve after brainmask stageData and step-complete arrive');
+  assert.ok(app.brainmaskFile, 'brainmaskFile must be populated before the stage resolves');
+}
+
+// ---- Test 9: registration resolves only after the worker register step completes ----
+{
+  const app = makeApp();
+  app.manifest = {
+    modelAssets: [{
+      id: 'lnm-synthmorph-mni',
+      sourceUrl: 'https://example.test/models/lnm-synthmorph-mni.onnx',
+      filename: 'models/lnm-synthmorph-mni.onnx',
+      cacheKey: 'synthmorph-v1',
+      supportStatus: 'supported',
+      inputShape: [1, 48, 48, 64, 1],
+      svfShape: [1, 24, 24, 32, 3],
+      browserRuntime: {
+        inputDims: [48, 48, 64],
+        svfDims: [24, 24, 32],
+        executionProviders: ['wasm']
+      }
+    }],
+    atlasAssets: [{
+      id: 'lnm-mni160',
+      sourceUrl: 'https://example.test/templates/lnm-mni160.nii.gz',
+      cacheKey: 'mni160-v1',
+      supportStatus: 'supported'
+    }]
+  };
+  app.structuralFile = { name: 'lnm-prealign-t1.nii', arrayBuffer: async () => new ArrayBuffer(8) };
+  let registrationSettings = null;
+  app.executor = {
+    loadVolume: async () => {},
+    runRegistration: async (settings) => { registrationSettings = settings; }
+  };
+
+  let settled = false;
+  const promise = app.runRegistration().then(() => { settled = true; });
+  await waitForMicrotaskCondition(
+    () => registrationSettings !== null,
+    'runRegistration must dispatch worker registration before waiting for step-complete'
+  );
+  assert.equal(settled, false,
+    'runRegistration must not resolve before register step-complete arrives');
+  assert.deepEqual(registrationSettings.executionProviders, ['wasm']);
+
+  app.handleStepComplete('register');
+  await promise;
+  assert.equal(settled, true,
+    'runRegistration must resolve after register step-complete arrives');
+}
+
+// ---- Test 10: lesion segmentation waits for output and inference completion ----
+{
+  const app = makeApp();
+  app.manifest = {
+    modelAssets: [{
+      id: 'lnm-stroke-lesion',
+      sourceUrl: 'https://example.test/models/lnm-stroke-lesion.onnx',
+      cacheKey: 'stroke-v1',
+      supportStatus: 'supported',
+      patchSize: [128, 128, 128],
+      probabilityThreshold: 0.4,
+      minComponentSize: 30,
+      preprocessing: {}
+    }]
+  };
+  app.structuralFile = { name: 'lnm-prealign-t1.nii', arrayBuffer: async () => new ArrayBuffer(8) };
+  app.viewerController = { loadOverlay: async () => {} };
+  const calls = [];
+  app.executor = {
+    loadVolume: async () => { calls.push('load'); },
+    runInference: async () => { calls.push('run-inference'); }
+  };
+
+  let settled = false;
+  const promise = app.runLesionSegmentation().then(() => { settled = true; });
+  await waitForMicrotaskCondition(
+    () => calls.includes('run-inference'),
+    'runLesionSegmentation must dispatch inference before waiting for stageData'
+  );
+  assert.equal(settled, false,
+    'runLesionSegmentation must not resolve before segmentation output arrives');
+  app.handleStageData({
+    stage: 'segmentation',
+    niftiData: new ArrayBuffer(8),
+    description: 'synthetic segmentation'
+  });
+  await Promise.resolve();
+  assert.equal(settled, false,
+    'runLesionSegmentation must also wait for inference step-complete after stageData');
+  app.handleStepComplete('inference');
+  await promise;
+  assert.equal(settled, true,
+    'runLesionSegmentation must resolve after segmentation stageData and step-complete arrive');
+  assert.ok(app.lesionMaskFile, 'lesionMaskFile must be populated before the stage resolves');
+}
+
+// ---- Test 11: thresholding schedules a live viewer preview overlay ----
+{
+  const app = makeApp();
+  const summaryEl = { textContent: '' };
+  const restoreDocument = useMockElements({
+    networkThresholdValue: { value: '0.5' },
+    networkThresholdMode: { value: 'absolute' },
+    networkThresholdSymmetric: { checked: true },
+    networkThresholdMinCluster: { value: '0' },
+    networkThresholdSummary: summaryEl,
+    downloadThresholdedNetworkMapButton: { disabled: true }
+  });
+  const previewCalls = [];
+  app.viewerController = {
+    replaceOverlayForStage: async (...args) => { previewCalls.push(args); },
+    removeVolumeForStage: () => {}
+  };
+  app.networkMapData = new Float32Array([-1.0, 0.25, 0.75, 2.0]);
+  app.networkMapDims = [2, 2, 1];
+  app.networkMapSpacing = [1, 1, 1];
+  app.networkMapAffine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+
+  try {
+    const mask = app.applyNetworkThreshold();
+    assert.equal(mask.reduce((sum, value) => sum + value, 0), 3,
+      'symmetric absolute threshold should create a binary mask');
+    assert.match(summaryEl.textContent, /^3 voxels survive absolute/,
+      'threshold summary should update immediately');
+
+    await waitMs(90);
+    await app._thresholdPreviewRenderPromise;
+
+    assert.equal(previewCalls.length, 1,
+      'thresholding must schedule exactly one live preview replacement');
+    assert.equal(previewCalls[0][0], 'threshold-preview');
+    assert.equal(previewCalls[0][1], app.thresholdedMaskFile,
+      'preview must render the freshly generated thresholded mask file');
+    assert.equal(previewCalls[0][2], 'red');
+    assert.equal(previewCalls[0][3], 0.65);
+  } finally {
+    restoreDocument();
+    app.cancelThresholdPreviewOverlay();
+  }
+}
+
+// ---- Test 12: version label de-duplicates the staging short SHA ----
 {
   assert.equal(
     formatVersionLabel('0.17.1-staging+31ff9d1', {
@@ -245,4 +455,4 @@ function makeApp() {
   );
 }
 
-console.log('lnm-app behavior OK: 8 dispatch + precondition + explicit-start + auto-promote + version-label cases.');
+console.log('lnm-app behavior OK: 12 dispatch + precondition + explicit-start + worker-wait + threshold-preview + auto-promote + version-label cases.');

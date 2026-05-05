@@ -93,11 +93,17 @@ export class LesionNetworkMappingApp {
     this.networkMapDims = null;
     this.networkMapSpacing = null;
     this.networkMapAffine = null;
+    this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
+    this._thresholdPreviewTimer = null;
+    this._thresholdPreviewRenderPromise = Promise.resolve();
+    this._thresholdPreviewVersion = 0;
     this.mniLesionFile = null;       // Phase 6: warped lesion at MNI160 1mm (pre-resample)
     this._mniLesionResolver = null;  // Phase 6: one-shot promise for warp-mask stage data
     this._perfStats = [];            // Phase 19: per-stage runtime markers
     this._perfRunStart = null;       // Phase 19: total runFullPipeline start
+    this._stageDataResolvers = new Map();
+    this._stepCompleteResolvers = new Map();
     this.manifest = null;          // populated lazily by ensureManifest()
     this.selectedPipeline = getPipelineById('lnm-yeo-only') || LNM_PIPELINES[0];
     // Phase 31: track whether the user has manually picked a pipeline
@@ -113,7 +119,10 @@ export class LesionNetworkMappingApp {
       setProgress: (frac, label) => this.handleWorkerProgress(frac, label),
       onStageData: (data) => this.handleStageData(data),
       onStepComplete: (step) => this.handleStepComplete(step),
-      onError: (msg) => this.updateOutput(`Worker error: ${msg}`),
+      onError: (msg) => {
+        this.updateOutput(`Worker error: ${msg}`);
+        this._rejectPendingWorkerWaits(msg);
+      },
       onInitialized: () => this.updateOutput('Inference worker ready.')
     });
   }
@@ -563,6 +572,8 @@ export class LesionNetworkMappingApp {
     const { base, name } = splitModelUrl(entry.sourceUrl);
 
     this.updateOutput('Starting SynthStrip brain extraction...');
+    const brainmaskReady = this._waitForStageData('brainmask');
+    const brainmaskStepDone = this._waitForStepComplete('brainmask');
     const inputBuffer = await this.structuralFile.arrayBuffer();
     await this.executor.loadVolume(inputBuffer);
     await this.executor.runSynthStrip({
@@ -578,6 +589,7 @@ export class LesionNetworkMappingApp {
       fast: true,
       dilate: false
     });
+    await Promise.all([brainmaskReady, brainmaskStepDone]);
   }
 
   handleWorkerProgress(frac, label) {
@@ -590,11 +602,59 @@ export class LesionNetworkMappingApp {
     }
   }
 
+  _waitForStageData(stage) {
+    return new Promise((resolve, reject) => {
+      const waiters = this._stageDataResolvers.get(stage) || [];
+      waiters.push({ resolve, reject });
+      this._stageDataResolvers.set(stage, waiters);
+    });
+  }
+
+  _waitForStepComplete(step) {
+    return new Promise((resolve, reject) => {
+      const waiters = this._stepCompleteResolvers.get(step) || [];
+      waiters.push({ resolve, reject });
+      this._stepCompleteResolvers.set(step, waiters);
+    });
+  }
+
+  _resolveStageData(stage, data) {
+    const waiters = this._stageDataResolvers.get(stage);
+    if (!waiters?.length) return;
+    this._stageDataResolvers.delete(stage);
+    for (const waiter of waiters) waiter.resolve(data);
+  }
+
+  _resolveStepComplete(step) {
+    const waiters = this._stepCompleteResolvers.get(step);
+    if (!waiters?.length) return;
+    this._stepCompleteResolvers.delete(step);
+    for (const waiter of waiters) waiter.resolve(step);
+  }
+
+  _rejectPendingWorkerWaits(message) {
+    const err = message instanceof Error ? message : new Error(String(message || 'Worker failed'));
+    for (const waiters of this._stageDataResolvers.values()) {
+      for (const waiter of waiters) waiter.reject(err);
+    }
+    for (const waiters of this._stepCompleteResolvers.values()) {
+      for (const waiter of waiters) waiter.reject(err);
+    }
+    this._stageDataResolvers.clear();
+    this._stepCompleteResolvers.clear();
+    if (this._mniLesionResolver) {
+      const resolver = this._mniLesionResolver;
+      this._mniLesionResolver = null;
+      resolver.reject(err);
+    }
+  }
+
   handleStepComplete(step) {
     this.updateOutput(`Worker step '${step}' complete.`);
     // Phase 14: a completed step ends the cancellable window.
     const cancelBtn = document.getElementById('cancelButton');
     if (cancelBtn) cancelBtn.disabled = true;
+    this._resolveStepComplete(step);
   }
 
   handleStageData(data) {
@@ -613,6 +673,7 @@ export class LesionNetworkMappingApp {
       const btn = document.getElementById('downloadBrainMaskButton');
       if (btn) btn.disabled = false;
       this.updateOutput('Brain mask ready.');
+      this._resolveStageData(data.stage, data);
       return;
     }
     if (data.stage === 'segmentation' && data.niftiData) {
@@ -626,6 +687,7 @@ export class LesionNetworkMappingApp {
       const btn = document.getElementById('downloadLesionMaskButton');
       if (btn) btn.disabled = false;
       this.updateOutput('Lesion segmentation ready.');
+      this._resolveStageData(data.stage, data);
       return;
     }
     // Phase 6.2: warp-mask emits the lesion warped onto MNI160 1mm. The
@@ -639,6 +701,7 @@ export class LesionNetworkMappingApp {
         this._mniLesionResolver = null;
         r.resolve(data.niftiData);
       }
+      this._resolveStageData(data.stage, data);
     }
   }
 
@@ -676,6 +739,8 @@ export class LesionNetworkMappingApp {
     const { base, name } = splitModelUrl(entry.sourceUrl);
 
     this.updateOutput('Starting lesion segmentation...');
+    const segmentationReady = this._waitForStageData('segmentation');
+    const segmentationStepDone = this._waitForStepComplete('inference');
     const inputBuffer = await this.structuralFile.arrayBuffer();
     await this.executor.loadVolume(inputBuffer);
     await this.executor.runInference({
@@ -695,6 +760,7 @@ export class LesionNetworkMappingApp {
       overlap: 0.25,
       testTimeAugmentation: false
     });
+    await Promise.all([segmentationReady, segmentationStepDone]);
   }
 
   downloadLesionMask() {
@@ -789,16 +855,7 @@ export class LesionNetworkMappingApp {
     });
     this.networkMapFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map.nii');
 
-    // Render as overlay on the structural / lesion view, blue-red diverging.
-    if (this.structuralFile || this.lesionFile) {
-      this.viewerController
-        .loadOverlay(this.networkMapFile, 'blue2red', 0.5, {
-          stage: 'network-map',
-          scalar: true,
-          symmetricCal: true
-        })
-        .catch(err => this.updateOutput(`Network-map render error: ${err.message}`));
-    }
+    await this.displayNetworkMapOnYeoTemplate(atlas, flatAffine);
     const dlBtn = document.getElementById('downloadNetworkMapButton');
     if (dlBtn) dlBtn.disabled = false;
 
@@ -831,11 +888,54 @@ export class LesionNetworkMappingApp {
     URL.revokeObjectURL(url);
   }
 
-  // Phase 5: re-threshold the cached network map and update the
-  // thresholded-mask download. The 'live' overlay update for the slider is
-  // best done via NiiVue cal_min/cal_max (no data swap), but this method
-  // is the source of truth for the *binary* thresholded mask used by the
-  // download button + the parity tests.
+  buildYeoBrainMaskBaseFile(atlas, flatAffine) {
+    const base = new Float32Array(atlas.data.length);
+    for (let i = 0; i < atlas.data.length; i++) {
+      base[i] = atlas.data[i] > 0 ? 1 : 0;
+    }
+    const niftiBuffer = writeNifti1(base, {
+      dims: atlas.dims,
+      spacing: this.networkMapSpacing,
+      affine: flatAffine,
+      description: 'LNM Yeo7 atlas brain mask display base'
+    });
+    return arrayBufferToFile(niftiBuffer, 'lnm-yeo-brain-mask.nii');
+  }
+
+  async displayNetworkMapOnYeoTemplate(atlas, flatAffine) {
+    if (!this.networkMapFile) return;
+    try {
+      this.networkMapBaseFile = this.buildYeoBrainMaskBaseFile(atlas, flatAffine);
+      const entries = [
+        { file: this.networkMapBaseFile, stage: 'yeo-brain-mask' }
+      ];
+      if (this.lesionFile) {
+        entries.push({
+          file: this.lesionFile,
+          colormap: 'red',
+          opacity: 0.35,
+          stage: 'lesion'
+        });
+      }
+      entries.push({
+        file: this.networkMapFile,
+        colormap: 'blue2red',
+        opacity: 0.5,
+        stage: 'network-map',
+        scalar: true,
+        symmetricCal: true
+      });
+      await this.viewerController.loadVolumeStack(entries);
+      this.updateOutput('Network map displayed on the Yeo atlas grid.');
+    } catch (err) {
+      this.updateOutput(`Network-map render error: ${err.message}`);
+    }
+  }
+
+  // Phase 5: re-threshold the cached network map, update the
+  // thresholded-mask download, and schedule a live binary preview overlay.
+  // The scalar FC t-map stays visible as context; the red preview overlay
+  // is replaced as the slider/mode/cluster controls change.
   //
   // Reads the threshold UI controls:
   //   #networkThresholdValue   range slider, 0..100 (% for percentile;
@@ -882,7 +982,51 @@ export class LesionNetworkMappingApp {
         ` > ${value}` +
         (minClusterVoxels > 1 ? ` + cluster≥${minClusterVoxels}` : '');
     }
+    this.scheduleThresholdPreviewOverlay();
     return mask;
+  }
+
+  cancelThresholdPreviewOverlay({ removeOverlay = false } = {}) {
+    this._thresholdPreviewVersion += 1;
+    if (this._thresholdPreviewTimer !== null) {
+      clearTimeout(this._thresholdPreviewTimer);
+      this._thresholdPreviewTimer = null;
+    }
+    if (removeOverlay) {
+      try { this.viewerController?.removeVolumeForStage?.('threshold-preview'); }
+      catch (e) { /* non-fatal: stale viewer state is cosmetic */ }
+    }
+  }
+
+  scheduleThresholdPreviewOverlay() {
+    if (!this.thresholdedMaskFile) return;
+    this.cancelThresholdPreviewOverlay();
+    const version = this._thresholdPreviewVersion;
+    this._thresholdPreviewTimer = setTimeout(() => {
+      this._thresholdPreviewTimer = null;
+      this._thresholdPreviewRenderPromise = this._thresholdPreviewRenderPromise
+        .catch(() => {})
+        .then(() => this.renderThresholdPreviewOverlay(version));
+    }, 75);
+  }
+
+  async renderThresholdPreviewOverlay(version = this._thresholdPreviewVersion) {
+    const file = this.thresholdedMaskFile;
+    if (version !== this._thresholdPreviewVersion || !file) return;
+    if (!this.viewerController?.replaceOverlayForStage) return;
+    try {
+      await this.viewerController.replaceOverlayForStage(
+        'threshold-preview',
+        file,
+        'red',
+        0.65
+      );
+      if (version !== this._thresholdPreviewVersion) {
+        this.viewerController?.removeVolumeForStage?.('threshold-preview');
+      }
+    } catch (err) {
+      this.updateOutput(`Threshold preview render error: ${err.message}`);
+    }
   }
 
   downloadThresholdedNetworkMap() {
@@ -924,6 +1068,7 @@ export class LesionNetworkMappingApp {
     const modelLocalUrl = new URL(`models/_dev_cache/${modelFileName}`, window.location.href).href;
 
     this.updateOutput('Starting MNI registration (SynthMorph deformable)...');
+    const registrationReady = this._waitForStepComplete('register');
     const inputBuffer = await this.structuralFile.arrayBuffer();
     await this.executor.loadVolume(inputBuffer);
     await this.executor.runRegistration({
@@ -940,6 +1085,7 @@ export class LesionNetworkMappingApp {
       referenceCacheKey: ref.cacheKey,
       nbSteps: 7
     });
+    await registrationReady;
   }
 
   // Phase 16.2: in-browser affine pre-registration (centroid match) so
@@ -1042,6 +1188,8 @@ export class LesionNetworkMappingApp {
     this.networkMapFile = null;
     this.networkMapData = null;
     this.thresholdedMaskFile = null;
+    this.networkMapBaseFile = null;
+    this.cancelThresholdPreviewOverlay({ removeOverlay: true });
 
     // Refresh viewer with the aligned T1 + brainmask overlay.
     await this.viewerController.loadBaseVolume(this.structuralFile, { stage: 'structural' });
@@ -1283,7 +1431,10 @@ export class LesionNetworkMappingApp {
     this.networkMapData = null;
     this.networkMapDims = null;
     this.networkMapSpacing = null;
+    this.networkMapAffine = null;
+    this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null;
+    this.cancelThresholdPreviewOverlay({ removeOverlay: true });
     this.mniLesionFile = null;
     if (full) {
       this.structuralFile = null;

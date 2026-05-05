@@ -23,7 +23,8 @@ function makeFakeElement(id) {
       contains(c) { return this._classes.has(c); }
     },
     listeners: {},
-    appendChild(child) { this.children.push(child); },
+    appendChild(child) { child.parentNode = this; this.children.push(child); },
+    removeChild(child) { this.children = this.children.filter(c => c !== child); },
     addEventListener(event, fn) {
       (this.listeners[event] ||= []).push(fn);
     },
@@ -37,6 +38,9 @@ function makeFakeElement(id) {
     set textContent(v) { this._text = v; },
     get textContent() { return this._text || ''; },
     style: {},
+    setAttribute(name, value) { this[name] = value; },
+    select() { this.selected = true; },
+    remove() { this.parentNode?.removeChild(this); },
     scrollTop: 0,
     get scrollHeight() { return this.children.length * 20; }
   };
@@ -44,8 +48,11 @@ function makeFakeElement(id) {
 }
 
 function setupDom(elementsById = {}) {
+  const body = makeFakeElement('body');
   globalThis.document = {
     _elements: elementsById,
+    _lastCommand: null,
+    body,
     getElementById(id) { return elementsById[id] || null; },
     createElement(tag) {
       const el = makeFakeElement(`new-${tag}`);
@@ -57,7 +64,10 @@ function setupDom(elementsById = {}) {
       });
       Object.defineProperty(el, 'innerHTML', {
         configurable: true,
-        set(v) { el._innerHtml = v; },
+        set(v) {
+          el._innerHtml = v;
+          el._text = v.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+        },
         get() { return el._innerHtml || ''; }
       });
       Object.defineProperty(el, 'textContent', {
@@ -66,10 +76,15 @@ function setupDom(elementsById = {}) {
         get() { return el._text || ''; }
       });
       return el;
+    },
+    execCommand(command) {
+      this._lastCommand = command;
+      return command === 'copy';
     }
   };
   globalThis.requestAnimationFrame = (cb) => 1;
   globalThis.cancelAnimationFrame = () => {};
+  globalThis.setTimeout = () => 1;
   globalThis.performance = globalThis.performance || { now: () => Date.now() };
 }
 
@@ -95,6 +110,41 @@ function setupDom(elementsById = {}) {
   co.clear();
   assert.equal(consoleEl.children.length, 0,
     'clear() must remove all lines');
+
+  // copyToClipboard uses navigator.clipboard when available.
+  co.log('copy me');
+  const copyBtn = makeFakeElement('copyConsole');
+  let clipboardText = null;
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { writeText: async (text) => { clipboardText = text; } } }
+  });
+  setupDom({ consoleOutput: consoleEl, copyConsole: copyBtn });
+  assert.equal(await co.copyToClipboard(), true,
+    'copyToClipboard must report success when navigator.clipboard works');
+  assert.match(clipboardText, /copy me/,
+    'copyToClipboard must write console text to navigator.clipboard');
+  assert.equal(copyBtn.textContent, 'Copied!');
+
+  // If the Clipboard API rejects, fall back to textarea + execCommand.
+  let fallbackTextarea = null;
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { writeText: async () => { throw new Error('permission denied'); } } }
+  });
+  setupDom({ consoleOutput: consoleEl, copyConsole: copyBtn });
+  const originalCreateElement = document.createElement.bind(document);
+  document.createElement = (tag) => {
+    const el = originalCreateElement(tag);
+    if (tag === 'textarea') fallbackTextarea = el;
+    return el;
+  };
+  assert.equal(await co.copyToClipboard(), true,
+    'copyToClipboard must fall back when navigator.clipboard rejects');
+  assert.match(fallbackTextarea.value, /copy me/,
+    'fallback textarea must receive console text');
+  assert.equal(document._lastCommand, 'copy',
+    'fallback path must invoke document.execCommand("copy")');
 
   // No-op when the DOM element doesn't exist (use a fresh ID).
   setupDom({});
@@ -165,4 +215,4 @@ function setupDom(elementsById = {}) {
     'isOpen() must return false when modal does not exist');
 }
 
-console.log('ui-modules OK: ConsoleOutput (log/clear/missing), ProgressManager (setProgress/reset/missing), ModalManager (open/close/toggle/overlay-click/missing).');
+console.log('ui-modules OK: ConsoleOutput (log/clear/copy fallback/missing), ProgressManager (setProgress/reset/missing), ModalManager (open/close/toggle/overlay-click/missing).');
