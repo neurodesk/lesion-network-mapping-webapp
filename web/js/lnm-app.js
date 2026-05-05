@@ -99,6 +99,7 @@ export class LesionNetworkMappingApp {
     this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.patientThresholdedMaskFile = null;
+    this.affectedNetworkResult = null;
     this._thresholdPreviewTimer = null;
     this._thresholdPreviewRenderPromise = Promise.resolve();
     this._thresholdPreviewVersion = 0;
@@ -572,6 +573,7 @@ export class LesionNetworkMappingApp {
         networkLabels: atlas.networkLabels
       });
     }
+    this.clearAffectedNetworkTable();
     const csvButton = document.getElementById('downloadOverlapCsv');
     if (csvButton) csvButton.disabled = false;
 
@@ -1028,6 +1030,7 @@ export class LesionNetworkMappingApp {
   //   #networkThresholdMinCluster number input.
   applyNetworkThreshold() {
     if (!this.networkMapData) {
+      this.clearAffectedNetworkTable();
       this.updateOutput('Compute the network map first.');
       return null;
     }
@@ -1082,9 +1085,57 @@ export class LesionNetworkMappingApp {
           clusterText;
       }
     }
+    this.updateAffectedNetworkTable(mask);
     this.refreshViewerLayerControls();
     this.scheduleThresholdPreviewOverlay();
     return mask;
+  }
+
+  updateAffectedNetworkTable(mask) {
+    this.affectedNetworkResult = null;
+    const resultEl = document.getElementById('affectedNetworkResults');
+    const tableEl = document.getElementById('affectedNetworkTable');
+    const atlas = this.overlapResult?.atlas;
+
+    if (!mask || !atlas) {
+      this.clearAffectedNetworkTable();
+      return null;
+    }
+    if (!dimsEqual(this.networkMapDims, atlas.dims)) {
+      this.clearAffectedNetworkTable();
+      this.updateOutput(
+        `Affected-network labels unavailable: threshold map dims ` +
+        `${this.networkMapDims?.join('x') || 'unknown'} do not match atlas ` +
+        `${atlas.dims.join('x')}.`
+      );
+      return null;
+    }
+
+    const parcelResult = computeParcelOverlap({
+      lesion: mask,
+      atlas: atlas.data,
+      dims: atlas.dims
+    });
+    const summary = summarizeNetworkOverlap(parcelResult, atlas.networkLabels);
+    this.affectedNetworkResult = { parcelResult, summary, atlas };
+
+    if (tableEl) {
+      renderOverlapTable(tableEl, summary, {
+        colormap: YEO7_COLORMAP,
+        percentHeader: '% of map',
+        emptyLabel: 'No affected voxels'
+      });
+    }
+    if (resultEl) resultEl.classList.remove('hidden');
+    return this.affectedNetworkResult;
+  }
+
+  clearAffectedNetworkTable() {
+    this.affectedNetworkResult = null;
+    const resultEl = document.getElementById('affectedNetworkResults');
+    if (resultEl) resultEl.classList.add('hidden');
+    const tableEl = document.getElementById('affectedNetworkTable');
+    if (tableEl) tableEl.innerHTML = '';
   }
 
   cancelThresholdPreviewOverlay({ removeOverlay = false } = {}) {
@@ -1429,12 +1480,14 @@ export class LesionNetworkMappingApp {
     this.lesionFile = null;
     this.mniLesionFile = null;
     this.overlapResult = null;
+    this.affectedNetworkResult = null;
     this.networkMapFile = null;
     this.networkMapData = null;
     this.thresholdedMaskFile = null;
     this.patientThresholdedMaskFile = null;
     this.networkMapBaseFile = null;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
+    this.clearAffectedNetworkTable();
 
     // Refresh viewer with the aligned T1 + brainmask overlay.
     await this.viewerController.loadBaseVolume(this.structuralFile, {
@@ -1679,6 +1732,7 @@ export class LesionNetworkMappingApp {
   // is set.
   clearResults({ full = false } = {}) {
     this.overlapResult = null;
+    this.affectedNetworkResult = null;
     this.brainmaskFile = null;
     this.lesionMaskFile = null;
     this.networkMapFile = null;
@@ -1717,6 +1771,7 @@ export class LesionNetworkMappingApp {
     // Reset the threshold summary.
     const summaryEl = document.getElementById('networkThresholdSummary');
     if (summaryEl) summaryEl.textContent = 'Compute a network map first to enable thresholding.';
+    this.clearAffectedNetworkTable();
     // Hide Yeo cortical-label coverage note.
     this.showYeoLabelCoverageNote(0, 0);
 

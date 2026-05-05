@@ -164,6 +164,21 @@
               <input type="number" id="networkThresholdMinCluster" class="param-input" min="0" step="1" value="0">
             </div>
             <p class="threshold-summary" id="networkThresholdSummary">Run analysis first to enable thresholding.</p>
+            <div id="affectedNetworkResults" class="affected-network-results hidden">
+              <div class="panel-title-row">
+                <h3>Affected Yeo networks</h3>
+              </div>
+              <table id="affectedNetworkTable" class="results-table">
+                <thead>
+                  <tr>
+                    <th>Network</th>
+                    <th>Voxels</th>
+                    <th>Map %</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
 
           <div class="step-buttons results-actions">

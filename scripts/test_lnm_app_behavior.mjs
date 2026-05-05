@@ -99,6 +99,15 @@ function makeNiftiFile(name, buffer) {
   };
 }
 
+function makeClassList(initial = []) {
+  const classes = new Set(initial);
+  return {
+    add: (...names) => names.forEach(name => classes.add(name)),
+    remove: (...names) => names.forEach(name => classes.delete(name)),
+    contains: (name) => classes.has(name)
+  };
+}
+
 async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   for (let i = 0; i < attempts; i++) {
     if (predicate()) return;
@@ -441,6 +450,91 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
+// ---- Test 12: thresholding labels the final affected map by Yeo network ----
+{
+  const app = makeApp();
+  const summaryEl = { textContent: '' };
+  const affectedResultsEl = { classList: makeClassList(['hidden']) };
+  const affectedTableEl = { innerHTML: '', appendChild: () => {} };
+  const elements = {
+    networkThresholdValue: { value: '1' },
+    networkThresholdMode: { value: 'absolute' },
+    networkThresholdSymmetric: { checked: false },
+    networkThresholdMinCluster: { value: '0' },
+    networkThresholdSummary: summaryEl,
+    affectedNetworkResults: affectedResultsEl,
+    affectedNetworkTable: affectedTableEl,
+    downloadThresholdedNetworkMapButton: { disabled: true }
+  };
+  const restoreDocument = useMockElements(elements);
+  const originalCreateElement = globalThis.document.createElement;
+  const renderedText = [];
+  globalThis.document.createElement = (tagName) => {
+    let text = '';
+    return {
+      tagName,
+      children: [],
+      style: {},
+      classList: makeClassList(),
+      appendChild(child) { this.children.push(child); },
+      setAttribute: () => {},
+      set textContent(value) {
+        text = value;
+        renderedText.push(value);
+      },
+      get textContent() { return text; }
+    };
+  };
+  app.viewerController = {
+    replaceOverlayForStage: async () => {},
+    removeVolumeForStage: () => {}
+  };
+  app.networkMapData = new Float32Array([0.1, 2.0, 3.0, 4.0]);
+  app.networkMapDims = [2, 2, 1];
+  app.networkMapSpacing = [1, 1, 1];
+  app.networkMapAffine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  app.overlapResult = {
+    atlas: {
+      data: new Int16Array([1, 2, 7, 2]),
+      dims: [2, 2, 1],
+      networkLabels: {
+        1: 'Visual',
+        2: 'Somatomotor',
+        7: 'Default'
+      }
+    }
+  };
+
+  try {
+    const mask = app.applyNetworkThreshold();
+    assert.equal(mask.reduce((sum, value) => sum + value, 0), 3,
+      'absolute threshold should keep the three high-valued voxels');
+    assert.ok(app.affectedNetworkResult,
+      'thresholding must store a final affected-network summary');
+    assert.deepEqual(
+      app.affectedNetworkResult.summary.networks.map(row => [row.network, row.voxelsInLesion]),
+      [['Somatomotor', 2], ['Default', 1]],
+      'affected-network summary must aggregate thresholded map voxels by Yeo label'
+    );
+    assert.equal(affectedResultsEl.classList.contains('hidden'), false,
+      'affected-network table must become visible after thresholding');
+    assert.ok(renderedText.includes('Somatomotor'),
+      'affected-network table must render the dominant Yeo network name');
+    assert.ok(renderedText.includes('Default'),
+      'affected-network table must render secondary Yeo network names');
+    assert.ok(renderedText.includes('% of map'),
+      'affected-network table must use map-specific percent copy');
+  } finally {
+    globalThis.document.createElement = originalCreateElement;
+    restoreDocument();
+    app.cancelThresholdPreviewOverlay();
+  }
+}
+
 // ---- Test 12: min-cluster input recomputes as the user types ----
 {
   const app = makeApp();
@@ -748,4 +842,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: 18 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample cases.');
+console.log('lnm-app behavior OK: 19 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample cases.');

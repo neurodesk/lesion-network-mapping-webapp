@@ -48,12 +48,16 @@ function appendPctCell(row, pct, color) {
   return cell;
 }
 
-export function renderOverlapTable(tableEl, summary, { colormap } = {}) {
+export function renderOverlapTable(tableEl, summary, {
+  colormap,
+  percentHeader = '% of lesion',
+  emptyLabel = 'No overlap'
+} = {}) {
   tableEl.innerHTML = '';
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Network', 'Voxels', '% of lesion']) {
+  for (const label of ['Network', 'Voxels', percentHeader]) {
     const th = document.createElement('th');
     th.textContent = label;
     headerRow.appendChild(th);
@@ -67,7 +71,7 @@ export function renderOverlapTable(tableEl, summary, { colormap } = {}) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
     cell.colSpan = 3;
-    cell.textContent = 'No overlap';
+    cell.textContent = emptyLabel;
     row.appendChild(cell);
     tbody.appendChild(row);
     tableEl.appendChild(tbody);

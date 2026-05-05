@@ -53,6 +53,8 @@ const requiredIds = [
   '#networkThresholdMode',
   '#networkThresholdSymmetric',
   '#networkThresholdMinCluster',
+  '#affectedNetworkResults',
+  '#affectedNetworkTable',
   '#downloadThresholdedNetworkMapButton',
   // Phase 6 additions: warp+resample bridge button + one-click full chain.
   '#applyRegistrationToLesionButton',
@@ -101,6 +103,8 @@ assert.doesNotMatch(html, /<p\s+class=["']param-help["']/,
   'always-visible param-help paragraphs should be replaced with popovers or status text');
 assert.doesNotMatch(html, /auto-promoted on file drop|auto-fires/i,
   'UI copy must not imply processing starts on file load');
+assert.match(html, /Affected Yeo networks/,
+  'threshold results must include the affected Yeo network table title');
 
 // Module loader points at the new orchestrator, not the old SCT app.
 assert.match(html, /<script\s[^>]*src=["']js\/lnm-app\.js["'][^>]*type=["']module["']/,

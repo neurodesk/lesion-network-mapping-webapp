@@ -281,6 +281,8 @@ input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
 .panel-title-row { display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm); }
 .panel-title-row h3 { flex: 1; min-width: 0; font-size: 0.75rem; text-transform: uppercase; color: var(--color-text-muted); margin: 0; letter-spacing: 0.05em; }
 .threshold-controls { margin-top: var(--space-md); }
+.affected-network-results { margin-top: var(--space-sm); }
+.affected-network-results .panel-title-row { margin-bottom: var(--space-xs); }
 .param-row { margin-bottom: var(--space-sm); }
 .param-row:last-child { margin-bottom: 0; }
 .param-row label { font-size: 0.78rem; color: var(--color-text); }
