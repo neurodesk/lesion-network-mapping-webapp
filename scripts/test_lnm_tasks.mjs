@@ -80,8 +80,8 @@ assert.equal(fcStage.connectomeAssetId, 'yeo7-fc-pack');
 assert.equal(isStageRunnable(fcStage), true,
   'fc stage must be runnable (Phase 4 wires fc-weighted-sum)');
 const netMapThreshold = netMap.stages.find(s => s.module === 'threshold');
-assert.equal(netMapThreshold?.defaults?.mode, 'percentile',
-  'lnm-network-map threshold default should use the percentile/top-percent mode');
+assert.equal(netMapThreshold?.defaults?.mode, undefined,
+  'lnm-network-map threshold defaults must not expose a threshold mode; connectivity-map UI is top-percent only');
 assert.ok(netMapThreshold.defaults.value > 0 && netMapThreshold.defaults.value <= 10,
   `lnm-network-map threshold default uses top-percent semantics; expected a small top %, got ${netMapThreshold.defaults.value}`);
 
@@ -104,6 +104,8 @@ assert.equal(regStage.modelAssetId, 'lnm-synthmorph-mni',
 assert.equal(isStageRunnable(regStage), true,
   'register stage must be runnable (Phase 3.4 module + asset are wired)');
 const autoThreshold = yeoAuto.stages.find(s => s.module === 'threshold');
+assert.equal(autoThreshold?.defaults?.mode, undefined,
+  'lnm-yeo-auto threshold defaults must not expose a threshold mode; connectivity-map UI is top-percent only');
 assert.ok(autoThreshold.defaults.value > 0 && autoThreshold.defaults.value <= 10,
   `lnm-yeo-auto threshold default uses top-percent semantics; expected a small top %, got ${autoThreshold.defaults.value}`);
 

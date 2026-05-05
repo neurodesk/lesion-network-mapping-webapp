@@ -23,7 +23,26 @@ globalThis.URL = {
   revokeObjectURL: () => {}
 };
 
+if (!globalThis.File) {
+  globalThis.File = class {
+    constructor(parts, name, options = {}) {
+      this.parts = parts;
+      this.name = name;
+      this.type = options.type || '';
+    }
+    async arrayBuffer() {
+      const first = this.parts?.[0];
+      if (first instanceof ArrayBuffer) return first;
+      if (ArrayBuffer.isView(first)) {
+        return first.buffer.slice(first.byteOffset, first.byteOffset + first.byteLength);
+      }
+      return new ArrayBuffer(0);
+    }
+  };
+}
+
 const { ViewerController } = await import(path.join(ROOT, 'web/js/controllers/ViewerController.js'));
+const { MaskDrawingController } = await import(path.join(ROOT, 'web/js/controllers/MaskDrawingController.js'));
 
 // Fake NiiVue that records every call. Mirrors the surface ViewerController
 // touches: addColormap, loadVolumes, addVolumeFromUrl, setOpacity,
@@ -352,4 +371,138 @@ function fakeFile(name) {
     'live stage-opacity application must redraw the viewer');
 }
 
-console.log('ViewerController OK: 14 cases (Phase 4 call-shape, overlay replace path, scalar overlays, visibility, view + stage + colormap + live opacity).');
+// ---- Test 15: MaskDrawingController wraps NiiVue drawing calls ----
+{
+  globalThis.niivue = { PEN_TYPE: { PEN: 0, RECTANGLE: 1, ELLIPSE: 2 } };
+  const drawBytes = new Uint8Array([1, 0, 1, 0]);
+  const calls = {
+    createEmptyDrawing: 0,
+    loadDrawingFromUrl: [],
+    setDrawingEnabled: [],
+    setPenValue: [],
+    setDrawOpacity: [],
+    drawUndo: 0,
+    drawAddUndoBitmap: 0,
+    refreshDrawing: [],
+    saveImage: [],
+    closeDrawing: 0,
+    drawScene: 0
+  };
+  const nv = {
+    back: { dims: [3, 2, 2, 2] },
+    opts: { isFilledPen: false, penSize: 1, penValue: 1 },
+    document: { opts: { penType: 0 } },
+    drawBitmap: null,
+    drawUndoBitmaps: [],
+    currentDrawUndoBitmap: -1,
+    createEmptyDrawing() {
+      calls.createEmptyDrawing += 1;
+      this.drawBitmap = new Uint8Array(8);
+    },
+    closeDrawing() {
+      calls.closeDrawing += 1;
+      this.drawBitmap = null;
+    },
+    async loadDrawingFromUrl(url, asDrawing) {
+      calls.loadDrawingFromUrl.push([url, asDrawing]);
+      this.drawBitmap = new Uint8Array(8);
+      return true;
+    },
+    setDrawingEnabled(enabled) { calls.setDrawingEnabled.push(enabled); },
+    setPenValue(value, filled) {
+      calls.setPenValue.push([value, filled]);
+      this.opts.penValue = value;
+      this.opts.isFilledPen = filled;
+    },
+    setDrawOpacity(opacity) { calls.setDrawOpacity.push(opacity); },
+    drawAddUndoBitmap() {
+      calls.drawAddUndoBitmap += 1;
+      this.currentDrawUndoBitmap += 1;
+      this.drawUndoBitmaps[this.currentDrawUndoBitmap] = new Uint8Array(this.drawBitmap);
+    },
+    drawUndo() {
+      calls.drawUndo += 1;
+      if (this.currentDrawUndoBitmap <= 0) return;
+      this.currentDrawUndoBitmap -= 1;
+      this.drawBitmap = new Uint8Array(this.drawUndoBitmaps[this.currentDrawUndoBitmap]);
+    },
+    refreshDrawing(redraw) { calls.refreshDrawing.push(redraw); },
+    async saveImage(options) {
+      calls.saveImage.push(options);
+      return drawBytes;
+    },
+    drawScene() { calls.drawScene += 1; }
+  };
+  const messages = [];
+  const controller = new MaskDrawingController({
+    nv,
+    defaultOpacity: 0.65,
+    updateOutput: (message) => messages.push(message)
+  });
+
+  controller.ensureDrawing();
+  assert.equal(calls.createEmptyDrawing, 1,
+    'ensureDrawing must create an empty drawing when none exists');
+  assert.deepEqual(calls.setDrawOpacity.at(-1), 0.65,
+    'ensureDrawing must set drawing opacity');
+  assert.equal(calls.setDrawingEnabled.at(-1), true,
+    'ensureDrawing must enable drawing mode');
+  assert.deepEqual(calls.setPenValue.at(-1), [1, false],
+    'paint tool must write lesion label 1');
+
+  controller.setTool('erase');
+  assert.deepEqual(calls.setPenValue.at(-1), [0, false],
+    'erase tool must write background label 0');
+  controller.setTool('eraseCluster');
+  assert.ok(Object.is(calls.setPenValue.at(-1)[0], -0),
+    'erase-cluster tool must pass NiiVue negative zero sentinel');
+
+  await controller.loadSeedFile(fakeFile('seed.nii'));
+  assert.equal(calls.loadDrawingFromUrl.length, 1,
+    'seed masks must load through NiiVue loadDrawingFromUrl');
+  assert.equal(calls.loadDrawingFromUrl[0][0], 'blob:fake-seed.nii');
+  assert.equal(calls.loadDrawingFromUrl[0][1], true);
+  assert.ok(messages.at(-1).includes('Editable lesion seed loaded'),
+    'seed load should report an editable drawing');
+
+  controller.setPenShape('rectangle');
+  assert.equal(nv.document.opts.penType, 1,
+    'rectangle tool must update NiiVue pen type');
+  assert.equal(controller.setBrushSize(5), 5,
+    'brush size helper must return the clamped size');
+  assert.equal(nv.opts.penSize, 5,
+    'brush size helper must update NiiVue pen size');
+  controller.setFilled(true);
+  assert.equal(calls.setPenValue.at(-1)[1], true,
+    'filled toggle must reapply the current pen value with filled mode');
+
+  controller.undo();
+  assert.equal(calls.drawUndo, 1,
+    'undo must delegate to NiiVue drawUndo');
+  nv.drawBitmap = new Uint8Array([0, 1, 1, 0, 0, 0, 2, 0]);
+  nv.drawUndoBitmaps = [];
+  nv.currentDrawUndoBitmap = -1;
+  calls.drawAddUndoBitmap = 0;
+  calls.closeDrawing = 0;
+  controller.startBlank();
+  assert.equal(calls.closeDrawing, 0,
+    'blanking a same-sized drawing must preserve the NiiVue drawing/undo stack');
+  assert.equal(calls.drawAddUndoBitmap, 2,
+    'blanking must record both the previous mask and blank mask for undo');
+  assert.deepEqual(Array.from(nv.drawBitmap), [0, 0, 0, 0, 0, 0, 0, 0],
+    'blanking must clear the current drawing bitmap in place');
+  controller.undo();
+  assert.deepEqual(Array.from(nv.drawBitmap), [0, 1, 1, 0, 0, 0, 2, 0],
+    'undo after blank must restore the pre-blank mask');
+
+  const exported = await controller.exportDrawingFile('edited.nii');
+  assert.equal(exported.name, 'edited.nii',
+    'drawing export must wrap NiiVue drawing bytes in a File');
+  assert.deepEqual(calls.saveImage.at(-1), { filename: '', isSaveDrawing: true },
+    'drawing export must use NiiVue saveImage drawing mode without browser download');
+  controller.close();
+  assert.equal(calls.setDrawingEnabled.at(-1), false,
+    'close must disable drawing mode without clearing volumes');
+}
+
+console.log('ViewerController OK: 15 cases (Phase 4 call-shape, drawing wrapper, overlay replace path, scalar overlays, visibility, view + stage + colormap + live opacity).');

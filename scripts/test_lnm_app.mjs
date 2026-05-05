@@ -247,8 +247,8 @@ assert.match(src, /\brunWarpMask\s*\(/,
 assert.match(src, /['"]mni-lesion['"]/,
   'orchestrator must wire the mni-lesion stage');
 
-// Phase 5: threshold UI wiring. applyNetworkThreshold reads the slider /
-// mode / symmetric / min-cluster controls and updates either the
+// Phase 5: threshold UI wiring. applyNetworkThreshold reads the top-percent
+// slider / magnitude / min-cluster controls and updates either the
 // thresholded mask state or the live overlay; downloadThresholdedNetworkMap
 // emits a Blob NIfTI with the thresholded binary mask.
 assert.match(src, /from\s+['"]\.\/modules\/threshold\.js['"]/,
@@ -265,8 +265,10 @@ assert.match(src, /NETWORK_TOP_PERCENT_STEP\s*=\s*0\.1/,
   'percentile slider must allow fine 0.1% adjustment');
 assert.match(src, /['"]thresholdValue['"]|getElementById\(['"]thresholdValue['"]\)|networkThresholdValue/,
   'orchestrator must read the threshold slider value');
-assert.match(src, /thresholdMode|networkThresholdMode/,
-  'orchestrator must read the threshold mode (absolute / percentile)');
+assert.doesNotMatch(src, /networkThresholdMode|thresholdMode/,
+  'orchestrator must not read a threshold mode; connectivity-map thresholding is top-percent only');
+assert.match(src, /mode:\s*['"]percentile['"]/,
+  'orchestrator must always call the threshold engine in percentile/top-percent mode');
 assert.match(src, /thresholdMinCluster[\s\S]*?addEventListener\(['"]input['"]/,
   'min-cluster changes must recompute while the user types');
 assert.match(src, /removedByCluster/,

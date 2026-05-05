@@ -124,9 +124,26 @@ function decodeNiftiForTest(buffer) {
   const bytes = new Uint8Array(buf);
   if (bytes[0] === 0x1f && bytes[1] === 0x8b) buf = nifti.decompress(buf);
   const header = nifti.readHeader(buf);
+  const imageBuffer = nifti.readImage(header, buf);
+  const byteOffset = imageBuffer.byteOffset || 0;
+  let data;
+  switch (header.datatypeCode) {
+    case 2:
+      data = new Uint8Array(imageBuffer, byteOffset);
+      break;
+    case 4:
+      data = new Int16Array(imageBuffer, byteOffset);
+      break;
+    case 16:
+      data = new Float32Array(imageBuffer, byteOffset);
+      break;
+    default:
+      data = new Uint8Array(imageBuffer, byteOffset);
+  }
   return {
     header,
-    dims: [Number(header.dims[1]), Number(header.dims[2]), Number(header.dims[3])]
+    dims: [Number(header.dims[1]), Number(header.dims[2]), Number(header.dims[3])],
+    data
   };
 }
 
@@ -438,7 +455,229 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   await promise;
   assert.equal(settled, true,
     'runLesionSegmentation must resolve after segmentation stageData and step-complete arrive');
-  assert.ok(app.lesionMaskFile, 'lesionMaskFile must be populated before the stage resolves');
+  assert.ok(app.autoLesionSeedFile, 'autoLesionSeedFile must be populated before the stage resolves');
+  assert.equal(app.lesionMaskFile, null,
+    'automatic segmentation is only a seed; confirmed manual review populates lesionMaskFile');
+}
+
+// ---- Test 10b: auto structural pipeline pauses at manual mask review ----
+{
+  const app = makeApp();
+  const calls = [];
+  app.structuralFile = { name: 'subject-t1.nii' };
+  app.runBrainExtraction = async () => { calls.push('brain'); };
+  app.prealignToMni160 = async () => { calls.push('prealign'); };
+  app.runLesionSegmentation = async () => {
+    calls.push('segment');
+    app.autoLesionSeedFile = { name: 'auto-seed.nii' };
+  };
+  app.startLesionMaskReview = async () => {
+    calls.push('review');
+    app.maskReviewActive = true;
+  };
+  app.runRegistration = async () => { calls.push('register'); };
+  app.applyRegistrationToLesion = async () => { calls.push('warp'); };
+  app.selectedPipeline = {
+    id: 'auto-with-review',
+    displayName: 'Auto With Review',
+    stages: [
+      { id: 'brain', module: 'brain-extraction', required: true },
+      { id: 'prealign', module: 'prealign', required: true },
+      { id: 'seed', module: 'inference-pipeline', required: true },
+      { id: 'register', module: 'registration', required: true }
+    ]
+  };
+
+  await app.runFullPipeline();
+
+  assert.deepEqual(calls, ['brain', 'prealign', 'segment', 'review'],
+    'auto pipeline must stop after loading the editable lesion seed');
+  assert.equal(app._pendingMaskResume?.nextStageIndex, 3,
+    'paused pipeline must remember the stage after editable-seed review');
+  assert.equal(app.maskReviewActive, true,
+    'mask review must be active after the auto seed is created');
+  assert.ok(app._messages.includes('Pipeline paused for manual lesion-mask review.'),
+    'pause must be visible to the user');
+}
+
+// ---- Test 10c: blank review path starts an editable native-space mask ----
+{
+  const app = makeApp();
+  const loaded = [];
+  let blankStarts = 0;
+  let seedLoads = 0;
+  const toolCalls = [];
+  app.nativeStructuralFile = { name: 'native-t1.nii' };
+  app.nativeStructuralInfo = {
+    dims: [2, 2, 2],
+    affine: [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1]
+    ]
+  };
+  app.viewerController = {
+    loadBaseVolume: async (file, opts) => { loaded.push({ file, opts }); }
+  };
+  app.maskDrawingController = {
+    hasDrawing: true,
+    startBlank: () => { blankStarts += 1; },
+    loadSeedFile: async () => { seedLoads += 1; },
+    ensureDrawing: () => {},
+    setTool: (tool) => { toolCalls.push(tool); }
+  };
+
+  const seed = await app.startLesionMaskReview({ blank: true });
+
+  assert.equal(seed, null,
+    'blank review should not create a projected seed file');
+  assert.equal(blankStarts, 1,
+    'blank review must create a new editable drawing');
+  assert.equal(seedLoads, 0,
+    'blank review must not load a seed drawing');
+  assert.equal(loaded[0].file.name, 'native-t1.nii',
+    'blank review must render the native T1 as the drawing base');
+  assert.equal(app.maskReviewActive, true,
+    'blank review must activate mask-review mode');
+  assert.equal(app.lesionMaskConfirmed, false,
+    'blank review must require explicit confirmation');
+  assert.deepEqual(toolCalls, ['paint'],
+    'blank review must leave the drawing controller in paint mode');
+}
+
+// ---- Test 10c.1: advanced Manual mask choice starts blank review ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const restoreDocument = useMockElements({
+    startManualMaskButton: {
+      addEventListener: (eventName, handler) => { listeners[`startManualMaskButton:${eventName}`] = handler; }
+    }
+  });
+  let requestedOptions = null;
+  app.startLesionMaskReview = async (options) => { requestedOptions = options; };
+
+  try {
+    app.bindEvents();
+    assert.equal(typeof listeners['startManualMaskButton:click'], 'function',
+      'advanced Manual mask button must bind a click handler');
+    listeners['startManualMaskButton:click']();
+    await waitForMicrotaskCondition(
+      () => requestedOptions !== null,
+      'advanced Manual mask button must call startLesionMaskReview'
+    );
+    assert.deepEqual(requestedOptions, { blank: true },
+      'advanced Manual mask button must start a blank editable lesion mask');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 10d: confirming a native drawing writes fixed-header MNI160 mask ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const nativeDims = [4, 4, 4];
+  const nativeAffine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const prealignSamplingAffine = [
+    [1, 0, 0, -1],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const fixedMniAffine = [
+    [1, 0, 0, -4],
+    [0, 1, 0, -4],
+    [0, 0, 1, -4],
+    [0, 0, 0, 1]
+  ];
+  const flatten = (affine) => [
+    affine[0][0], affine[0][1], affine[0][2], affine[0][3],
+    affine[1][0], affine[1][1], affine[1][2], affine[1][3],
+    affine[2][0], affine[2][1], affine[2][2], affine[2][3]
+  ];
+  const nativeMask = new Uint8Array(64);
+  nativeMask[2 + 1 * 4 + 1 * 16] = 1;
+  const nativeFile = makeNiftiFile('lnm-lesion-edited-native.nii', writeNifti1(nativeMask, {
+    dims: nativeDims,
+    spacing: [1, 1, 1],
+    affine: flatten(nativeAffine),
+    description: 'synthetic native drawing'
+  }));
+  let closed = false;
+  let resumed = false;
+  app.maskDrawingController = {
+    hasDrawing: true,
+    exportDrawingFile: async () => nativeFile,
+    close: () => { closed = true; }
+  };
+  app.prealignSamplingAffine = prealignSamplingAffine;
+  app.fixedMni160Info = {
+    dims: nativeDims,
+    affine: fixedMniAffine,
+    spacing: [1, 1, 1]
+  };
+  app.resumePipelineAfterMaskConfirmation = async () => { resumed = true; };
+
+  const confirmed = await app.confirmLesionDrawing({ resumePipeline: true });
+  const decoded = decodeNiftiForTest(await confirmed.arrayBuffer());
+
+  assert.equal(app.confirmedNativeLesionFile, nativeFile,
+    'confirmed native drawing must be kept for download/edit provenance');
+  assert.equal(app.lesionMaskFile, confirmed,
+    'confirmed MNI160 mask must become the downstream lesionMaskFile');
+  assert.equal(app.lesionMaskConfirmed, true,
+    'confirming must mark the lesion mask as user-approved');
+  assert.equal(app.maskReviewActive, false,
+    'confirming must leave mask-review mode');
+  assert.equal(closed, true,
+    'confirming must disable NiiVue drawing');
+  assert.equal(resumed, true,
+    'confirming from the paused pipeline must resume analysis');
+  assert.deepEqual(decoded.dims, nativeDims,
+    'confirmed mask must use the fixed MNI160 dimensions');
+  assertAffineClose(decoded.header.affine, fixedMniAffine,
+    'confirmed mask header must use the fixed MNI160 affine');
+  assert.equal(decoded.data[3 + 1 * 4 + 1 * 16], 1,
+    'native drawing must be resampled through the saved prealign sampling affine');
+  assert.equal(decoded.data[2 + 1 * 4 + 1 * 16], 0,
+    'native drawing must not be copied directly onto the MNI160 grid');
+}
+
+// ---- Test 10e: confirming the mask resumes the remaining pipeline stages ----
+{
+  const app = makeApp();
+  const calls = [];
+  app._perfRunStart = app._now();
+  app._runStage = async (stage) => { calls.push(stage.id); };
+  app._pendingMaskResume = {
+    pipeline: {
+      id: 'resume-test',
+      displayName: 'Resume Test',
+      stages: [
+        { id: 'brain', module: 'brain-extraction' },
+        { id: 'seed', module: 'inference-pipeline' },
+        { id: 'register', module: 'registration' },
+        { id: 'overlap', module: 'parcel-overlap' }
+      ]
+    },
+    nextStageIndex: 2
+  };
+
+  await app.resumePipelineAfterMaskConfirmation();
+
+  assert.deepEqual(calls, ['register', 'overlap'],
+    'mask confirmation must resume at the stage after editable-seed review');
+  assert.equal(app._pendingMaskResume, null,
+    'pending resume state must be cleared after resuming');
+  assert.ok(app._messages.some(message => /Pipeline complete/.test(message)),
+    'resumed pipeline must report completion when remaining stages finish');
 }
 
 // ---- Test 11: thresholding schedules a live viewer preview overlay ----
@@ -446,8 +685,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const app = makeApp();
   const summaryEl = { textContent: '' };
   const restoreDocument = useMockElements({
-    networkThresholdValue: { value: '0.5' },
-    networkThresholdMode: { value: 'absolute' },
+    networkThresholdValue: { value: '10' },
     networkThresholdSymmetric: { checked: true },
     networkThresholdMinCluster: { value: '4' },
     networkThresholdSummary: summaryEl,
@@ -470,10 +708,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   try {
     const mask = app.applyNetworkThreshold();
     assert.equal(mask.reduce((sum, value) => sum + value, 0), 0,
-      'symmetric absolute threshold should apply min-cluster cleanup to the binary mask');
-    assert.match(summaryEl.textContent, /^0 voxels survive absolute/,
+      'top-percent threshold should apply min-cluster cleanup to the binary mask');
+    assert.match(summaryEl.textContent, /^0 voxels survive top 10%/,
       'threshold summary should update immediately');
-    assert.match(summaryEl.textContent, /cluster≥4 removed 3 voxels/,
+    assert.match(summaryEl.textContent, /cluster≥4 removed 1 voxels/,
       'threshold summary should report how many voxels cluster cleanup removed');
 
     await waitMs(90);
@@ -501,8 +739,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const mapFunctionResultsEl = { classList: makeClassList(['hidden']) };
   const mapFunctionTableEl = { innerHTML: '', appendChild: () => {} };
   const elements = {
-    networkThresholdValue: { value: '1' },
-    networkThresholdMode: { value: 'absolute' },
+    networkThresholdValue: { value: '10' },
     networkThresholdSymmetric: { checked: false },
     networkThresholdMinCluster: { value: '0' },
     networkThresholdSummary: summaryEl,
@@ -565,21 +802,19 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   try {
     const mask = app.applyNetworkThreshold();
     await app._functionalProfileRenderPromise;
-    assert.equal(mask.reduce((sum, value) => sum + value, 0), 3,
-      'absolute threshold should keep the three high-valued voxels');
+    assert.equal(mask.reduce((sum, value) => sum + value, 0), 1,
+      'top-percent threshold should keep only the strongest high-valued voxel in this toy map');
     assert.ok(app.affectedNetworkResult,
       'thresholding must store a final affected-network summary');
     assert.deepEqual(
       app.affectedNetworkResult.summary.networks.map(row => [row.network, row.voxelsInLesion]),
-      [['Somatomotor', 2], ['Default', 1]],
+      [['Somatomotor', 1]],
       'affected-network summary must aggregate thresholded map voxels by Yeo label'
     );
     assert.equal(affectedResultsEl.classList.contains('hidden'), false,
       'affected-network table must become visible after thresholding');
     assert.ok(renderedText.includes('Somatomotor'),
       'affected-network table must render the dominant Yeo network name');
-    assert.ok(renderedText.includes('Default'),
-      'affected-network table must render secondary Yeo network names');
     assert.ok(renderedText.includes('% of map'),
       'affected-network table must use map-specific percent copy');
     assert.equal(mapFunctionResultsEl.classList.contains('hidden'), false,
@@ -607,7 +842,6 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     networkThresholdMinCluster: minClusterEl,
     networkThresholdValueLabel: { textContent: '' },
     networkThresholdValue: { value: '0.5', addEventListener: noOpAddEventListener },
-    networkThresholdMode: { value: 'absolute', addEventListener: noOpAddEventListener },
     networkThresholdSymmetric: { checked: true, addEventListener: noOpAddEventListener }
   });
   let thresholdCalls = 0;
@@ -632,7 +866,6 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const valueEl = { value: '0' };
   const elements = {
     networkThresholdValue: valueEl,
-    networkThresholdMode: { value: 'percentile' },
     networkThresholdSymmetric: { checked: true },
     networkThresholdMinCluster: { value: '0' },
     networkThresholdSummary: { textContent: '' },
@@ -653,7 +886,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   ];
 
   try {
-    app.configureThresholdSliderForMode('percentile', { resetValue: true });
+    app.configureTopPercentThresholdSlider({ resetValue: true });
     assert.equal(valueEl.min, '0', 'top-percent slider min must be 0');
     assert.equal(valueEl.max, '10', 'top-percent slider max must be 10 for easier adjustment');
     assert.equal(valueEl.step, '0.1', 'top-percent slider step must allow fine 0.1% adjustment');
@@ -1411,4 +1644,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/confirm/resume + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

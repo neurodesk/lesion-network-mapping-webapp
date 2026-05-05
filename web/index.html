@@ -92,7 +92,11 @@
               <div class="advanced-workflow" aria-label="Advanced workflow order">
                 <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">1 Brain extraction</button>
                 <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">2 Pre-align T1</button>
-                <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton">3 Lesion segmentation</button>
+                <div class="workflow-choice" aria-label="Lesion mask source choice">
+                  <span class="param-label">3 Lesion mask</span>
+                  <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton" title="Run auto segmentation as an editable seed">Auto seed mask</button>
+                  <button class="btn btn-secondary btn-sm" id="startManualMaskButton" title="Start a blank editable lesion mask">Manual mask</button>
+                </div>
                 <button class="btn btn-secondary btn-sm" id="runRegistrationButton">4 MNI registration (SynthMorph)</button>
                 <div class="param-group workflow-control">
                   <label class="param-label" for="registrationQcMode">Registration QC view</label>
@@ -183,26 +187,19 @@
               <h3>Threshold connectivity map</h3>
               <button type="button" class="help-icon" aria-label="Threshold connectivity map help">i
                 <span class="help-popover" role="tooltip">
-                  The connectivity map is a group-FC weighted t-map derived from the direct lesion-overlap profile. Absolute mode keeps voxels above a t-stat threshold; percentile mode keeps the strongest map values by absolute magnitude.
+                  The connectivity map is a group-FC weighted t-map derived from the direct lesion-overlap profile. The slider keeps the chosen top percentage of voxels; use magnitude to rank by t-map strength.
                 </span>
               </button>
             </div>
             <div class="param-row">
-              <label for="networkThresholdMode">Mode</label>
-              <select id="networkThresholdMode" class="param-input">
-                <option value="absolute" selected>Absolute t-stat</option>
-                <option value="percentile">Top % of |voxels|</option>
-              </select>
-            </div>
-            <div class="param-row">
               <div class="param-label-row">
-                <label for="networkThresholdValue">Threshold</label>
-                <span id="networkThresholdValueLabel" class="param-value">0.00</span>
+                <label for="networkThresholdValue">Top voxels</label>
+                <span id="networkThresholdValueLabel" class="param-value">5%</span>
               </div>
-              <input type="range" id="networkThresholdValue" class="param-input" min="0" max="1" step="0.01" value="0.5">
+              <input type="range" id="networkThresholdValue" class="param-input" min="0" max="10" step="0.1" value="5">
             </div>
             <div class="param-row">
-              <label><input type="checkbox" id="networkThresholdSymmetric"> Two-sided (|x| &gt; T)</label>
+              <label><input type="checkbox" id="networkThresholdSymmetric" checked> Use |t| magnitude</label>
             </div>
             <div class="param-row">
               <label for="networkThresholdMinCluster">Min cluster size (voxels)</label>
@@ -298,6 +295,40 @@
         <button class="view-tab" data-view="coronal">Coronal</button>
         <button class="view-tab" data-view="sagittal">Sagittal</button>
         <button class="view-tab" data-view="render">3D</button>
+      </div>
+
+      <div class="mask-drawing-toolbar hidden" id="maskDrawingToolbar" aria-label="Lesion mask drawing tools">
+        <span class="mask-review-status" id="maskReviewStatus"></span>
+        <div class="segmented-control" role="group" aria-label="Mask drawing mode">
+          <button class="tool-button active" id="maskPaintButton" type="button" title="Paint lesion voxels">Paint</button>
+          <button class="tool-button" id="maskEraseButton" type="button" title="Erase lesion voxels">Erase</button>
+          <button class="tool-button" id="maskEraseClusterButton" type="button" title="Erase the connected lesion cluster under the cursor">Erase cluster</button>
+        </div>
+        <label class="compact-control" for="maskBrushSize">
+          <span>Brush</span>
+          <input type="range" id="maskBrushSize" min="1" max="15" step="1" value="3">
+          <span id="maskBrushSizeLabel">3 vox</span>
+        </label>
+        <select class="tool-select" id="maskShapeSelect" title="Drawing shape">
+          <option value="pen">Pen</option>
+          <option value="rectangle">Rectangle</option>
+          <option value="ellipse">Ellipse</option>
+        </select>
+        <label class="viewer-checkbox">
+          <input type="checkbox" id="maskFilledToggle">
+          <span>Fill</span>
+        </label>
+        <button class="tool-button" id="maskUndoButton" type="button" title="Undo mask edit">Undo</button>
+        <button class="tool-button" id="maskBlankButton" type="button" title="Start a blank mask">Blank</button>
+        <button class="tool-button" id="maskSmoothButton" type="button" title="Smooth the 3D mask volume">Smooth</button>
+        <select class="tool-select" id="maskInterpolateAxis" title="Interpolate between drawn slices">
+          <option value="0">Axial</option>
+          <option value="1">Coronal</option>
+          <option value="2">Sagittal</option>
+        </select>
+        <button class="tool-button" id="maskInterpolateButton" type="button" title="Interpolate mask between boundary slices">Interp</button>
+        <button class="tool-button tool-confirm" id="confirmLesionMaskButton" type="button" title="Confirm edited lesion mask and continue analysis">Confirm mask</button>
+        <button class="tool-button" id="downloadEditedLesionMaskButton" type="button" title="Download the edited native-space mask" disabled>Download</button>
       </div>
 
       <div class="viewer-actions">

@@ -5,7 +5,7 @@
 //     tests/fixtures/lnm-phantom/lesion-mni2.nii.gz.
 //   Phase 2a.1.5: structural T1 -> SynthStrip brain extraction.
 //     Uses tests/fixtures/synthstrip-mini/T1.nii.gz (MNI152 2mm).
-//   Phase 2a.2.5: structural T1 -> SynthStroke lesion segmentation.
+//   Phase 2a.2.5: structural T1 -> SynthStroke editable seed -> confirm mask.
 //   Phase 3.7: structural T1 -> SynthMorph MNI registration kickoff.
 //   Phase 8: phantom -> Run full pipeline (manual-mask branch).
 //   Phase 10: structural T1 -> Run full pipeline (auto branch).
@@ -244,13 +244,10 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
       assert.equal(fcBytes[1], 0x01, 'FC download must start with NIfTI-1 header byte 0x01');
       t.diagnostic(`FC network map: ${fcBytes.length} bytes downloaded.`);
 
-      // Phase 5.4 extension: drive the threshold UI, expect the
-      // download-thresholded button to flip to enabled and emit a NIfTI
-      // mask. Switch to top-percent mode @ 5 (typical user default for
-      // group-FC LNM) so the threshold is meaningful regardless of the
-      // raw t-stat range.
-      await page.selectOption('#networkThresholdMode', 'percentile');
-      // The change handler retunes the slider to [0..10]; set top 5%.
+      // Phase 5.4 extension: drive the top-percent threshold UI, expect
+      // the download-thresholded button to flip to enabled and emit a
+      // NIfTI mask. Set top 5% so the threshold is meaningful regardless
+      // of the raw t-stat range.
       await page.fill('#networkThresholdValue', '5');
       await page.evaluate(() => {
         document.getElementById('networkThresholdValue').dispatchEvent(new Event('input', { bubbles: true }));
@@ -486,7 +483,7 @@ test('Phase 2a.1.5 browser smoke: structural T1 -> SynthStrip -> brain mask down
   }
 );
 
-test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask download',
+test('Phase 2a.2.5 browser smoke: structural T1 -> editable lesion seed -> confirm/download mask',
   { timeout: 240000 },
   async (t) => {
     await fs.access(STRUCTURAL_PATH);
@@ -539,27 +536,38 @@ test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask d
         }
         t.diagnostic(`SynthStrip elapsed: ${((Date.now() - synthStart) / 1000).toFixed(1)}s`);
 
-        // Click 'Run lesion segmentation'. This calls executor.loadVolume +
-        // executor.runInference(...) under the hood.
+        // Click 'Auto seed mask'. This calls executor.loadVolume +
+        // executor.runInference(...) under the hood, then pauses in
+        // NiiVue drawing mode until the user confirms the editable seed.
         await page.click('#runLesionSegmentationButton');
         const SEG_TIMEOUT_MS = 180000;
         const segStart = Date.now();
-        let segDone = false;
+        let seedReady = false;
         while (Date.now() - segStart < SEG_TIMEOUT_MS) {
-          segDone = await page.evaluate(() => Boolean(window.app && window.app.lesionMaskFile));
-          if (segDone) break;
+          seedReady = await page.evaluate(() => Boolean(
+            window.app &&
+            window.app.autoLesionSeedFile &&
+            window.app.maskReviewActive
+          ));
+          if (seedReady) break;
           await sleep(500);
         }
-        if (!segDone) {
+        if (!seedReady) {
           throw new Error(
-            `Lesion segmentation never finished within ${SEG_TIMEOUT_MS}ms\n` +
+            `Editable lesion seed never became ready within ${SEG_TIMEOUT_MS}ms\n` +
             `console: ${consoleMessages.slice(-30).join('\n')}`
           );
         }
-        t.diagnostic(`Lesion seg elapsed: ${((Date.now() - segStart) / 1000).toFixed(1)}s`);
+        t.diagnostic(`Editable lesion seed elapsed: ${((Date.now() - segStart) / 1000).toFixed(1)}s`);
+
+        await page.click('#confirmLesionMaskButton');
+        await page.waitForFunction(
+          () => Boolean(window.app?.lesionMaskFile && window.app?.lesionMaskConfirmed),
+          { timeout: 60000 }
+        );
 
         const downloadEnabled = await page.$eval('#downloadLesionMaskButton', el => !el.disabled);
-        assert.ok(downloadEnabled, '#downloadLesionMaskButton must enable after a successful run');
+        assert.ok(downloadEnabled, '#downloadLesionMaskButton must enable after mask confirmation');
 
         const [download] = await Promise.all([
           page.waitForEvent('download', { timeout: 15000 }),
@@ -583,7 +591,7 @@ test('Phase 2a.2.5 browser smoke: structural T1 -> lesion segmentation -> mask d
         );
 
         t.diagnostic(
-          `Lesion-seg smoke green; downloaded mask = ${masked.length} bytes ` +
+          `Editable lesion-mask smoke green; downloaded mask = ${masked.length} bytes ` +
           `(suggested filename: ${download.suggestedFilename()}).`
         );
       } finally {
@@ -800,11 +808,14 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
         let registerAttemptedAt = 0;
         let registerErrored = false;
         let registerStalled = false;
+        let confirmClicked = false;
         let lastStateLog = 0;
         while (Date.now() - startedAt < FULL_TIMEOUT) {
           const state = await page.evaluate(() => ({
             brain: Boolean(window.app?.brainmaskFile),
-            seg: Boolean(window.app?.lesionMaskFile),
+            seed: Boolean(window.app?.autoLesionSeedFile),
+            review: Boolean(window.app?.maskReviewActive),
+            confirmed: Boolean(window.app?.lesionMaskFile && window.app?.lesionMaskConfirmed),
             mniLesion: Boolean(window.app?.mniLesionFile),
             yeoLesion: Boolean(window.app?.lesionFile),
             overlap: Boolean(window.app?.overlapResult),
@@ -812,7 +823,12 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
             thresh: Boolean(window.app?.thresholdedMaskFile)
           }));
           if (state.thresh && state.overlap) { done = true; break; }
-          if (state.brain && state.seg && registerAttemptedAt === 0) {
+          if (state.seed && state.review && !confirmClicked) {
+            await page.click('#confirmLesionMaskButton');
+            confirmClicked = true;
+            t.diagnostic('Editable lesion seed ready; clicked Confirm mask to resume auto pipeline.');
+          }
+          if (state.brain && state.confirmed && registerAttemptedAt === 0) {
             registerAttemptedAt = Date.now();
           }
           if (registerAttemptedAt && consoleMessages.some(m => /Register error:\s*\d+/.test(m))) {
@@ -854,15 +870,16 @@ test('Phase 10 browser smoke: T1 -> Run full pipeline (auto branch)',
         } else if (registerErrored || registerStalled) {
           // Headless Chromium's WASM route either OOMed or hung. That's
           // a known environment limitation, not a wiring bug. Verify the
-          // chain DID get through SynthStrip + SynthStroke + register-
+          // chain DID get through SynthStrip + SynthStroke + mask
+          // confirmation + register-
           // attempted; the Node parity tests cover SynthMorph forward
           // correctness without the browser WASM heap limit.
           assert.ok(registerAttemptedAt > 0,
-            'register stage must at least be attempted (brain + seg complete)');
+            'register stage must at least be attempted (brain + editable seed + confirmed mask complete)');
           const reason = registerErrored ? 'WASM-OOMed' : 'WASM-stalled';
           t.diagnostic(
             `Auto-branch degraded: WebGPU=${webgpuAvailable}, ` +
-            `SynthStrip+SynthStroke ran, SynthMorph ${reason} as expected. ` +
+            `SynthStrip+SynthStroke+Confirm-mask ran, SynthMorph ${reason} as expected. ` +
             `Run registration directly or with a longer browser budget for full coverage.`
           );
         } else {

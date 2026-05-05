@@ -1,6 +1,7 @@
 import { FileIOController } from './controllers/FileIOController.js';
 import { ViewerController } from './controllers/ViewerController.js';
 import { InferenceExecutor } from './controllers/InferenceExecutor.js';
+import { MaskDrawingController } from './controllers/MaskDrawingController.js';
 import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
 import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
@@ -10,6 +11,7 @@ import { applyThresholdDetailed } from './modules/threshold.js';
 import { affineFromHeader, resampleAffine } from './modules/resample.js';
 import { centroidOfMask, applyAffineToVoxel, computePrealignAffine, principalAxisAlign } from './modules/prealign.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
+import { resampleBinaryMask, writeBinaryMaskNifti } from './modules/mask-transform.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
 import {
@@ -105,10 +107,20 @@ export class LesionNetworkMappingApp {
     this.console = new ConsoleOutput('consoleOutput');
     this.progress = new ProgressManager(Config.PROGRESS_CONFIG);
     this.structuralFile = null;
+    this.nativeStructuralFile = null;
+    this.nativeStructuralInfo = null;
+    this.fixedMni160Info = null;
+    this.prealignSamplingAffine = null;
     this.lesionFile = null;
     this.overlapResult = null;
     this.brainmaskFile = null;     // populated by handleStageData('brainmask')
-    this.lesionMaskFile = null;    // populated by handleStageData('segmentation')
+    this.lesionMaskFile = null;    // confirmed edited mask on fixed lnm-mni160
+    this.lesionMaskConfirmed = false;
+    this.autoLesionSeedFile = null;
+    this.nativeLesionSeedFile = null;
+    this.confirmedNativeLesionFile = null;
+    this.maskReviewActive = false;
+    this._pendingMaskResume = null;
     this.networkMapFile = null;    // Phase 4: populated by runFcNetworkMap
     this.networkMapData = null;    // Phase 5: raw Float32Array for re-thresholding
     this.networkMapDims = null;
@@ -178,6 +190,10 @@ export class LesionNetworkMappingApp {
       nv: this.nv,
       updateOutput: (msg) => this.updateOutput(msg)
     });
+    this.maskDrawingController = new MaskDrawingController({
+      nv: this.nv,
+      updateOutput: (msg) => this.updateOutput(msg)
+    });
 
     this.aboutModal = new ModalManager('aboutModal');
     this.privacyModal = new ModalManager('privacyModal');
@@ -239,9 +255,16 @@ export class LesionNetworkMappingApp {
     const runLesionBtn = document.getElementById('runLesionSegmentationButton');
     if (runLesionBtn) {
       runLesionBtn.addEventListener('click', () => {
-        this.runLesionSegmentation().catch(
-          err => this.updateOutput(`Lesion segmentation failed: ${err.message}`)
-        );
+        this.runLesionSegmentation()
+          .then(() => this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile }))
+          .catch(err => this.updateOutput(`Lesion segmentation failed: ${err.message}`));
+      });
+    }
+    const manualMaskBtn = document.getElementById('startManualMaskButton');
+    if (manualMaskBtn) {
+      manualMaskBtn.addEventListener('click', () => {
+        this.startLesionMaskReview({ blank: true })
+          .catch(err => this.updateOutput(`Manual mask failed: ${err.message}`));
       });
     }
     const downloadLesionBtn = document.getElementById('downloadLesionMaskButton');
@@ -354,7 +377,6 @@ export class LesionNetworkMappingApp {
     }
 
     const thresholdValue = document.getElementById('networkThresholdValue');
-    const thresholdMode = document.getElementById('networkThresholdMode');
     const thresholdSym = document.getElementById('networkThresholdSymmetric');
     const thresholdMinCluster = document.getElementById('networkThresholdMinCluster');
     const triggerRecompute = () => {
@@ -364,19 +386,13 @@ export class LesionNetworkMappingApp {
         catch (err) { this.updateOutput(`Threshold failed: ${err.message}`); }
       }
     };
-    if (thresholdMode) {
-      thresholdMode.addEventListener('change', () => {
-        this.configureThresholdSliderForMode(thresholdMode.value, { resetValue: true });
-        triggerRecompute();
-      });
-    }
     if (thresholdValue) thresholdValue.addEventListener('input', triggerRecompute);
     if (thresholdSym) thresholdSym.addEventListener('change', triggerRecompute);
     if (thresholdMinCluster) {
       thresholdMinCluster.addEventListener('input', triggerRecompute);
       thresholdMinCluster.addEventListener('change', triggerRecompute);
     }
-    this.configureThresholdSliderForMode(thresholdMode?.value || 'absolute');
+    this.configureTopPercentThresholdSlider();
     this.updateThresholdValueLabel();
 
     const downloadThreshBtn = document.getElementById('downloadThresholdedNetworkMapButton');
@@ -460,6 +476,7 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    this.bindMaskDrawingControls();
     this.bindModalButton('aboutButton', this.aboutModal);
     this.bindModalButton('privacyButton', this.privacyModal);
     this.bindModalButton('citationsButton', this.citationsModal);
@@ -476,6 +493,97 @@ export class LesionNetworkMappingApp {
   bindCloseButton(buttonId, modal) {
     const button = document.getElementById(buttonId);
     if (button) button.addEventListener('click', () => modal.close());
+  }
+
+  bindMaskDrawingControls() {
+    const bindClick = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', fn);
+    };
+    bindClick('maskPaintButton', () => this.setMaskDrawingTool('paint'));
+    bindClick('maskEraseButton', () => this.setMaskDrawingTool('erase'));
+    bindClick('maskEraseClusterButton', () => this.setMaskDrawingTool('eraseCluster'));
+    bindClick('maskUndoButton', () => this.maskDrawingController?.undo());
+    bindClick('maskBlankButton', () => {
+      this.startLesionMaskReview({ blank: true })
+        .catch(err => this.updateOutput(`Blank mask failed: ${err.message}`));
+    });
+    bindClick('maskSmoothButton', () => {
+      if (!this.maskDrawingController?.smoothDrawing()) {
+        this.updateOutput('Smooth mask needs an editable drawing.');
+      }
+    });
+    bindClick('maskInterpolateButton', () => {
+      const axis = Number(document.getElementById('maskInterpolateAxis')?.value || 0);
+      if (!this.maskDrawingController?.interpolateAcrossSlices(axis)) {
+        this.updateOutput('Interpolate needs at least two drawn slices on the selected axis.');
+      }
+    });
+    bindClick('confirmLesionMaskButton', () => {
+      this.confirmLesionDrawing({ resumePipeline: true })
+        .catch(err => this.updateOutput(`Confirm lesion mask failed: ${err.message}`));
+    });
+    bindClick('downloadEditedLesionMaskButton', () => {
+      this.downloadEditedLesionMask()
+        .catch(err => this.updateOutput(`Edited mask download failed: ${err.message}`));
+    });
+
+    const brush = document.getElementById('maskBrushSize');
+    if (brush) {
+      brush.addEventListener('input', () => {
+        const size = this.maskDrawingController?.setBrushSize(brush.value) || 1;
+        const label = document.getElementById('maskBrushSizeLabel');
+        if (label) label.textContent = `${size} vox`;
+      });
+    }
+    const filled = document.getElementById('maskFilledToggle');
+    if (filled) {
+      filled.addEventListener('change', () => {
+        this.maskDrawingController?.setFilled(filled.checked);
+      });
+    }
+    const shape = document.getElementById('maskShapeSelect');
+    if (shape) {
+      shape.addEventListener('change', () => {
+        this.maskDrawingController?.setPenShape(shape.value);
+      });
+    }
+    this.refreshMaskDrawingControls();
+  }
+
+  setMaskDrawingTool(tool) {
+    this.maskDrawingController?.ensureDrawing();
+    this.maskDrawingController?.setTool(tool);
+    for (const id of ['maskPaintButton', 'maskEraseButton', 'maskEraseClusterButton']) {
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('active');
+    }
+    const activeId = tool === 'erase'
+      ? 'maskEraseButton'
+      : tool === 'eraseCluster'
+        ? 'maskEraseClusterButton'
+        : 'maskPaintButton';
+    document.getElementById(activeId)?.classList.add('active');
+  }
+
+  refreshMaskDrawingControls() {
+    const toolbar = document.getElementById('maskDrawingToolbar');
+    const available = !!(this.nativeStructuralFile || this.structuralFile || this.autoLesionSeedFile || this.confirmedNativeLesionFile);
+    if (toolbar) toolbar.classList.toggle('hidden', !available);
+    const confirm = document.getElementById('confirmLesionMaskButton');
+    if (confirm) confirm.disabled = !available;
+    const download = document.getElementById('downloadEditedLesionMaskButton');
+    if (download) download.disabled = !(this.confirmedNativeLesionFile || this.maskDrawingController?.hasDrawing);
+    const status = document.getElementById('maskReviewStatus');
+    if (status) {
+      status.textContent = this.maskReviewActive
+        ? 'Review lesion mask'
+        : this.lesionMaskConfirmed
+          ? 'Mask confirmed'
+          : available
+            ? 'Mask tools ready'
+            : '';
+    }
   }
 
   getViewerLayerControlConfig() {
@@ -508,7 +616,7 @@ export class LesionNetworkMappingApp {
       case 'brainmask':
         return !!this.brainmaskFile;
       case 'lesion':
-        return !!(this.lesionMaskFile || this.lesionFile);
+        return !!(this.lesionMaskFile || this.autoLesionSeedFile || this.confirmedNativeLesionFile || this.lesionFile);
       case 'threshold':
         return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
       case 'atlasQc':
@@ -590,6 +698,17 @@ export class LesionNetworkMappingApp {
   async setStructural(file) {
     if (!file) return;
     this.structuralFile = file;
+    this.nativeStructuralFile = file;
+    this.nativeStructuralInfo = null;
+    this.fixedMni160Info = null;
+    this.prealignSamplingAffine = null;
+    this.autoLesionSeedFile = null;
+    this.nativeLesionSeedFile = null;
+    this.confirmedNativeLesionFile = null;
+    this.lesionMaskFile = null;
+    this.lesionMaskConfirmed = false;
+    this.maskReviewActive = false;
+    this._pendingMaskResume = null;
     this.hasRegistrationDisplacement = false;
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
@@ -602,6 +721,7 @@ export class LesionNetworkMappingApp {
       visible: this.layerVisible('structural')
     });
     this.refreshViewerLayerControls();
+    this.refreshMaskDrawingControls();
     this.updateOutput(`Structural image ready: ${file.name}`);
     // Phase 31: auto-promote the pipeline selection. A structural T1
     // means the explicit Run analysis action should use the full auto chain.
@@ -775,6 +895,32 @@ export class LesionNetworkMappingApp {
     return this.manifest;
   }
 
+  async ensureNativeStructuralInfo() {
+    if (this.nativeStructuralInfo) return this.nativeStructuralInfo;
+    const file = this.nativeStructuralFile || this.structuralFile;
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      throw new Error('Native structural image is not available.');
+    }
+    const decoded = await decodeNiftiBuffer(await file.arrayBuffer());
+    this.nativeStructuralFile = file;
+    this.nativeStructuralInfo = {
+      dims: decoded.dims,
+      affine: affineFromHeader(decoded.header)
+    };
+    return this.nativeStructuralInfo;
+  }
+
+  async ensureFixedMni160Info() {
+    if (this.fixedMni160Info) return this.fixedMni160Info;
+    const mni160 = await loadAtlasFromManifest('lnm-mni160');
+    this.fixedMni160Info = {
+      dims: mni160.dims,
+      affine: affineFromHeader(mni160.header),
+      spacing: [1, 1, 1]
+    };
+    return this.fixedMni160Info;
+  }
+
   async runBrainExtraction() {
     if (!this.structuralFile) {
       this.updateOutput('Drop a structural image first.');
@@ -899,19 +1045,14 @@ export class LesionNetworkMappingApp {
     }
     if (data.stage === 'segmentation' && data.niftiData) {
       const file = arrayBufferToFile(data.niftiData, 'lesion.nii');
-      this.lesionMaskFile = file;
-      if (this.structuralFile) {
-        this.viewerController
-          .loadOverlay(file, 'red', 0.5, {
-            stage: 'segmentation',
-            visible: this.layerVisible('lesion')
-          })
-          .catch(err => this.updateOutput(`Lesion mask render error: ${err.message}`));
-      }
+      this.autoLesionSeedFile = file;
+      this.lesionMaskFile = null;
+      this.lesionMaskConfirmed = false;
       const btn = document.getElementById('downloadLesionMaskButton');
       if (btn) btn.disabled = false;
       this.refreshViewerLayerControls();
-      this.updateOutput('Lesion segmentation ready.');
+      this.refreshMaskDrawingControls();
+      this.updateOutput('Automatic lesion seed ready for manual review.');
       this._resolveStageData(data.stage, data);
       return;
     }
@@ -1016,18 +1157,133 @@ export class LesionNetworkMappingApp {
   }
 
   downloadLesionMask() {
-    if (!this.lesionMaskFile) {
-      this.updateOutput('No lesion segmentation available yet.');
+    const file = this.confirmedNativeLesionFile || this.lesionMaskFile || this.autoLesionSeedFile;
+    if (!file) {
+      this.updateOutput('No lesion mask available yet.');
       return;
     }
-    const url = URL.createObjectURL(this.lesionMaskFile);
+    const url = URL.createObjectURL(file);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'lnm-lesion.nii';
+    a.download = this.confirmedNativeLesionFile ? 'lnm-lesion-edited-native.nii' : 'lnm-lesion-seed.nii';
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  async downloadEditedLesionMask() {
+    if (this.confirmedNativeLesionFile) {
+      const url = URL.createObjectURL(this.confirmedNativeLesionFile);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'lnm-lesion-edited-native.nii';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    await this.maskDrawingController.downloadDrawing('lnm-lesion-edited-native.nii');
+  }
+
+  async resampleSeedMaskToNative(seedFile) {
+    if (!seedFile) return null;
+    const native = await this.ensureNativeStructuralInfo();
+    const seed = await decodeNiftiBuffer(await seedFile.arrayBuffer());
+    const seedAffine = this.prealignSamplingAffine || affineFromHeader(seed.header);
+    const nativeMask = resampleBinaryMask({
+      data: seed.data,
+      srcDims: seed.dims,
+      srcAffine: seedAffine,
+      dstDims: native.dims,
+      dstAffine: native.affine
+    });
+    const nativeNifti = writeBinaryMaskNifti(nativeMask, {
+      dims: native.dims,
+      affine: native.affine,
+      spacing: [1, 1, 1],
+      description: 'LNM editable lesion seed projected to native T1 grid'
+    });
+    this.nativeLesionSeedFile = arrayBufferToFile(nativeNifti, 'lnm-lesion-seed-native.nii');
+    return this.nativeLesionSeedFile;
+  }
+
+  async startLesionMaskReview({ seedFile = null, blank = false } = {}) {
+    const baseFile = this.nativeStructuralFile || this.structuralFile;
+    if (!baseFile) {
+      this.updateOutput('Drop a structural T1 before editing a lesion mask.');
+      return null;
+    }
+    this.nativeStructuralFile = baseFile;
+    await this.ensureNativeStructuralInfo();
+    await this.viewerController.loadBaseVolume(baseFile, {
+      stage: 'structural',
+      visible: this.layerVisible('structural')
+    });
+
+    const seed = blank ? null : await this.resampleSeedMaskToNative(seedFile || this.autoLesionSeedFile);
+    if (seed) await this.maskDrawingController.loadSeedFile(seed);
+    else this.maskDrawingController.startBlank();
+
+    this.maskReviewActive = true;
+    this.lesionMaskConfirmed = false;
+    this.lesionMaskFile = null;
+    this.setMaskDrawingTool('paint');
+    this.refreshViewerLayerControls();
+    this.refreshMaskDrawingControls();
+    this.updateOutput('Review/edit the lesion mask, then confirm it to continue analysis.');
+    return seed;
+  }
+
+  async confirmLesionDrawing({ resumePipeline = false } = {}) {
+    if (!this.maskDrawingController?.hasDrawing) {
+      await this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile, blank: !this.autoLesionSeedFile });
+    }
+    const nativeFile = await this.maskDrawingController.exportDrawingFile('lnm-lesion-edited-native.nii');
+
+    if (!this.prealignSamplingAffine || !this.fixedMni160Info) {
+      await this.prealignToMni160({ skipIfAligned: true });
+    }
+    this.confirmedNativeLesionFile = nativeFile;
+    const fixed = await this.ensureFixedMni160Info();
+    const native = await decodeNiftiBuffer(await nativeFile.arrayBuffer());
+    const nativeAffine = affineFromHeader(native.header);
+    const mniMask = resampleBinaryMask({
+      data: native.data,
+      srcDims: native.dims,
+      srcAffine: nativeAffine,
+      dstDims: fixed.dims,
+      dstAffine: this.prealignSamplingAffine || fixed.affine
+    });
+    const mniNifti = writeBinaryMaskNifti(mniMask, {
+      dims: fixed.dims,
+      affine: fixed.affine,
+      spacing: fixed.spacing || [1, 1, 1],
+      description: 'LNM confirmed edited lesion mask on fixed lnm-mni160 grid'
+    });
+
+    this.lesionMaskFile = arrayBufferToFile(mniNifti, 'lnm-lesion-confirmed-mni160.nii');
+    this.lesionMaskConfirmed = true;
+    this.maskReviewActive = false;
+    this.maskDrawingController.close();
+    const btn = document.getElementById('downloadLesionMaskButton');
+    if (btn) btn.disabled = false;
+    this.refreshViewerLayerControls();
+    this.refreshMaskDrawingControls();
+    this.updateOutput('Edited lesion mask confirmed on the fixed MNI160 grid.');
+
+    if (resumePipeline) await this.resumePipelineAfterMaskConfirmation();
+    return this.lesionMaskFile;
+  }
+
+  async resumePipelineAfterMaskConfirmation() {
+    if (!this._pendingMaskResume) return;
+    const pending = this._pendingMaskResume;
+    this._pendingMaskResume = null;
+    this.updateOutput('Resuming analysis with confirmed lesion mask...');
+    const status = await this._runPipelineStages(pending.pipeline, pending.nextStageIndex);
+    if (status === 'complete') this.logPipelineComplete();
   }
 
   // Phase 4.4: lesion network map via Yeo7 group-FC weighted sum. Pure
@@ -1187,44 +1443,31 @@ export class LesionNetworkMappingApp {
     }
   }
 
-  configureThresholdSliderForMode(mode, { resetValue = false } = {}) {
+  configureTopPercentThresholdSlider({ resetValue = false } = {}) {
     const valueEl = document.getElementById('networkThresholdValue');
     if (!valueEl) return;
-    if (mode === 'percentile') {
-      valueEl.min = '0';
-      valueEl.max = String(NETWORK_TOP_PERCENT_MAX);
-      valueEl.step = String(NETWORK_TOP_PERCENT_STEP);
-      if (resetValue) valueEl.value = '5';
-    } else {
-      valueEl.min = '0';
-      valueEl.max = '1';
-      valueEl.step = '0.01';
-      if (resetValue) valueEl.value = '0.5';
-    }
+    valueEl.min = '0';
+    valueEl.max = String(NETWORK_TOP_PERCENT_MAX);
+    valueEl.step = String(NETWORK_TOP_PERCENT_STEP);
+    if (resetValue) valueEl.value = '5';
   }
 
   updateThresholdValueLabel() {
     const valueEl = document.getElementById('networkThresholdValue');
-    const modeEl = document.getElementById('networkThresholdMode');
     const labelEl = document.getElementById('networkThresholdValueLabel');
     if (!valueEl || !labelEl) return;
-    const mode = modeEl ? modeEl.value : 'absolute';
     const v = Number(valueEl.value);
-    labelEl.textContent = mode === 'percentile'
-      ? `${v.toFixed(Number.isInteger(v) ? 0 : 1)}%`
-      : v.toFixed(2);
+    labelEl.textContent = `${v.toFixed(Number.isInteger(v) ? 0 : 1)}%`;
   }
 
   // Phase 5: re-threshold the cached network map, update the
   // thresholded-mask download, and schedule a live binary preview overlay.
   // The scalar FC t-map stays visible as context; the red preview overlay
-  // is replaced as the slider/mode/cluster controls change.
+  // is replaced as the top-percent slider / cluster controls change.
   //
   // Reads the threshold UI controls:
-  //   #networkThresholdValue   range slider, 0..10 (top % for percentile;
-  //                            t-stat for absolute).
-  //   #networkThresholdMode    select: 'absolute' | 'percentile'.
-  //   #networkThresholdSymmetric  checkbox.
+  //   #networkThresholdValue   range slider, 0..10 top % of voxels.
+  //   #networkThresholdSymmetric  checkbox: rank by |t| magnitude.
   //   #networkThresholdMinCluster number input.
   applyNetworkThreshold() {
     if (!this.networkMapData) {
@@ -1233,20 +1476,18 @@ export class LesionNetworkMappingApp {
       return null;
     }
     const valueEl = document.getElementById('networkThresholdValue');
-    const modeEl = document.getElementById('networkThresholdMode');
     const symEl = document.getElementById('networkThresholdSymmetric');
     const minClEl = document.getElementById('networkThresholdMinCluster');
-    const rawValue = valueEl ? Number(valueEl.value) : 0;
-    const mode = modeEl ? modeEl.value : 'absolute';
-    const symmetric = symEl ? !!symEl.checked : false;
+    const rawValue = valueEl ? Number(valueEl.value) : 5;
+    const symmetric = symEl ? !!symEl.checked : true;
     const minClusterVoxels = minClEl ? Number(minClEl.value) || 0 : 0;
-    // The UI label is "Top % of |voxels|": 5 means keep the strongest 5%.
+    // The UI label is "Top voxels": 5 means keep the strongest 5%.
     // The pure threshold engine takes a percentile cutoff q where q=0.95
     // keeps roughly the top 5%, so invert the UI value here.
     const topPercent = Math.max(0, Math.min(NETWORK_TOP_PERCENT_MAX, rawValue));
-    const value = mode === 'percentile' ? 1 - (topPercent / 100) : rawValue;
+    const value = 1 - (topPercent / 100);
     const thresholdResult = applyThresholdDetailed(this.networkMapData, this.networkMapDims, {
-      mode, value, symmetric, minClusterVoxels
+      mode: 'percentile', value, symmetric, minClusterVoxels
     });
     const mask = thresholdResult.mask;
     const count = thresholdResult.count;
@@ -1255,9 +1496,7 @@ export class LesionNetworkMappingApp {
       dims: this.networkMapDims,
       spacing: this.networkMapSpacing,
       affine: this.networkMapAffine,
-      description: mode === 'percentile'
-        ? `LNM thresholded topPercent=${topPercent} q=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
-        : `LNM thresholded ${mode}=${value} sym=${symmetric} cluster>=${minClusterVoxels}`
+      description: `LNM thresholded topPercent=${topPercent} q=${value} magnitude=${symmetric} cluster>=${minClusterVoxels}`
     });
     this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii');
     this.patientThresholdedMaskFile = null;
@@ -1268,20 +1507,12 @@ export class LesionNetworkMappingApp {
       const clusterText = minClusterVoxels > 1
         ? `; cluster≥${minClusterVoxels} removed ${thresholdResult.removedByCluster.toLocaleString()} voxels`
         : '';
-      if (mode === 'percentile') {
-        const topLabel = topPercent.toFixed(Number.isInteger(topPercent) ? 0 : 1);
-        summaryEl.textContent =
-          `${count.toLocaleString()} voxels survive top ${topLabel}%` +
-          (symmetric ? ' (|t|)' : ' (t)') +
-          `; cutoff ${cutoff.toPrecision(3)}` +
-          clusterText;
-      } else {
-        summaryEl.textContent =
-          `${count.toLocaleString()} voxels survive absolute` +
-          (symmetric ? ' (|t|)' : ' (t)') +
-          ` > ${value}` +
-          clusterText;
-      }
+      const topLabel = topPercent.toFixed(Number.isInteger(topPercent) ? 0 : 1);
+      summaryEl.textContent =
+        `${count.toLocaleString()} voxels survive top ${topLabel}%` +
+        (symmetric ? ' (|t|)' : ' (t)') +
+        `; cutoff ${cutoff.toPrecision(3)}` +
+        clusterText;
     }
     this.updateAffectedNetworkTable(mask);
     this.refreshViewerLayerControls();
@@ -1935,6 +2166,12 @@ export class LesionNetworkMappingApp {
       const isAligned = dimsEqual(probe.dims, mni160.dims) &&
         affineNearlyEqual(probeAffine, mni160Affine);
       if (isAligned) {
+        if (!this.nativeStructuralFile) this.nativeStructuralFile = this.structuralFile;
+        if (!this.nativeStructuralInfo) {
+          this.nativeStructuralInfo = { dims: probe.dims, affine: probeAffine };
+        }
+        this.fixedMni160Info = { dims: mni160.dims, affine: mni160Affine, spacing: [1, 1, 1] };
+        this.prealignSamplingAffine = mni160Affine;
         this.updateOutput('Structural already matches lnm-mni160, skipping prealign.');
         return;
       }
@@ -1952,6 +2189,10 @@ export class LesionNetworkMappingApp {
     const t1Buf = await this.structuralFile.arrayBuffer();
     const t1 = await decodeNiftiBuffer(t1Buf);
     const t1Affine = affineFromHeader(t1.header);
+    if (!this.nativeStructuralFile) this.nativeStructuralFile = this.structuralFile;
+    if (!this.nativeStructuralInfo) {
+      this.nativeStructuralInfo = { dims: t1.dims, affine: t1Affine };
+    }
 
     const maskBuf = await this.brainmaskFile.arrayBuffer();
     const mask = await decodeNiftiBuffer(maskBuf);
@@ -1967,11 +2208,13 @@ export class LesionNetworkMappingApp {
     // for clinical T1s acquired off-axis it can be substantial.
     const mni160 = await getMni160Ref();
     const mni160Affine = affineFromHeader(mni160.header);
+    this.fixedMni160Info = { dims: mni160.dims, affine: mni160Affine, spacing: [1, 1, 1] };
     const mniCenterVox = mni160.dims.map(v => v / 2);
     const { dstAffine, mniDims, eigenvalues } = principalAxisAlign(
       mask.data, t1.dims, t1Affine,
       { mniDims: mni160.dims, mniCenterVox }
     );
+    this.prealignSamplingAffine = dstAffine;
     const cVox = centroidOfMask(mask.data, t1.dims);
     const cWorld = applyAffineToVoxel(t1Affine, cVox);
     this.updateOutput(
@@ -2006,6 +2249,11 @@ export class LesionNetworkMappingApp {
     this._thresholdProjectionWarningShown = false;
     // Stale results from the pre-prealign space.
     this.lesionMaskFile = null;
+    this.lesionMaskConfirmed = false;
+    this.autoLesionSeedFile = null;
+    this.nativeLesionSeedFile = null;
+    this.confirmedNativeLesionFile = null;
+    this.maskReviewActive = false;
     this.lesionFile = null;
     this.mniLesionFile = null;
     this.overlapResult = null;
@@ -2050,7 +2298,11 @@ export class LesionNetworkMappingApp {
   // unmodified.
   async applyRegistrationToLesion() {
     if (!this.lesionMaskFile) {
-      this.updateOutput('Run lesion segmentation first.');
+      this.updateOutput('Confirm the edited lesion mask first.');
+      return null;
+    }
+    if (!this.lesionMaskConfirmed) {
+      this.updateOutput('Review and confirm the lesion mask before warping it.');
       return null;
     }
     this.updateOutput('Decoding lesion mask for warp...');
@@ -2149,18 +2401,35 @@ export class LesionNetworkMappingApp {
 
     this._perfStats = [];
     this._perfRunStart = this._now();
+    const status = await this._runPipelineStages(pipeline, 0);
+    if (status === 'complete') this.logPipelineComplete();
+  }
+
+  async _runPipelineStages(pipeline, startIndex = 0) {
+    let stageIndex = -1;
     for (const stage of pipeline.stages) {
+      stageIndex += 1;
+      if (stageIndex < startIndex) continue;
       const stageStart = this._now();
       try {
-        await this._runStage(stage);
+        const result = await this._runStage(stage);
+        if (result?.pausedForMaskReview) {
+          this._pendingMaskResume = { pipeline, nextStageIndex: stageIndex + 1 };
+          this.updateOutput('Pipeline paused for manual lesion-mask review.');
+          return 'paused';
+        }
       } catch (err) {
         this.updateOutput(`Stage '${stage.id}' (${stage.module}) failed: ${err.message}`);
-        return;
+        return 'failed';
       }
       const elapsedMs = this._now() - stageStart;
       this._perfStats.push({ id: stage.id, module: stage.module, ms: elapsedMs });
       this.updateOutput(`[perf] ${stage.id} (${stage.module}): ${this._formatMs(elapsedMs)}`);
     }
+    return 'complete';
+  }
+
+  logPipelineComplete() {
     const totalMs = this._now() - this._perfRunStart;
     this.updateOutput(
       `=== Pipeline complete in ${this._formatMs(totalMs)} ` +
@@ -2205,11 +2474,17 @@ export class LesionNetworkMappingApp {
         // prealignToMni160() handles the dim probe + early return.
         return this.prealignToMni160({ skipIfAligned: true });
       case 'inference-pipeline':
-        if (this.lesionMaskFile) {
-          this.updateOutput('Lesion mask already present, skipping segmentation.');
+        if (this.lesionMaskFile && this.lesionMaskConfirmed) {
+          this.updateOutput('Confirmed lesion mask already present, skipping segmentation.');
           return;
         }
-        return this.runLesionSegmentation();
+        if (this.maskReviewActive || this.autoLesionSeedFile) {
+          await this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile });
+          return { pausedForMaskReview: true };
+        }
+        await this.runLesionSegmentation();
+        await this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile });
+        return { pausedForMaskReview: true };
       case 'registration':
         // The bridge (apply-warp + Yeo-grid resample) is the natural
         // companion of the SynthMorph registration step. We chain them
@@ -2239,16 +2514,12 @@ export class LesionNetworkMappingApp {
   // them.  No-op if the controls are missing.
   _applyThresholdDefaults(defaults) {
     if (!defaults || typeof defaults !== 'object') return;
-    const modeEl = document.getElementById('networkThresholdMode');
     const valueEl = document.getElementById('networkThresholdValue');
     const symEl = document.getElementById('networkThresholdSymmetric');
     const minClEl = document.getElementById('networkThresholdMinCluster');
-    if (modeEl && defaults.mode) modeEl.value = defaults.mode;
-    const mode = modeEl ? modeEl.value : defaults.mode;
-    this.configureThresholdSliderForMode(mode || 'absolute');
+    this.configureTopPercentThresholdSlider();
     if (valueEl && typeof defaults.value === 'number') {
-      // Slider stores the raw UI value; percentile mode uses top-percent
-      // semantics (5 = strongest 5%), absolute mode uses the t-stat directly.
+      // Slider stores the raw top-percent UI value (5 = strongest 5%).
       valueEl.value = String(defaults.value);
     }
     if (symEl && typeof defaults.symmetric === 'boolean') symEl.checked = defaults.symmetric;
@@ -2268,6 +2539,12 @@ export class LesionNetworkMappingApp {
     this.affectedNetworkResult = null;
     this.brainmaskFile = null;
     this.lesionMaskFile = null;
+    this.lesionMaskConfirmed = false;
+    this.autoLesionSeedFile = null;
+    this.nativeLesionSeedFile = null;
+    this.confirmedNativeLesionFile = null;
+    this.maskReviewActive = false;
+    this._pendingMaskResume = null;
     this.networkMapFile = null;
     this.networkMapData = null;
     this.networkMapDims = null;
@@ -2286,6 +2563,10 @@ export class LesionNetworkMappingApp {
     this.mniLesionFile = null;
     if (full) {
       this.structuralFile = null;
+      this.nativeStructuralFile = null;
+      this.nativeStructuralInfo = null;
+      this.fixedMni160Info = null;
+      this.prealignSamplingAffine = null;
       this.lesionFile = null;
     }
 
@@ -2297,6 +2578,7 @@ export class LesionNetworkMappingApp {
       'downloadLesionMaskButton',
       'downloadNetworkMapButton',
       'downloadThresholdedNetworkMapButton',
+      'downloadEditedLesionMaskButton',
       'checkAtlasAlignmentButton',
       'showSubjectAtlasButton',
       'downloadSubjectAtlasButton'
@@ -2331,6 +2613,7 @@ export class LesionNetworkMappingApp {
         .catch(err => this.updateOutput(`Viewer reload after reset failed: ${err.message}`));
     }
     this.refreshViewerLayerControls();
+    this.refreshMaskDrawingControls();
     this.updateOutput(full ? 'All state cleared.' : 'Results cleared (structural retained).');
   }
 

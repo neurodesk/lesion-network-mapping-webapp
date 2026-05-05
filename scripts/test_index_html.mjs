@@ -44,6 +44,7 @@ const requiredIds = [
   // Phase 2a.2.3 additions: lesion-segmentation trigger button + mask
   // download button.
   '#runLesionSegmentationButton',
+  '#startManualMaskButton',
   '#downloadLesionMaskButton',
   // Phase 3.4 additions: registration button.
   '#runRegistrationButton',
@@ -56,7 +57,6 @@ const requiredIds = [
   '#downloadNetworkMapButton',
   // Phase 5 additions: threshold controls + thresholded download.
   '#networkThresholdValue',
-  '#networkThresholdMode',
   '#networkThresholdSymmetric',
   '#networkThresholdMinCluster',
   '#affectedNetworkResults',
@@ -80,7 +80,24 @@ const requiredIds = [
   '#layerToggleBrainMask',
   '#layerToggleLesionMask',
   '#layerToggleThresholdMap',
-  '#layerToggleAtlasQc'
+  '#layerToggleAtlasQc',
+  // Manual lesion-mask refinement toolbar.
+  '#maskDrawingToolbar',
+  '#maskReviewStatus',
+  '#maskPaintButton',
+  '#maskEraseButton',
+  '#maskEraseClusterButton',
+  '#maskBrushSize',
+  '#maskBrushSizeLabel',
+  '#maskShapeSelect',
+  '#maskFilledToggle',
+  '#maskUndoButton',
+  '#maskBlankButton',
+  '#maskSmoothButton',
+  '#maskInterpolateAxis',
+  '#maskInterpolateButton',
+  '#confirmLesionMaskButton',
+  '#downloadEditedLesionMaskButton'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);
@@ -105,8 +122,13 @@ const advancedWorkflow = workflowStart >= 0 && workflowEnd > workflowStart
 assert.ok(advancedWorkflow, 'advanced controls must expose an ordered workflow container');
 assert.match(
   advancedWorkflow,
-  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion segmentation[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → Yeo grid[\s\S]*7 Compute Yeo overlap[\s\S]*8 Compute network map/,
-  'advanced controls must show the manual stage buttons in execution order'
+  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*Manual mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → Yeo grid[\s\S]*7 Compute Yeo overlap[\s\S]*8 Compute network map/,
+  'advanced controls must show the seed/manual mask review workflow in execution order'
+);
+assert.match(
+  advancedWorkflow,
+  /aria-label=["']Lesion mask source choice["'][\s\S]*id=["']runLesionSegmentationButton["'][\s\S]*id=["']startManualMaskButton["']/,
+  'advanced controls must offer an explicit choice between auto seed and manual masking'
 );
 assert.match(
   advancedWorkflow,
@@ -133,6 +155,26 @@ assert.match(registrationBlendInput[0], /min=["']0["'][\s\S]*max=["']1["'][\s\S]
   'Patient/MNI blend slider must run from MNI-only to registered-patient-only with a 50% default');
 assert.match(html, /Patient\/MNI blend/,
   'registration QC blend label must make the MNI/patient comparison explicit');
+assert.doesNotMatch(html, /id=["']networkThresholdMode["']/,
+  'connectivity-map threshold UI must not expose an absolute-vs-percent mode selector');
+assert.doesNotMatch(html, /Absolute t-stat|Absolute mode|absolute mode/i,
+  'connectivity-map threshold UI must not expose absolute t-stat thresholding');
+assert.match(html, /Top voxels/,
+  'connectivity-map threshold UI must present a top-percent voxel slider');
+assert.match(html, /Use \|t\| magnitude/,
+  'connectivity-map threshold UI may only offer top-percent ranking by magnitude, not a t-stat threshold mode');
+assert.match(html, /aria-label=["']Lesion mask drawing tools["']/,
+  'viewer toolbar must expose compact lesion-mask drawing controls');
+assert.match(html, /Paint[\s\S]*Erase[\s\S]*Erase cluster[\s\S]*Confirm mask/,
+  'mask drawing toolbar must label whole-cluster erasing explicitly');
+assert.match(html, /Erase the connected lesion cluster under the cursor/,
+  'mask drawing toolbar must describe what the cluster erase action does');
+assert.match(html, /Start a blank mask/,
+  'mask drawing toolbar must allow blank manual lesion masks');
+assert.match(html, /Smooth the 3D mask volume/,
+  'mask drawing toolbar must expose a 3D mask smoothing tool');
+assert.match(html, /Interpolate mask between boundary slices/,
+  'mask drawing toolbar must expose between-slice interpolation');
 
 assert.doesNotMatch(html, /id=["']pipelineSelect["']/,
   'Pipeline selector must not be visible; Run analysis is input-driven');
