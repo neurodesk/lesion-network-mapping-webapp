@@ -392,7 +392,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     networkThresholdValue: { value: '0.5' },
     networkThresholdMode: { value: 'absolute' },
     networkThresholdSymmetric: { checked: true },
-    networkThresholdMinCluster: { value: '0' },
+    networkThresholdMinCluster: { value: '4' },
     networkThresholdSummary: summaryEl,
     downloadThresholdedNetworkMapButton: { disabled: true }
   });
@@ -412,10 +412,12 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
 
   try {
     const mask = app.applyNetworkThreshold();
-    assert.equal(mask.reduce((sum, value) => sum + value, 0), 3,
-      'symmetric absolute threshold should create a binary mask');
-    assert.match(summaryEl.textContent, /^3 voxels survive absolute/,
+    assert.equal(mask.reduce((sum, value) => sum + value, 0), 0,
+      'symmetric absolute threshold should apply min-cluster cleanup to the binary mask');
+    assert.match(summaryEl.textContent, /^0 voxels survive absolute/,
       'threshold summary should update immediately');
+    assert.match(summaryEl.textContent, /cluster≥4 removed 3 voxels/,
+      'threshold summary should report how many voxels cluster cleanup removed');
 
     await waitMs(90);
     await app._thresholdPreviewRenderPromise;
@@ -433,7 +435,38 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-// ---- Test 12: percentile UI uses top-percent semantics ----
+// ---- Test 12: min-cluster input recomputes as the user types ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const noOpAddEventListener = () => {};
+  const minClusterEl = {
+    addEventListener: (eventName, handler) => { listeners[eventName] = handler; }
+  };
+  const restoreDocument = useMockElements({
+    networkThresholdMinCluster: minClusterEl,
+    networkThresholdValueLabel: { textContent: '' },
+    networkThresholdValue: { value: '0.5', addEventListener: noOpAddEventListener },
+    networkThresholdMode: { value: 'absolute', addEventListener: noOpAddEventListener },
+    networkThresholdSymmetric: { checked: true, addEventListener: noOpAddEventListener }
+  });
+  let thresholdCalls = 0;
+  app.networkMapData = new Float32Array([0, 1]);
+  app.applyNetworkThreshold = () => { thresholdCalls += 1; };
+
+  try {
+    app.bindEvents();
+    assert.equal(typeof listeners.input, 'function',
+      'min-cluster input must recompute on input, not only after blur/change');
+    listeners.input();
+    assert.equal(thresholdCalls, 1,
+      'min-cluster input handler should trigger threshold recompute immediately');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 13: percentile UI uses top-percent semantics ----
 {
   const app = makeApp();
   const valueEl = { value: '0' };
@@ -485,7 +518,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-// ---- Test 13: version label de-duplicates the staging short SHA ----
+// ---- Test 14: version label de-duplicates the staging short SHA ----
 {
   assert.equal(
     formatVersionLabel('0.17.1-staging+31ff9d1', {
@@ -507,4 +540,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   );
 }
 
-console.log('lnm-app behavior OK: 13 dispatch + precondition + explicit-start + worker-wait + threshold-preview + top-percent + auto-promote + version-label cases.');
+console.log('lnm-app behavior OK: 14 dispatch + precondition + explicit-start + worker-wait + threshold-preview + min-cluster-input + top-percent + auto-promote + version-label cases.');

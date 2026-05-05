@@ -16,12 +16,16 @@ import { connectedComponents3D, removeSmallComponents } from './volume-utils.js'
 const MODES = new Set(['absolute', 'percentile']);
 
 export function applyThreshold(data, dims, options = {}) {
+  return applyThresholdDetailed(data, dims, options).mask;
+}
+
+export function applyThresholdDetailed(data, dims, options = {}) {
   if (!Array.isArray(dims) || dims.length !== 3) {
-    throw new Error('applyThreshold: dims must be [X, Y, Z]');
+    throw new Error('applyThresholdDetailed: dims must be [X, Y, Z]');
   }
   const expected = dims[0] * dims[1] * dims[2];
   if (data.length !== expected) {
-    throw new Error(`applyThreshold: data length ${data.length} != ${expected}`);
+    throw new Error(`applyThresholdDetailed: data length ${data.length} != ${expected}`);
   }
   const {
     mode = 'absolute',
@@ -30,7 +34,7 @@ export function applyThreshold(data, dims, options = {}) {
     minClusterVoxels = 0
   } = options;
   if (!MODES.has(mode)) {
-    throw new Error(`applyThreshold: unknown mode '${mode}'; expected one of ${[...MODES].join(', ')}`);
+    throw new Error(`applyThresholdDetailed: unknown mode '${mode}'; expected one of ${[...MODES].join(', ')}`);
   }
 
   const threshold = (mode === 'percentile')
@@ -38,20 +42,37 @@ export function applyThreshold(data, dims, options = {}) {
     : value;
 
   const mask = new Uint8Array(expected);
+  let rawCount = 0;
   if (symmetric) {
     for (let i = 0; i < expected; i++) {
-      mask[i] = Math.abs(data[i]) > threshold ? 1 : 0;
+      if (Math.abs(data[i]) > threshold) {
+        mask[i] = 1;
+        rawCount += 1;
+      }
     }
   } else {
     for (let i = 0; i < expected; i++) {
-      mask[i] = data[i] > threshold ? 1 : 0;
+      if (data[i] > threshold) {
+        mask[i] = 1;
+        rawCount += 1;
+      }
     }
   }
 
+  let cleanedMask = mask;
+  let count = rawCount;
   if (minClusterVoxels && minClusterVoxels > 1) {
-    return removeSmallComponents(mask, dims, minClusterVoxels);
+    cleanedMask = removeSmallComponents(mask, dims, minClusterVoxels);
+    count = 0;
+    for (let i = 0; i < cleanedMask.length; i++) count += cleanedMask[i];
   }
-  return mask;
+  return {
+    mask: cleanedMask,
+    threshold,
+    rawCount,
+    count,
+    removedByCluster: rawCount - count
+  };
 }
 
 // |value|-quantile: returns the threshold T such that fraction `q` of

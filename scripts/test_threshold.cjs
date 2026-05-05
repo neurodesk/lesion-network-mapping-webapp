@@ -14,7 +14,7 @@ const { pathToFileURL } = require('node:url');
   const moduleUrl = pathToFileURL(
     path.resolve(__dirname, '..', 'web/js/modules/threshold.js')
   );
-  const { applyThreshold, quantileAbsValue } = await import(moduleUrl);
+  const { applyThreshold, applyThresholdDetailed, quantileAbsValue } = await import(moduleUrl);
 
   // ---- quantileAbsValue ----
   // 95th percentile of |x| in [0..99] is |x|=95 (linear interpolation).
@@ -101,6 +101,18 @@ const { pathToFileURL } = require('node:url');
     for (let i = 0; i < 216; i++) count += mask[i];
     assert.equal(count, 8, `min-cluster=5 keeps cube only: expected 8, got ${count}`);
     assert.equal(mask[5 + 5 * 6 + 5 * 36], 0, 'singleton must be dropped');
+
+    const detailed = applyThresholdDetailed(data, dims, {
+      mode: 'absolute', value: 10, symmetric: false, minClusterVoxels: 5
+    });
+    assert.equal(detailed.rawCount, 9,
+      'applyThresholdDetailed reports pre-cluster survivor count');
+    assert.equal(detailed.count, 8,
+      'applyThresholdDetailed reports post-cluster survivor count');
+    assert.equal(detailed.removedByCluster, 1,
+      'applyThresholdDetailed reports voxels removed by cluster cleanup');
+    assert.equal(detailed.threshold, 10,
+      'applyThresholdDetailed reports the numeric cutoff');
   }
 
   // ---- applyThreshold: empty / all-zero input -> all-zero output ----
@@ -127,7 +139,7 @@ const { pathToFileURL } = require('node:url');
     );
   }
 
-  console.log('threshold OK: 5 functional cases + quantileAbsValue + input validation.');
+  console.log('threshold OK: 5 functional cases + detailed stats + quantileAbsValue + input validation.');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

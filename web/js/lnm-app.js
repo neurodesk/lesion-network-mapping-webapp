@@ -6,7 +6,7 @@ import { YEO7_COLORMAP } from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
 import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
 import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
-import { applyThreshold, quantileAbsValue } from './modules/threshold.js';
+import { applyThresholdDetailed } from './modules/threshold.js';
 import { affineFromHeader, resampleAffine } from './modules/resample.js';
 import { centroidOfMask, applyAffineToVoxel, computePrealignAffine, principalAxisAlign } from './modules/prealign.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
@@ -311,7 +311,10 @@ export class LesionNetworkMappingApp {
     }
     if (thresholdValue) thresholdValue.addEventListener('input', triggerRecompute);
     if (thresholdSym) thresholdSym.addEventListener('change', triggerRecompute);
-    if (thresholdMinCluster) thresholdMinCluster.addEventListener('change', triggerRecompute);
+    if (thresholdMinCluster) {
+      thresholdMinCluster.addEventListener('input', triggerRecompute);
+      thresholdMinCluster.addEventListener('change', triggerRecompute);
+    }
     this.configureThresholdSliderForMode(thresholdMode?.value || 'absolute');
     this.updateThresholdValueLabel();
 
@@ -971,15 +974,12 @@ export class LesionNetworkMappingApp {
     // keeps roughly the top 5%, so invert the UI value here.
     const topPercent = Math.max(0, Math.min(NETWORK_TOP_PERCENT_MAX, rawValue));
     const value = mode === 'percentile' ? 1 - (topPercent / 100) : rawValue;
-    const cutoff = mode === 'percentile'
-      ? quantileAbsValue(this.networkMapData, value)
-      : value;
-
-    const mask = applyThreshold(this.networkMapData, this.networkMapDims, {
+    const thresholdResult = applyThresholdDetailed(this.networkMapData, this.networkMapDims, {
       mode, value, symmetric, minClusterVoxels
     });
-    let count = 0;
-    for (let i = 0; i < mask.length; i++) count += mask[i];
+    const mask = thresholdResult.mask;
+    const count = thresholdResult.count;
+    const cutoff = thresholdResult.threshold;
     const niftiBuffer = writeNifti1(mask, {
       dims: this.networkMapDims,
       spacing: this.networkMapSpacing,
@@ -993,7 +993,9 @@ export class LesionNetworkMappingApp {
     if (dlBtn) dlBtn.disabled = false;
     const summaryEl = document.getElementById('networkThresholdSummary');
     if (summaryEl) {
-      const clusterText = minClusterVoxels > 1 ? ` + cluster≥${minClusterVoxels}` : '';
+      const clusterText = minClusterVoxels > 1
+        ? `; cluster≥${minClusterVoxels} removed ${thresholdResult.removedByCluster.toLocaleString()} voxels`
+        : '';
       if (mode === 'percentile') {
         const topLabel = topPercent.toFixed(Number.isInteger(topPercent) ? 0 : 1);
         summaryEl.textContent =

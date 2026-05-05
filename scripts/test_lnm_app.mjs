@@ -254,10 +254,10 @@ assert.match(src, /['"]mni-lesion['"]/,
 // emits a Blob NIfTI with the thresholded binary mask.
 assert.match(src, /from\s+['"]\.\/modules\/threshold\.js['"]/,
   'lnm-app.js must import threshold.js');
-assert.match(src, /\bapplyThreshold\s*\(/,
-  'orchestrator must call applyThreshold(...)');
-assert.match(src, /\bquantileAbsValue\s*\(/,
-  'orchestrator must compute/report the percentile cutoff used for top-percent thresholding');
+assert.match(src, /\bapplyThresholdDetailed\s*\(/,
+  'orchestrator must call applyThresholdDetailed(...) to get cluster cleanup stats');
+assert.match(src, /thresholdResult\.threshold/,
+  'orchestrator must report the actual percentile cutoff used for top-percent thresholding');
 assert.match(src, /1\s*-\s*\(topPercent\s*\/\s*100\)/,
   'percentile UI must convert top-percent slider values to quantile cutoffs');
 assert.match(src, /NETWORK_TOP_PERCENT_MAX\s*=\s*10/,
@@ -268,6 +268,10 @@ assert.match(src, /['"]thresholdValue['"]|getElementById\(['"]thresholdValue['"]
   'orchestrator must read the threshold slider value');
 assert.match(src, /thresholdMode|networkThresholdMode/,
   'orchestrator must read the threshold mode (absolute / percentile)');
+assert.match(src, /thresholdMinCluster[\s\S]*?addEventListener\(['"]input['"]/,
+  'min-cluster changes must recompute while the user types');
+assert.match(src, /removedByCluster/,
+  'threshold summary must report whether cluster cleanup removed voxels');
 assert.match(src, /\bscheduleThresholdPreviewOverlay\s*\(/,
   'applyNetworkThreshold must schedule a live threshold preview overlay');
 assert.match(src, /replaceOverlayForStage\s*\(\s*['"]threshold-preview['"]/,

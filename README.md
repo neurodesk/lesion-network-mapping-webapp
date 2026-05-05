@@ -552,7 +552,9 @@ overlap, FC network map, and threshold (defaults) in one click.
 - **Symmetric** toggle: `|x| > T` instead of `x > T` for positive/negative
   one-sided.
 - **Min cluster (voxels)**: post-threshold 26-connected component cleanup
-  via the existing `removeSmallComponents` helper.
+  via the existing `removeSmallComponents` helper. The summary reports how
+  many voxels were removed by this cleanup, so a value below the current
+  connected component sizes is explicit rather than silent.
 - A live summary line reports the survivor count; a **Download
   thresholded mask** button emits a `Uint8` NIfTI binary mask
   (`lnm-network-map-thresh.nii`).
