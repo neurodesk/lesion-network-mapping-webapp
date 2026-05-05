@@ -102,13 +102,17 @@ assert.match(src, /summarizeNetworkOverlap\s*\(/,
 assert.match(src, /['"]yeo7-2mm['"]/,
   'lnm-app.js must reference the yeo7-2mm asset ID literal');
 
-// Phase 1c.2: the orchestrator must surface 'X voxels of lesion fall outside
-// the atlas' as soon as voxelsOutsideAtlas > 0. Source-grep the wiring so we
-// catch typos that would silently drop the warning.
+// Phase 1c.2 + coverage-note follow-up: the reducer still reports
+// voxelsOutsideAtlas, but the UI must present it as unlabeled Yeo cortical
+// label coverage rather than a brain-mask warning.
 assert.match(src, /voxelsOutsideAtlas/,
-  'lnm-app.js must reference voxelsOutsideAtlas (outside-atlas warning wiring)');
+  'lnm-app.js must reference voxelsOutsideAtlas (Yeo label coverage-note wiring)');
 assert.match(src, /outsideAtlasWarning/,
-  'lnm-app.js must reference the #outsideAtlasWarning element');
+  'lnm-app.js must keep the #outsideAtlasWarning element for compatibility');
+assert.match(src, /Yeo cortical network labels/,
+  'coverage note must describe labelled Yeo cortical network voxels');
+assert.match(src, /unlabeled by this cortical atlas/,
+  'coverage note must describe label-0 voxels as unlabeled by the cortical atlas');
 
 // runYeoOverlap must call the atlas loader rather than the Phase 1c.1 stub.
 assert.match(src, /loadAtlasFromManifest|fetchAndDecodeAtlas|loadAtlas/,

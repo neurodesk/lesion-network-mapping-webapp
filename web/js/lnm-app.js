@@ -513,7 +513,7 @@ export class LesionNetworkMappingApp {
     const summary = summarizeNetworkOverlap(parcelResult, atlas.networkLabels);
     const networkSizes = computeNetworkSizes(atlas.data, atlas.networkLabels);
     this.overlapResult = { parcelResult, summary, atlas, networkSizes };
-    this.showOutsideAtlasWarning(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
+    this.showYeoLabelCoverageNote(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
 
     const tableEl = document.getElementById('networkOverlapTable');
     if (tableEl) {
@@ -527,7 +527,9 @@ export class LesionNetworkMappingApp {
 
     this.updateOutput(
       `Overlap computed for ${summary.networks.length} networks ` +
-      `(${parcelResult.voxelsOutsideAtlas} lesion voxels outside atlas).`
+      `(${parcelResult.totalLesionVoxels - parcelResult.voxelsOutsideAtlas} of ` +
+      `${parcelResult.totalLesionVoxels} lesion voxels assigned to Yeo cortical ` +
+      `network labels; ${parcelResult.voxelsOutsideAtlas} unlabeled).`
     );
   }
 
@@ -1491,8 +1493,8 @@ export class LesionNetworkMappingApp {
     // Reset the threshold summary.
     const summaryEl = document.getElementById('networkThresholdSummary');
     if (summaryEl) summaryEl.textContent = 'Compute a network map first to enable thresholding.';
-    // Hide outside-atlas warning.
-    this.showOutsideAtlasWarning(0, 0);
+    // Hide Yeo cortical-label coverage note.
+    this.showYeoLabelCoverageNote(0, 0);
 
     if (this.executor && typeof this.executor.clearResults === 'function') {
       this.executor.clearResults();
@@ -1523,12 +1525,12 @@ export class LesionNetworkMappingApp {
     }
   }
 
-  showOutsideAtlasWarning(outside, total) {
+  showYeoLabelCoverageNote(outside, total) {
     const el = document.getElementById('outsideAtlasWarning');
     if (!el) return;
     if (outside > 0 && total > 0) {
-      const pct = ((outside / total) * 100).toFixed(1);
-      el.textContent = `${outside} of ${total} lesion voxels (${pct}%) fall outside the Yeo atlas brain mask.`;
+      const assigned = total - outside;
+      el.textContent = `${assigned} of ${total} lesion voxels are assigned to Yeo cortical network labels; ${outside} are unlabeled by this cortical atlas.`;
       el.classList.remove('hidden');
     } else {
       el.textContent = '';

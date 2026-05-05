@@ -540,4 +540,37 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   );
 }
 
-console.log('lnm-app behavior OK: 14 dispatch + precondition + explicit-start + worker-wait + threshold-preview + min-cluster-input + top-percent + auto-promote + version-label cases.');
+// ---- Test 15: Yeo label coverage note is neutral, not a brain-mask warning ----
+{
+  const app = makeApp();
+  const classOps = [];
+  const coverageEl = {
+    textContent: '',
+    classList: {
+      add: (cls) => { classOps.push(['add', cls]); },
+      remove: (cls) => { classOps.push(['remove', cls]); }
+    }
+  };
+  const restoreDocument = useMockElements({ outsideAtlasWarning: coverageEl });
+
+  try {
+    app.showYeoLabelCoverageNote(2, 7);
+    assert.equal(
+      coverageEl.textContent,
+      '5 of 7 lesion voxels are assigned to Yeo cortical network labels; 2 are unlabeled by this cortical atlas.',
+      'coverage note must report assigned and unlabeled Yeo cortical-label voxels'
+    );
+    assert.deepEqual(classOps.at(-1), ['remove', 'hidden'],
+      'coverage note should be visible when any lesion voxels are unlabeled');
+
+    app.showYeoLabelCoverageNote(0, 7);
+    assert.equal(coverageEl.textContent, '',
+      'coverage note should clear when all lesion voxels are labelled');
+    assert.deepEqual(classOps.at(-1), ['add', 'hidden'],
+      'coverage note should hide when there are no unlabeled voxels');
+  } finally {
+    restoreDocument();
+  }
+}
+
+console.log('lnm-app behavior OK: 15 dispatch + precondition + explicit-start + worker-wait + threshold-preview + min-cluster-input + top-percent + auto-promote + coverage-note + version-label cases.');

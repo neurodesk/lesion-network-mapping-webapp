@@ -159,7 +159,7 @@ test('Phase 1c.4 browser smoke: phantom -> Yeo overlap -> CSV download', { timeo
         `console: ${consoleMessages.join('\n')}`
       );
 
-      // Phantom fully inside atlas -> outside-atlas warning hidden.
+      // Phantom fully inside atlas labels -> Yeo coverage note hidden.
       const warningHidden = await page.$eval(
         '#outsideAtlasWarning',
         el => el.classList.contains('hidden')
