@@ -1178,15 +1178,17 @@ export class LesionNetworkMappingApp {
     if (!this.structuralFile) {
       throw new Error('No structural T1 is available.');
     }
-    const [thresholdBuf, structuralBuf] = await Promise.all([
+    const [thresholdBuf, structuralBuf, mni160] = await Promise.all([
       this.thresholdedMaskFile.arrayBuffer(),
-      this.structuralFile.arrayBuffer()
+      this.structuralFile.arrayBuffer(),
+      loadAtlasFromManifest('lnm-mni160')
     ]);
     const threshold = await decodeNiftiBuffer(thresholdBuf);
     const structural = await decodeNiftiBuffer(structuralBuf);
-    if (!dimsEqual(structural.dims, [160, 160, 192])) {
+    if (!dimsEqual(structural.dims, mni160.dims)) {
       throw new Error(
-        `Patient-space threshold projection requires a 160x160x192 registration grid; ` +
+        `Patient-space threshold projection requires structural dims to match ` +
+        `the lnm-mni160 registration grid (${mni160.dims.join('x')}); ` +
         `got ${structural.dims.join('x')}.`
       );
     }
@@ -1194,15 +1196,15 @@ export class LesionNetworkMappingApp {
       ? threshold.data
       : binarise(threshold.data);
     const thresholdAffine = affineFromHeader(threshold.header);
-    const structuralAffine = affineFromHeader(structural.header);
+    const mni160Affine = affineFromHeader(mni160.header);
     const resampled = resampleAffine(
       thresholdMask,
       threshold.dims, thresholdAffine,
-      structural.dims, structuralAffine,
+      mni160.dims, mni160Affine,
       'nearest'
     );
     const mask = resampled instanceof Uint8Array ? resampled : binarise(resampled);
-    return { mask, dims: structural.dims };
+    return { mask, dims: mni160.dims };
   }
 
   async renderPatientLayerStack() {

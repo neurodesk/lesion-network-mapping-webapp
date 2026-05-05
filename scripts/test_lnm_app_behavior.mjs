@@ -23,6 +23,8 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as niftiModule from 'nifti-reader-js';
+import { writeNifti1 } from '../web/js/modules/nifti-writer.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -88,6 +90,13 @@ function useMockElements(elementsById) {
 
 function waitMs(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function makeNiftiFile(name, buffer) {
+  return {
+    name,
+    async arrayBuffer() { return buffer; }
+  };
 }
 
 async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
@@ -650,4 +659,93 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'patient-space projection must not fall back to the atlas preview');
 }
 
-console.log('lnm-app behavior OK: 17 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label cases.');
+// ---- Test 18: patient projection resamples Yeo threshold onto lnm-mni160,
+//      not the structural/prealign affine ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const thresholdData = new Uint8Array(5 * 5 * 5);
+  thresholdData[0] = 1;
+  const thresholdAffine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  const mni160Data = new Uint8Array(2 * 2 * 2);
+  const mni160Affine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  const structuralData = new Uint8Array(2 * 2 * 2);
+  const structuralAffine = [
+    1, 0, 0, 2,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  app.thresholdedMaskFile = makeNiftiFile('threshold.nii', writeNifti1(thresholdData, {
+    dims: [5, 5, 5],
+    spacing: [1, 1, 1],
+    affine: thresholdAffine,
+    description: 'synthetic threshold'
+  }));
+  app.structuralFile = makeNiftiFile('structural-prealign.nii', writeNifti1(structuralData, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine: structuralAffine,
+    description: 'synthetic structural with shifted affine'
+  }));
+  const mni160Buffer = writeNifti1(mni160Data, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine: mni160Affine,
+    description: 'synthetic lnm-mni160'
+  });
+
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  globalThis.caches = undefined;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.includes('manifest.json')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            atlasAssets: [{
+              id: 'lnm-mni160',
+              sourceUrl: 'https://example.test/lnm-mni160.nii',
+              cacheKey: 'lnm-mni160-test',
+              dims: [2, 2, 2],
+              supportStatus: 'supported'
+            }]
+          };
+        }
+      };
+    }
+    if (href === 'https://example.test/lnm-mni160.nii') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return mni160Buffer; }
+      };
+    }
+    throw new Error(`unexpected fetch in test: ${href}`);
+  };
+
+  try {
+    const { mask, dims } = await app.resampleThresholdMaskToStructuralGrid();
+    assert.deepEqual(dims, [2, 2, 2],
+      'projection input to inverse-warp must use lnm-mni160 dims');
+    assert.equal(mask[0], 1,
+      'Yeo threshold must be sampled through the lnm-mni160 affine');
+    assert.equal(mask[1], 0,
+      'synthetic threshold should not be shifted through the structural affine');
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+  }
+}
+
+console.log('lnm-app behavior OK: 18 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample cases.');
