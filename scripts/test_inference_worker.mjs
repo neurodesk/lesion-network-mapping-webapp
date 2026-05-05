@@ -231,6 +231,16 @@ assert.match(
   /SynthMorph EP=/,
   'stepRegister must log the chosen EP as "SynthMorph EP=<name>"'
 );
+assert.match(
+  worker,
+  /referenceHeaderBytes\s*=\s*copyNiftiHeaderBytes\(refBuf\)/,
+  'stepRegister must preserve the lnm-mni160 reference header for target-space outputs'
+);
+assert.match(
+  worker,
+  /referenceDims\s*=\s*\[/,
+  'stepRegister must preserve the lnm-mni160 reference dims for target-space outputs'
+);
 
 // ---- (9) Patient-space threshold projection ----
 assert.match(
@@ -247,6 +257,16 @@ assert.match(
   worker,
   /stage\s*=\s*['"]threshold-patient['"]/,
   "inverse-warp-mask must default its output stage to 'threshold-patient'"
+);
+assert.match(
+  worker,
+  /createOutputNifti\(\s*warpedBin,\s*workerState\.referenceHeaderBytes/s,
+  'warp-mask must wrap mni-lesion output with the fixed lnm-mni160 reference header'
+);
+assert.match(
+  worker,
+  /createOutputNifti\(\s*projectedBin,\s*workerState\.origHeaderBytes,\s*workerState\.origDims\s*\)/,
+  'inverse-warp-mask must keep threshold-patient output on the source structural header'
 );
 assert.match(
   executor,

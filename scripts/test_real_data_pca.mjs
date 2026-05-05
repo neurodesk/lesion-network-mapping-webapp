@@ -112,6 +112,30 @@ for (let i = 0; i < 3; i++) {
   assert.ok(Math.abs(norm - 1) < 1e-6, `R col${i} norm ${norm}`);
 }
 
+// R columns are canonical destination axes, not descending PCA rank.
+// The ds004884 brain's strongest PCs are AP/SI/LR by eigenvalue order; this
+// regression catches the old behavior that mapped those ranks onto x/y/z.
+const srcA3 = [
+  [t1.affine[0][0], t1.affine[0][1], t1.affine[0][2]],
+  [t1.affine[1][0], t1.affine[1][1], t1.affine[1][2]],
+  [t1.affine[2][0], t1.affine[2][1], t1.affine[2][2]]
+];
+for (let c = 0; c < 3; c++) {
+  const col = [R[0][c], R[1][c], R[2][c]];
+  const world = [
+    srcA3[0][0] * col[0] + srcA3[0][1] * col[1] + srcA3[0][2] * col[2],
+    srcA3[1][0] * col[0] + srcA3[1][1] * col[1] + srcA3[1][2] * col[2],
+    srcA3[2][0] * col[0] + srcA3[2][1] * col[1] + srcA3[2][2] * col[2]
+  ];
+  const n = Math.sqrt(world[0] ** 2 + world[1] ** 2 + world[2] ** 2);
+  const unit = world.map(v => v / n);
+  const offAxisMax = Math.max(...unit.map((v, i) => i === c ? 0 : Math.abs(v)));
+  assert.ok(unit[c] > 0.7,
+    `R col${c} must point mostly along positive canonical world axis ${c}; got ${unit.join(', ')}`);
+  assert.ok(Math.abs(unit[c]) > offAxisMax,
+    `R col${c} canonical component must dominate; got ${unit.join(', ')}`);
+}
+
 // ---- Step 5: resample mask + verify centroid lands at MNI center ----
 const aligned = resampleAffine(mask, t1.dims, t1.affine, mniDims, dstAffine, 'nearest');
 let alignedCount = 0;

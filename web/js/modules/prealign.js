@@ -109,9 +109,9 @@ export function covarianceOfMask(mask, dims, centroid) {
 //     eigenvectors: [v0, v1, v2]   // each vk is a unit-length [x, y, z] }
 //
 // Order matches: eigenvectors[i] corresponds to eigenvalues[i]. They are
-// NOT sorted; principalAxisAlign sorts by descending magnitude. For 3x3
-// the off-diagonal sweep usually converges in <10 iterations; we cap at
-// 50 to be safe.
+// NOT sorted; principalAxisAlign assigns them to canonical MNI axes using
+// the source affine's world-space directions. For 3x3 the off-diagonal
+// sweep usually converges in <10 iterations; we cap at 50 to be safe.
 export function jacobiEigen3x3(M) {
   // Working copy.
   let A = [
@@ -225,42 +225,69 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
   const cov = covarianceOfMask(mask, dims, centroidVox);
   const { eigenvalues, eigenvectors } = jacobiEigen3x3(cov);
 
-  // Sort by descending eigenvalue; carry eigenvectors along.
-  const idx = [0, 1, 2].sort((a, b) => eigenvalues[b] - eigenvalues[a]);
-  const sortedEigs = idx.map(i => eigenvalues[i]);
-  const sortedVecs = idx.map(i => eigenvectors[i]);
+  const sortedEigs = [0, 1, 2]
+    .sort((a, b) => eigenvalues[b] - eigenvalues[a])
+    .map(i => eigenvalues[i]);
 
-  // Build R with sorted PCs as columns. R[:, k] = sortedVecs[k].
-  const R = [
-    [sortedVecs[0][0], sortedVecs[1][0], sortedVecs[2][0]],
-    [sortedVecs[0][1], sortedVecs[1][1], sortedVecs[2][1]],
-    [sortedVecs[0][2], sortedVecs[1][2], sortedVecs[2][2]]
-  ];
-
-  // Phase 36: PCA 180° fix via NIfTI affine prior. PCA covariance is a
+  // Phase 36/41: PCA orientation via NIfTI affine prior. PCA covariance is a
   // 2nd-moment statistic — invariant to 180° rotations around any
   // principal axis — so without disambiguation a flipped acquisition
   // produces a mirror-image prealigned brain.
   //
-  // Fix: trust the source NIfTI affine. Map each PCA column from
-  // source voxel space to source world space (R_world = src_affine_3x3
-  // * R) and pick column signs that make R_world's diagonal positive.
-  // That choice keeps each PCA axis pointing in the same world
-  // direction the source's own affine declares — so anatomically-
-  // upright source T1s land upright in MNI, and an upside-down
-  // acquisition (where the source NIfTI affine itself encodes the
-  // flip) gets corrected back to canonical.
+  // Fix: trust the source NIfTI affine. Map each PCA eigenvector from
+  // source voxel space to source world space, then assign the three
+  // eigenvectors to canonical destination x/y/z by whichever world axis
+  // each vector is most aligned with. This is deliberately NOT sorted by
+  // eigenvalue: on real brains the longest principal component is often
+  // not left-right, so eigenvalue order can rotate anatomy into the
+  // wrong canonical axis before SynthMorph.
   //
-  // After signing, det(R) may flip. Re-enforce right-handedness by
-  // flipping the column with the SMALLEST |R_world[k][k]| (the most
-  // ambiguously-oriented PCA axis) instead of always column 2 — which
-  // is what the previous implementation did and undid one of the sign
-  // corrections.
   const srcA3 = [
     [srcAffine[0][0], srcAffine[0][1], srcAffine[0][2]],
     [srcAffine[1][0], srcAffine[1][1], srcAffine[1][2]],
     [srcAffine[2][0], srcAffine[2][1], srcAffine[2][2]]
   ];
+
+  function worldDirection(voxelVec) {
+    const w = [
+      srcA3[0][0] * voxelVec[0] + srcA3[0][1] * voxelVec[1] + srcA3[0][2] * voxelVec[2],
+      srcA3[1][0] * voxelVec[0] + srcA3[1][1] * voxelVec[1] + srcA3[1][2] * voxelVec[2],
+      srcA3[2][0] * voxelVec[0] + srcA3[2][1] * voxelVec[1] + srcA3[2][2] * voxelVec[2]
+    ];
+    const n = Math.sqrt(w[0] ** 2 + w[1] ** 2 + w[2] ** 2);
+    if (n < 1e-12) {
+      throw new Error('principalAxisAlign: source affine has a degenerate axis');
+    }
+    return [w[0] / n, w[1] / n, w[2] / n];
+  }
+
+  const worldDirs = eigenvectors.map(worldDirection);
+  const perms = [
+    [0, 1, 2], [0, 2, 1], [1, 0, 2],
+    [1, 2, 0], [2, 0, 1], [2, 1, 0]
+  ];
+  let bestPerm = perms[0];
+  let bestScore = -Infinity;
+  for (const perm of perms) {
+    const score =
+      Math.abs(worldDirs[perm[0]][0]) +
+      Math.abs(worldDirs[perm[1]][1]) +
+      Math.abs(worldDirs[perm[2]][2]);
+    if (score > bestScore) {
+      bestScore = score;
+      bestPerm = perm;
+    }
+  }
+
+  const R = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let c = 0; c < 3; c++) {
+    const evIdx = bestPerm[c];
+    const sign = worldDirs[evIdx][c] < 0 ? -1 : 1;
+    R[0][c] = sign * eigenvectors[evIdx][0];
+    R[1][c] = sign * eigenvectors[evIdx][1];
+    R[2][c] = sign * eigenvectors[evIdx][2];
+  }
+
   // R_world[r][c] = sum_k srcA3[r][k] * R[k][c].
   // We only need the diagonal R_world[c][c] for the sign decision.
   function worldDiag(R3) {
@@ -270,17 +297,9 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
       srcA3[c][2] * R3[2][c]
     );
   }
-  let worldD = worldDiag(R);
-  for (let k = 0; k < 3; k++) {
-    if (worldD[k] < 0) {
-      R[0][k] = -R[0][k];
-      R[1][k] = -R[1][k];
-      R[2][k] = -R[2][k];
-    }
-  }
   // Re-enforce det(R) = +1 by flipping the most-ambiguous column if
-  // an odd number of sign flips above made it -1.
-  worldD = worldDiag(R);
+  // the affine-prior signs above made the voxel-space rotation left-handed.
+  let worldD = worldDiag(R);
   const det =
     R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) -
     R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +

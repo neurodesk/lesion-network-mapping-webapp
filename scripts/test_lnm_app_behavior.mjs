@@ -64,10 +64,29 @@ globalThis.window = globalThis;
 globalThis.location = { href: 'http://localhost:8080/' };
 globalThis.URL.createObjectURL = () => 'blob:fake';
 globalThis.URL.revokeObjectURL = () => {};
-globalThis.Blob = class { constructor() {} };
+globalThis.Blob = class {
+  constructor(parts) { this.parts = parts || []; }
+  async arrayBuffer() {
+    const first = this.parts[0];
+    if (first instanceof ArrayBuffer) return first;
+    if (ArrayBuffer.isView(first)) {
+      return first.buffer.slice(first.byteOffset, first.byteOffset + first.byteLength);
+    }
+    if (first && typeof first.arrayBuffer === 'function') return first.arrayBuffer();
+    return new ArrayBuffer(0);
+  }
+};
 globalThis.File = class {
   constructor(parts, name) { this.parts = parts; this.name = name; }
-  async arrayBuffer() { return this.parts?.[0] || new ArrayBuffer(0); }
+  async arrayBuffer() {
+    const first = this.parts?.[0];
+    if (first instanceof ArrayBuffer) return first;
+    if (ArrayBuffer.isView(first)) {
+      return first.buffer.slice(first.byteOffset, first.byteOffset + first.byteLength);
+    }
+    if (first && typeof first.arrayBuffer === 'function') return first.arrayBuffer();
+    return new ArrayBuffer(0);
+  }
 };
 
 const { LesionNetworkMappingApp, formatVersionLabel } =
@@ -97,6 +116,29 @@ function makeNiftiFile(name, buffer) {
     name,
     async arrayBuffer() { return buffer; }
   };
+}
+
+function decodeNiftiForTest(buffer) {
+  const nifti = niftiModule.default || niftiModule;
+  let buf = buffer;
+  const bytes = new Uint8Array(buf);
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) buf = nifti.decompress(buf);
+  const header = nifti.readHeader(buf);
+  return {
+    header,
+    dims: [Number(header.dims[1]), Number(header.dims[2]), Number(header.dims[3])]
+  };
+}
+
+function assertAffineClose(actual, expected, message, tolerance = 1e-5) {
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 4; c++) {
+      assert.ok(
+        Math.abs(actual[r][c] - expected[r][c]) < tolerance,
+        `${message}: affine[${r}][${c}] got ${actual[r][c]}, expected ${expected[r][c]}`
+      );
+    }
+  }
 }
 
 function makeClassList(initial = []) {
@@ -842,4 +884,105 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: 19 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample cases.');
+// ---- Test 19: prealign writes fixed lnm-mni160 headers, not the sampling affine ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  app.viewerController = {
+    loadBaseVolume: async () => {},
+    loadOverlay: async () => {},
+    removeVolumeForStage: () => {}
+  };
+  const dims = [4, 4, 4];
+  const t1Data = new Float32Array(64);
+  for (let i = 0; i < t1Data.length; i++) t1Data[i] = i + 1;
+  const maskData = new Uint8Array(64);
+  maskData.fill(1);
+  const sourceAffine = [
+    1, 0.15, 0, 4,
+    0, 1, 0.2, -3,
+    0, 0, 1, 2
+  ];
+  const fixedMniAffine = [
+    1, 0, 0, -2,
+    0, 1, 0, -2,
+    0, 0, 1, -2
+  ];
+  app.structuralFile = makeNiftiFile('source-oblique.nii', writeNifti1(t1Data, {
+    dims,
+    spacing: [1, 1, 1],
+    affine: sourceAffine,
+    description: 'synthetic oblique source'
+  }));
+  app.brainmaskFile = makeNiftiFile('source-mask.nii', writeNifti1(maskData, {
+    dims,
+    spacing: [1, 1, 1],
+    affine: sourceAffine,
+    description: 'synthetic source mask'
+  }));
+  const mni160Buffer = writeNifti1(new Uint8Array(64), {
+    dims,
+    spacing: [1, 1, 1],
+    affine: fixedMniAffine,
+    description: 'synthetic fixed lnm-mni160'
+  });
+
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  globalThis.caches = undefined;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.includes('manifest.json')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            atlasAssets: [{
+              id: 'lnm-mni160',
+              sourceUrl: 'https://example.test/prealign-mni160.nii',
+              cacheKey: 'lnm-mni160-prealign-test',
+              dims,
+              supportStatus: 'supported'
+            }]
+          };
+        }
+      };
+    }
+    if (href === 'https://example.test/prealign-mni160.nii') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return mni160Buffer; }
+      };
+    }
+    throw new Error(`unexpected fetch in prealign test: ${href}`);
+  };
+
+  try {
+    await app.prealignToMni160();
+    const structural = decodeNiftiForTest(await app.structuralFile.arrayBuffer());
+    const brainmask = decodeNiftiForTest(await app.brainmaskFile.arrayBuffer());
+    assert.deepEqual(structural.dims, dims,
+      'prealigned structural must use the fixed lnm-mni160 dims');
+    assert.deepEqual(brainmask.dims, dims,
+      'prealigned brainmask must use the fixed lnm-mni160 dims');
+    assertAffineClose(structural.header.affine, [
+      [1, 0, 0, -2],
+      [0, 1, 0, -2],
+      [0, 0, 1, -2],
+      [0, 0, 0, 1]
+    ], 'prealigned structural header must be fixed lnm-mni160');
+    assertAffineClose(brainmask.header.affine, [
+      [1, 0, 0, -2],
+      [0, 1, 0, -2],
+      [0, 0, 1, -2],
+      [0, 0, 0, 1]
+    ], 'prealigned brainmask header must be fixed lnm-mni160');
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+  }
+}
+
+console.log('lnm-app behavior OK: 20 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

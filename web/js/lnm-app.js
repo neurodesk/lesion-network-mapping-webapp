@@ -46,6 +46,19 @@ function dimsEqual(a, b) {
     a.every((value, index) => value === b[index]);
 }
 
+function affineNearlyEqual(a, b, tolerance = 1e-3) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length < 3 || b.length < 3) return false;
+  for (let r = 0; r < 3; r++) {
+    if (!Array.isArray(a[r]) || !Array.isArray(b[r]) || a[r].length < 4 || b[r].length < 4) {
+      return false;
+    }
+    for (let c = 0; c < 4; c++) {
+      if (Math.abs(a[r][c] - b[r][c]) > tolerance) return false;
+    }
+  }
+  return true;
+}
+
 function flattenAffine3Rows(affine) {
   return [
     affine[0][0], affine[0][1], affine[0][2], affine[0][3],
@@ -1394,19 +1407,30 @@ export class LesionNetworkMappingApp {
       this.updateOutput('Drop a structural T1 first.');
       return;
     }
+    let mni160Ref = null;
+    const getMni160Ref = async () => {
+      if (!mni160Ref) mni160Ref = await loadAtlasFromManifest('lnm-mni160');
+      return mni160Ref;
+    };
 
     // Phase 34: idempotent fast-path. If the structural is already at
-    // exactly the SynthMorph-required pose (160x160x192 1mm) and 1mm
-    // isotropic, prealign has nothing to do — used by runFullPipeline's
-    // auto chain so users with already-aligned T1s don't pay the
-    // cost. Probe via a header decode (cheap relative to a resample).
+    // exactly the SynthMorph-required fixed lnm-mni160 pose, prealign
+    // has nothing to do — used by runFullPipeline's auto chain so users
+    // with already-aligned T1s don't pay the cost. Dims alone are not
+    // sufficient: an oblique 160x160x192 prealign output must still be
+    // canonicalised onto the fixed template affine.
     if (skipIfAligned) {
-      const probeBuf = await this.structuralFile.arrayBuffer();
+      const [probeBuf, mni160] = await Promise.all([
+        this.structuralFile.arrayBuffer(),
+        getMni160Ref()
+      ]);
       const probe = await decodeNiftiBuffer(probeBuf);
-      const isAligned =
-        probe.dims[0] === 160 && probe.dims[1] === 160 && probe.dims[2] === 192;
+      const probeAffine = affineFromHeader(probe.header);
+      const mni160Affine = affineFromHeader(mni160.header);
+      const isAligned = dimsEqual(probe.dims, mni160.dims) &&
+        affineNearlyEqual(probeAffine, mni160Affine);
       if (isAligned) {
-        this.updateOutput('Structural already at 160x160x192, skipping prealign.');
+        this.updateOutput('Structural already matches lnm-mni160, skipping prealign.');
         return;
       }
     }
@@ -1436,8 +1460,12 @@ export class LesionNetworkMappingApp {
     // principal axes line up with MNI canonical axes, plus the centroid
     // translation. For nearly-isotropic brains the rotation is small;
     // for clinical T1s acquired off-axis it can be substantial.
+    const mni160 = await getMni160Ref();
+    const mni160Affine = affineFromHeader(mni160.header);
+    const mniCenterVox = mni160.dims.map(v => v / 2);
     const { dstAffine, mniDims, eigenvalues } = principalAxisAlign(
-      mask.data, t1.dims, t1Affine
+      mask.data, t1.dims, t1Affine,
+      { mniDims: mni160.dims, mniCenterVox }
     );
     const cVox = centroidOfMask(mask.data, t1.dims);
     const cWorld = applyAffineToVoxel(t1Affine, cVox);
@@ -1457,18 +1485,14 @@ export class LesionNetworkMappingApp {
     const maskBin = new Uint8Array(maskResampled.length);
     for (let i = 0; i < maskResampled.length; i++) maskBin[i] = maskResampled[i] > 0.5 ? 1 : 0;
 
-    const flatAff = [
-      dstAffine[0][0], dstAffine[0][1], dstAffine[0][2], dstAffine[0][3],
-      dstAffine[1][0], dstAffine[1][1], dstAffine[1][2], dstAffine[1][3],
-      dstAffine[2][0], dstAffine[2][1], dstAffine[2][2], dstAffine[2][3]
-    ];
+    const flatAff = flattenAffine3Rows(mni160Affine);
     const t1Nifti = writeNifti1(t1Resampled, {
       dims: mniDims, spacing: [1, 1, 1], affine: flatAff,
-      description: 'LNM prealign: centroid match to MNI160 1mm'
+      description: 'LNM prealign: resampled to fixed lnm-mni160 1mm'
     });
     const maskNifti = writeNifti1(maskBin, {
       dims: mniDims, spacing: [1, 1, 1], affine: flatAff,
-      description: 'LNM prealign brainmask resampled to MNI160 1mm'
+      description: 'LNM prealign brainmask resampled to fixed lnm-mni160 1mm'
     });
 
     this.structuralFile = arrayBufferToFile(t1Nifti, 'lnm-prealign-t1.nii');

@@ -63,6 +63,8 @@ let workerState = {
   // NDHWC channel-last layout (matches the SynthMorph ONNX output).
   displacementField: null,
   displacementDims: null,
+  referenceHeaderBytes: null,
+  referenceDims: null,
 };
 
 function resetState() {
@@ -81,6 +83,8 @@ function resetState() {
     segMinComponentSize: 10,
     displacementField: null,
     displacementDims: null,
+    referenceHeaderBytes: null,
+    referenceDims: null,
   };
 }
 
@@ -227,6 +231,16 @@ function parseNiftiInput(arrayBuffer) {
     headerBytes,
     affine
   };
+}
+
+function copyNiftiHeaderBytes(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const voxOffset = view.getFloat32(108, true);
+  const headerSize = Math.ceil(voxOffset);
+  const out = new ArrayBuffer(headerSize);
+  new Uint8Array(out).set(bytes.slice(0, headerSize));
+  return out;
 }
 
 function extractAffine(view) {
@@ -1341,6 +1355,12 @@ async function stepRegister(params = {}) {
     throw new Error('MNI reference is not a valid NIfTI');
   }
   const refHeader = nifti.readHeader(refBuf);
+  workerState.referenceHeaderBytes = copyNiftiHeaderBytes(refBuf);
+  workerState.referenceDims = [
+    Number(refHeader.dims[1]),
+    Number(refHeader.dims[2]),
+    Number(refHeader.dims[3])
+  ];
   const refImage = nifti.readImage(refHeader, refBuf);
   // Reference was saved as float32 by the build pipeline.
   const targetData = new Float32Array(refImage);
@@ -1521,10 +1541,14 @@ async function stepWarpMask(params = {}) {
   const warpedBin = new Uint8Array(warped.length);
   for (let i = 0; i < warped.length; i++) warpedBin[i] = warped[i] > 0.5 ? 1 : 0;
 
-  // Wrap as NIfTI sharing the source header (voxel grid + affine of the
-  // 160x160x192 1mm pose; orchestrator can resample to MNI 2mm later).
+  // Wrap as NIfTI sharing the fixed MNI160 target header. The warped voxels
+  // are on the SynthMorph reference grid, not the source/prealign affine.
   postProgress(0.85, 'Wrapping warped mask as NIfTI...');
-  const outNifti = createOutputNifti(warpedBin, workerState.origHeaderBytes, workerState.origDims);
+  const outNifti = createOutputNifti(
+    warpedBin,
+    workerState.referenceHeaderBytes || workerState.origHeaderBytes,
+    workerState.referenceDims || workerState.origDims
+  );
   postStageData('mni-lesion', outNifti, 'Lesion mask warped to MNI 1mm');
 
   postProgress(1.0, 'Mask warp complete');

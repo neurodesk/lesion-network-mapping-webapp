@@ -147,10 +147,11 @@ const { pathToFileURL } = require('node:url');
     }
   }
 
-  // ---- principalAxisAlign: rotated phantom recovers principal axis ----
+  // ---- principalAxisAlign: rotated phantom preserves canonical axes ----
   // Build a 12x4x4 box rotated 90° around z axis: now extends along y.
-  // PCA should identify y as the principal axis. The dst affine should
-  // sample the source such that dst_x maps to source_y direction.
+  // PCA should identify y as the largest eigenvalue, but R columns now
+  // represent canonical destination x/y/z axes, not descending PCA rank.
+  // The dst y-axis should map to source y direction.
   {
     const dims = [16, 16, 16];
     const mask = new Uint8Array(16 * 16 * 16);
@@ -168,13 +169,17 @@ const { pathToFileURL } = require('node:url');
     const { eigenvalues, R } = principalAxisAlign(mask, dims, srcAffine);
     assert.ok(eigenvalues[0] > eigenvalues[1] && eigenvalues[0] > eigenvalues[2],
       `rotated phantom: top eigenvalue dominates; got ${eigenvalues.join(', ')}`);
-    // R is the source-voxel rotation: R @ e_x_dst = principal_axis_in_src.
-    // Principal axis = y in source, so column 0 of R should be ±(0, 1, 0).
+    // R is the source-voxel rotation: R @ e_c_dst = source direction
+    // for canonical axis c. Since the source affine is identity, column 1
+    // should be ±source-y even though y is the largest-variance PCA axis.
     const col0 = [R[0][0], R[1][0], R[2][0]];
-    assert.ok(Math.abs(col0[1]) > 0.99,
-      `R col0 (principal axis) y-component should dominate; got ${col0.join(', ')}`);
-    assert.ok(Math.abs(col0[0]) < 0.01 && Math.abs(col0[2]) < 0.01,
-      `R col0 should be along ±y only; got ${col0.join(', ')}`);
+    const col1 = [R[0][1], R[1][1], R[2][1]];
+    assert.ok(Math.abs(col0[0]) > 0.99,
+      `R col0 should remain the canonical x-axis; got ${col0.join(', ')}`);
+    assert.ok(Math.abs(col1[1]) > 0.99,
+      `R col1 should map the canonical y-axis to source y; got ${col1.join(', ')}`);
+    assert.ok(Math.abs(col1[0]) < 0.01 && Math.abs(col1[2]) < 0.01,
+      `R col1 should be along ±y only; got ${col1.join(', ')}`);
   }
 
   // ---- principalAxisAlign: rotation matrix is right-handed (det > 0) ----
