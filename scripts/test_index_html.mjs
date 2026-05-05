@@ -48,6 +48,8 @@ const requiredIds = [
   // Phase 3.4 additions: registration button.
   '#runRegistrationButton',
   '#registrationQcMode',
+  '#registrationBlendValue',
+  '#registrationBlendLabel',
   '#checkAtlasAlignmentButton',
   // Phase 4.4 additions: Network map subsection.
   '#computeNetworkMapButton',
@@ -95,26 +97,42 @@ assert.doesNotMatch(prealignButton[1], /<sup\b/i,
 assert.match(prealignButton[0], /title=["']Pre-align T1 to the MNI160 1 mm grid["']/,
   '#prealignToMniButton title must retain the MNI160 1 mm detail');
 
-const advancedWorkflow = html.match(/<div\b[^>]*class=["'][^"']*\badvanced-workflow\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+const workflowStart = html.indexOf('aria-label="Advanced workflow order"');
+const workflowEnd = html.indexOf('</details>', workflowStart);
+const advancedWorkflow = workflowStart >= 0 && workflowEnd > workflowStart
+  ? html.slice(workflowStart, workflowEnd)
+  : '';
 assert.ok(advancedWorkflow, 'advanced controls must expose an ordered workflow container');
 assert.match(
-  advancedWorkflow[1],
+  advancedWorkflow,
   /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion segmentation[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → Yeo grid[\s\S]*7 Compute Yeo overlap[\s\S]*8 Compute network map/,
   'advanced controls must show the manual stage buttons in execution order'
 );
 assert.match(
-  advancedWorkflow[1],
-  /id=["']runRegistrationButton["'][\s\S]*id=["']checkAtlasAlignmentButton["'][\s\S]*id=["']applyRegistrationToLesionButton["']/,
-  'atlas alignment QC button must sit between registration and lesion warp'
+  advancedWorkflow,
+  /id=["']runRegistrationButton["'][\s\S]*id=["']registrationQcMode["'][\s\S]*id=["']checkAtlasAlignmentButton["'][\s\S]*id=["']registrationBlendValue["'][\s\S]*id=["']applyRegistrationToLesionButton["']/,
+  'advanced QC controls must follow execution order: registration -> QC view -> check alignment -> blend -> lesion warp'
 );
+assert.doesNotMatch(html, /Researcher mode: lesion mask/,
+  'advanced controls must not expose the researcher-mode lesion-mask upload');
+assert.match(html, /<input\b[^>]*id=["']lesionFileInput["'][^>]*class=["']hidden["'][^>]*>/i,
+  'manual lesion-mask input may remain only as a hidden compatibility hook');
 assert.match(html, /<option\s+value=["']patient["']>Patient space<\/option>/,
   'registration QC selector must offer patient-space view');
-assert.match(html, /<option\s+value=["']mni["']>MNI space<\/option>/,
-  'registration QC selector must offer MNI-space view');
+assert.match(html, /<option\s+value=["']mni["']\s+selected>MNI space<\/option>/,
+  'registration QC selector must default to MNI-space view for patient/template blending');
 assert.match(html, /<option\s+value=["']checkerboard["']>Checkerboard<\/option>/,
   'registration QC selector must offer checkerboard view');
 assert.match(html, /<option\s+value=["']displacement["']>Displacement<\/option>/,
   'registration QC selector must offer displacement view');
+const registrationBlendInput = html.match(/<input\b[^>]*id=["']registrationBlendValue["'][^>]*>/i);
+assert.ok(registrationBlendInput, 'registration QC must expose a Patient/MNI blend slider');
+assert.match(registrationBlendInput[0], /type=["']range["']/,
+  'Patient/MNI blend control must be a range slider');
+assert.match(registrationBlendInput[0], /min=["']0["'][\s\S]*max=["']1["'][\s\S]*step=["']0\.05["'][\s\S]*value=["']0\.5["']/,
+  'Patient/MNI blend slider must run from MNI-only to registered-patient-only with a 50% default');
+assert.match(html, /Patient\/MNI blend/,
+  'registration QC blend label must make the MNI/patient comparison explicit');
 
 assert.doesNotMatch(html, /id=["']pipelineSelect["']/,
   'Pipeline selector must not be visible; Run analysis is input-driven');

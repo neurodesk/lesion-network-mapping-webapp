@@ -285,9 +285,16 @@ export class ViewerController {
     }
   }
 
-  setStageOpacity(stage, opacity) {
+  setStageOpacity(stage, opacity, options = {}) {
     if (!stage || !Number.isFinite(opacity)) return;
     this.stageOpacity.set(stage, opacity);
+    if (!options.apply) return;
+    const applied = this.applyStageOpacity(stage);
+    if (applied && options.redraw) {
+      this.nv.updateGLVolume?.();
+      this.nv.drawScene?.();
+    }
+    return applied;
   }
 
   setStageVisibilityState(stage, visible, force = false) {
@@ -319,6 +326,7 @@ export class ViewerController {
     const opacity = this.isStageVisible(stage)
       ? (this.stageOpacity.get(stage) ?? (index === 0 ? 1 : 0.5))
       : 0;
+    if (this.nv.volumes?.[index]) this.nv.volumes[index].opacity = opacity;
     this.nv.setOpacity(index, opacity);
     return true;
   }

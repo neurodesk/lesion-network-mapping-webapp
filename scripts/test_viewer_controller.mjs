@@ -328,4 +328,28 @@ function fakeFile(name) {
     'replacement overlay must remain hidden when its stage is hidden');
 }
 
-console.log('ViewerController OK: 13 cases (Phase 4 call-shape, overlay replace path, scalar overlays, visibility, view + stage + colormap).');
+// ---- Test 14: setStageOpacity can apply immediately for live blend sliders ----
+{
+  const { nv, calls } = makeNv();
+  const vc = new ViewerController({ nv });
+  await vc.loadBaseVolume(fakeFile('template.nii'), { stage: 'registration-template' });
+  await vc.loadOverlay(fakeFile('registered.nii'), 'gray', 0.5, {
+    stage: 'registered-t1-mni160',
+    scalar: true
+  });
+
+  const applied = vc.setStageOpacity('registered-t1-mni160', 0.2, {
+    apply: true,
+    redraw: true
+  });
+  assert.equal(applied, true,
+    'live stage-opacity application must report success for active stages');
+  assert.deepEqual(calls.setOpacity.at(-1), [1, 0.2],
+    'live stage-opacity application must call NiiVue setOpacity immediately');
+  assert.equal(nv.volumes[1].opacity, 0.2,
+    'live stage-opacity application must update the active volume opacity');
+  assert.ok(calls.updateGLVolume > 0 && calls.drawScene > 0,
+    'live stage-opacity application must redraw the viewer');
+}
+
+console.log('ViewerController OK: 14 cases (Phase 4 call-shape, overlay replace path, scalar overlays, visibility, view + stage + colormap + live opacity).');

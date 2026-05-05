@@ -297,6 +297,12 @@ assert.match(src, /showSubjectAtlasButton/,
   'lnm-app.js must bind the subject-space atlas QC button');
 assert.match(src, /registrationQcMode/,
   'lnm-app.js must bind the registration QC mode selector');
+assert.match(src, /registrationBlendValue/,
+  'lnm-app.js must bind the Patient/MNI registration blend slider');
+assert.match(src, /\bapplyRegistrationBlend\s*\(/,
+  'registration QC must expose a helper that applies patient/MNI blend opacity');
+assert.match(src, /\bhandleRegistrationBlendInput\s*\(/,
+  'registration blend input must switch to the active MNI QC view when needed');
 assert.match(src, /\brenderMniRegistrationQc\s*\(/,
   'registration QC must expose an MNI-space template/registered-T1 view');
 assert.match(src, /\brenderCheckerboardRegistrationQc\s*\(/,

@@ -63,8 +63,8 @@ export const LNM_PIPELINES = [
     id: 'lnm-network-map',
     // Phase 39: hidden from the dropdown — the visible UI assumes raw T1
     // input. setLesion() still auto-promotes to this pipeline when a
-    // researcher drops a Yeo-grid mask via the Advanced disclosure or
-    // when test_browser_smoke drives #lesionFileInput directly.
+    // a Yeo-grid mask is provided through the hidden compatibility input
+    // or when test_browser_smoke drives #lesionFileInput directly.
     hidden: true,
     displayName: 'Lesion network map (Yeo7 + group-FC pack)',
     description:

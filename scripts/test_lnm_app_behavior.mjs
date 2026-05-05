@@ -928,7 +928,105 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-// ---- Test 17c: registration QC render modes use MNI-space artifacts ----
+// ---- Test 17c: Patient/MNI registration blend slider drives the
+//      registered-patient overlay opacity in QC views ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const controls = {
+    registrationBlendValue: {
+      value: '0.75',
+      addEventListener: (eventName, handler) => { listeners[`registrationBlendValue:${eventName}`] = handler; }
+    },
+    registrationBlendLabel: { textContent: '' }
+  };
+  const restoreDocument = useMockElements(controls);
+  const stageOpacityCalls = [];
+  const appliedStages = [];
+  let glUpdates = 0;
+
+  app.viewerController = {
+    setStageOpacity: (stage, opacity, options = {}) => {
+      stageOpacityCalls.push([stage, opacity, options]);
+      if (options.apply) appliedStages.push(stage);
+      if (options.redraw) glUpdates += 1;
+      return true;
+    },
+    nv: {
+      updateGLVolume: () => { glUpdates += 1; },
+      drawScene: () => {}
+    }
+  };
+
+  try {
+    app.bindEvents();
+    assert.equal(app.registrationBlendValue, 0.75,
+      'registration blend slider value must initialize app state');
+    assert.equal(controls.registrationBlendLabel.textContent, '75% patient',
+      'registration blend label must describe the registered-patient opacity');
+
+    controls.registrationBlendValue.value = '0';
+    listeners['registrationBlendValue:input']();
+    assert.deepEqual(stageOpacityCalls.at(-1).slice(0, 2), ['registered-t1-mni160', 0],
+      'MNI-only blend must set registered-patient overlay opacity to zero');
+    assert.equal(controls.registrationBlendLabel.textContent, 'MNI template',
+      'zero blend label must identify the fixed MNI template');
+
+    controls.registrationBlendValue.value = '1';
+    listeners['registrationBlendValue:change']();
+    assert.deepEqual(stageOpacityCalls.at(-1).slice(0, 2), ['registered-t1-mni160', 1],
+      'patient-only blend must set registered-patient overlay opacity to one');
+    assert.equal(controls.registrationBlendLabel.textContent, 'Registered patient',
+      'full blend label must identify the registered patient scan');
+    assert.ok(appliedStages.includes('registered-t1-mni160'),
+      'blend changes must be applied to the active registered-patient stage');
+    assert.ok(glUpdates >= 2,
+      'viewer must redraw after active registration blend changes');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 17d: moving the Patient/MNI blend slider opens MNI QC if
+//      registration artifacts exist but the active viewer is still patient-space ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const controls = {
+    registrationQcMode: {
+      value: 'patient',
+      addEventListener: (eventName, handler) => { listeners[`registrationQcMode:${eventName}`] = handler; }
+    },
+    registrationBlendValue: {
+      value: '0.6',
+      addEventListener: (eventName, handler) => { listeners[`registrationBlendValue:${eventName}`] = handler; }
+    },
+    registrationBlendLabel: { textContent: '' }
+  };
+  const restoreDocument = useMockElements(controls);
+  let mniRenders = 0;
+  app.hasRegistrationDisplacement = true;
+  app.registeredT1MniFile = { name: 'registered.nii' };
+  app.viewerController = {
+    setStageOpacity: () => false
+  };
+  app.renderMniRegistrationQc = async () => { mniRenders += 1; };
+
+  try {
+    app.bindEvents();
+    listeners['registrationBlendValue:input']();
+    await waitForMicrotaskCondition(() => mniRenders === 1,
+      'blend slider must render MNI QC when the blend target is not active');
+    assert.equal(controls.registrationQcMode.value, 'mni',
+      'blend slider must switch the QC selector to MNI space before rendering');
+    assert.equal(app.registrationQcMode, 'mni',
+      'blend slider must update app QC mode to MNI space');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 17e: registration QC render modes use MNI-space artifacts ----
 {
   globalThis.nifti = niftiModule.default || niftiModule;
   const app = makeApp();
@@ -970,11 +1068,13 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'registered T1 QC stage must be cached as a File');
   assert.equal(app.displacementMagnitudeFile.name, 'lnm-registration-displacement-mag.nii',
     'displacement magnitude QC stage must be cached as a File');
+  app.registrationBlendValue = 0.8;
 
   const renderedStacks = [];
   app.viewerController = {
     loadVolumeStack: async (entries) => { renderedStacks.push(entries); },
-    setStageVisible: () => true
+    setStageVisible: () => true,
+    setStageOpacity: () => false
   };
 
   await app.renderMniRegistrationQc();
@@ -983,6 +1083,8 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'registered-t1-mni160',
     'atlas-qc'
   ], 'MNI QC view must show fixed template, registered T1, and full Yeo atlas');
+  assert.equal(renderedStacks.at(-1).find(entry => entry.stage === 'registered-t1-mni160').opacity, 0.8,
+    'MNI QC view must use the Patient/MNI blend slider for registered T1 opacity');
 
   await app.renderCheckerboardRegistrationQc();
   assert.deepEqual(renderedStacks.at(-1).map(entry => entry.stage), [
@@ -995,6 +1097,8 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   await app.renderDisplacementRegistrationQc();
   assert.ok(renderedStacks.at(-1).some(entry => entry.stage === 'registration-displacement' && entry.scalar),
     'displacement QC view must render the displacement magnitude map as a scalar overlay');
+  assert.equal(renderedStacks.at(-1).find(entry => entry.stage === 'registered-t1-mni160').opacity, 0.8,
+    'displacement QC view must retain the same registered T1 blend for patient/template comparison');
 }
 
 // ---- Test 18: patient projection resamples Yeo threshold onto lnm-mni160,
@@ -1307,4 +1411,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + registration QC modes + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

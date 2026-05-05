@@ -123,7 +123,8 @@ export class LesionNetworkMappingApp {
     this.displacementMagnitudeFile = null;
     this.yeoAtlasMni160File = null;
     this.registrationCheckerboardFile = null;
-    this.registrationQcMode = 'patient';
+    this.registrationQcMode = 'mni';
+    this.registrationBlendValue = 0.5;
     this.affectedNetworkResult = null;
     this.functionProfiles = null;
     this._functionalProfileRenderPromise = Promise.resolve();
@@ -279,6 +280,18 @@ export class LesionNetworkMappingApp {
           );
         }
       });
+    }
+    const registrationBlendValue = document.getElementById('registrationBlendValue');
+    if (registrationBlendValue) {
+      this.registrationBlendValue = this.getRegistrationBlendValue();
+      this.updateRegistrationBlendLabel(this.registrationBlendValue);
+      const handleRegistrationBlendInput = () => {
+        this.handleRegistrationBlendInput().catch(
+          err => this.updateOutput(`Registration blend update failed: ${err.message}`)
+        );
+      };
+      registrationBlendValue.addEventListener('input', handleRegistrationBlendInput);
+      registrationBlendValue.addEventListener('change', handleRegistrationBlendInput);
     }
 
     const applyRegBtn = document.getElementById('applyRegistrationToLesionButton');
@@ -1509,10 +1522,54 @@ export class LesionNetworkMappingApp {
     return this.patientAtlasFile;
   }
 
+  getRegistrationBlendValue() {
+    const el = document.getElementById('registrationBlendValue');
+    const raw = el?.value ?? this.registrationBlendValue ?? 0.5;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return 0.5;
+    return Math.max(0, Math.min(1, value));
+  }
+
+  formatRegistrationBlendLabel(value = this.registrationBlendValue) {
+    const numeric = Number(value);
+    const blend = Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0.5;
+    if (blend <= 0) return 'MNI template';
+    if (blend >= 1) return 'Registered patient';
+    return `${Math.round(blend * 100)}% patient`;
+  }
+
+  updateRegistrationBlendLabel(value = this.registrationBlendValue) {
+    const el = document.getElementById('registrationBlendLabel');
+    if (el) el.textContent = this.formatRegistrationBlendLabel(value);
+  }
+
+  applyRegistrationBlend(value = this.getRegistrationBlendValue()) {
+    const numeric = Number(value);
+    const blend = Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0.5;
+    this.registrationBlendValue = blend;
+    this.updateRegistrationBlendLabel(blend);
+    if (!this.viewerController?.setStageOpacity) return false;
+    const applied = this.viewerController.setStageOpacity('registered-t1-mni160', blend, {
+      apply: true,
+      redraw: true
+    });
+    return !!applied;
+  }
+
+  async handleRegistrationBlendInput() {
+    const blend = this.getRegistrationBlendValue();
+    if (this.applyRegistrationBlend(blend)) return;
+    if (!this.hasRegistrationDisplacement || !this.registeredT1MniFile) return;
+    const modeEl = document.getElementById('registrationQcMode');
+    if (modeEl) modeEl.value = 'mni';
+    this.registrationQcMode = 'mni';
+    await this.renderMniRegistrationQc();
+  }
+
   getRegistrationQcMode() {
     const el = document.getElementById('registrationQcMode');
-    const mode = el?.value || this.registrationQcMode || 'patient';
-    return ['patient', 'mni', 'checkerboard', 'displacement'].includes(mode) ? mode : 'patient';
+    const mode = el?.value || this.registrationQcMode || 'mni';
+    return ['patient', 'mni', 'checkerboard', 'displacement'].includes(mode) ? mode : 'mni';
   }
 
   async showRegistrationQc(mode = this.getRegistrationQcMode()) {
@@ -1610,12 +1667,15 @@ export class LesionNetworkMappingApp {
       this.ensureRegistrationTemplateFile(),
       this.ensureYeoAtlasMni160File()
     ]);
+    const blend = this.getRegistrationBlendValue();
+    this.registrationBlendValue = blend;
+    this.updateRegistrationBlendLabel(blend);
     const entries = [
       { file: templateFile, stage: 'registration-template' },
       {
         file: this.registeredT1MniFile,
         colormap: 'gray',
-        opacity: 0.5,
+        opacity: blend,
         scalar: true,
         stage: 'registered-t1-mni160'
       },
@@ -1629,8 +1689,9 @@ export class LesionNetworkMappingApp {
     ];
     await this.viewerController.loadVolumeStack(entries);
     this.applyViewerLayerVisibility();
+    this.applyRegistrationBlend(blend);
     this.refreshViewerLayerControls();
-    this.updateOutput('Registration QC: MNI-space registered T1, fixed template, and full Yeo atlas displayed.');
+    this.updateOutput('Registration QC: MNI-space registered T1, fixed template, and full Yeo atlas displayed. Use the Patient/MNI blend slider for visual QC.');
   }
 
   async renderCheckerboardRegistrationQc() {
@@ -1661,10 +1722,13 @@ export class LesionNetworkMappingApp {
       { file: await this.ensureRegistrationTemplateFile(), stage: 'registration-template' }
     ];
     if (this.registeredT1MniFile) {
+      const blend = this.getRegistrationBlendValue();
+      this.registrationBlendValue = blend;
+      this.updateRegistrationBlendLabel(blend);
       entries.push({
         file: this.registeredT1MniFile,
         colormap: 'gray',
-        opacity: 0.25,
+        opacity: blend,
         scalar: true,
         stage: 'registered-t1-mni160'
       });
@@ -1677,6 +1741,7 @@ export class LesionNetworkMappingApp {
       stage: 'registration-displacement'
     });
     await this.viewerController.loadVolumeStack(entries);
+    this.applyRegistrationBlend(this.registrationBlendValue);
     this.refreshViewerLayerControls();
     this.updateOutput('Registration QC: SynthMorph displacement magnitude displayed on the fixed MNI template.');
   }

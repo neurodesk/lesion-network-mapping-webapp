@@ -88,32 +88,39 @@
           <details id="advancedStageControls" class="compact-disclosure">
             <summary>Advanced controls</summary>
             <div class="disclosure-content">
-              <div class="param-group">
-                <div class="param-label-row">
-                  <label class="param-label" for="lesionFileInput">Researcher mode: lesion mask</label>
-                  <button type="button" class="help-icon" aria-label="Researcher mode help">i
-                    <span class="help-popover" role="tooltip">
-                      Use a pre-computed binary lesion mask already on the 99x117x95 Yeo 2 mm grid to skip segmentation and registration.
-                    </span>
-                  </button>
-                </div>
-                <input type="file" id="lesionFileInput" accept=".nii,.gz">
-              </div>
-              <div class="param-group">
-                <label class="param-label" for="registrationQcMode">Registration QC view</label>
-                <select id="registrationQcMode" class="select-input">
-                  <option value="patient">Patient space</option>
-                  <option value="mni">MNI space</option>
-                  <option value="checkerboard">Checkerboard</option>
-                  <option value="displacement">Displacement</option>
-                </select>
-              </div>
-              <div class="step-buttons advanced-workflow" aria-label="Advanced workflow order">
+              <input type="file" id="lesionFileInput" class="hidden" accept=".nii,.gz" aria-hidden="true" tabindex="-1">
+              <div class="advanced-workflow" aria-label="Advanced workflow order">
                 <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">1 Brain extraction</button>
                 <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">2 Pre-align T1</button>
                 <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton">3 Lesion segmentation</button>
                 <button class="btn btn-secondary btn-sm" id="runRegistrationButton">4 MNI registration (SynthMorph)</button>
+                <div class="param-group workflow-control">
+                  <label class="param-label" for="registrationQcMode">Registration QC view</label>
+                  <select id="registrationQcMode" class="select-input">
+                    <option value="mni" selected>MNI space</option>
+                    <option value="patient">Patient space</option>
+                    <option value="checkerboard">Checkerboard</option>
+                    <option value="displacement">Displacement</option>
+                  </select>
+                </div>
                 <button class="btn btn-secondary btn-sm" id="checkAtlasAlignmentButton" disabled>5 Check atlas alignment</button>
+                <div class="param-group workflow-control">
+                  <div class="param-label-row">
+                    <label class="param-label" for="registrationBlendValue">Patient/MNI blend</label>
+                    <span id="registrationBlendLabel" class="param-value">50% patient</span>
+                  </div>
+                  <input
+                    type="range"
+                    id="registrationBlendValue"
+                    class="param-input"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value="0.5"
+                    title="Slide from fixed MNI template to registered patient T1"
+                    aria-label="Registered patient opacity over fixed MNI template"
+                  >
+                </div>
                 <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">6 Warp lesion → Yeo grid</button>
                 <button class="btn btn-secondary btn-sm" id="computeOverlapButton">7 Compute Yeo overlap</button>
                 <button class="btn btn-secondary btn-sm" id="computeNetworkMapButton">8 Compute network map</button>
