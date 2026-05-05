@@ -245,6 +245,16 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    const checkAtlasAlignmentBtn = document.getElementById('checkAtlasAlignmentButton');
+    if (checkAtlasAlignmentBtn) {
+      checkAtlasAlignmentBtn.disabled = true;
+      checkAtlasAlignmentBtn.addEventListener('click', () => {
+        this.showSubjectSpaceAtlas().catch(
+          err => this.updateOutput(`Atlas alignment QC failed: ${err.message}`)
+        );
+      });
+    }
+
     const applyRegBtn = document.getElementById('applyRegistrationToLesionButton');
     if (applyRegBtn) {
       applyRegBtn.addEventListener('click', () => {
@@ -488,6 +498,8 @@ export class LesionNetworkMappingApp {
     );
     const showBtn = document.getElementById('showSubjectAtlasButton');
     if (showBtn) showBtn.disabled = !canProject;
+    const checkBtn = document.getElementById('checkAtlasAlignmentButton');
+    if (checkBtn) checkBtn.disabled = !canProject;
     const downloadBtn = document.getElementById('downloadSubjectAtlasButton');
     if (downloadBtn) downloadBtn.disabled = !this.patientAtlasFile;
   }
@@ -1367,12 +1379,13 @@ export class LesionNetworkMappingApp {
 
   async showSubjectSpaceAtlas() {
     if (!this.patientAtlasFile) {
-      this.updateOutput('Projecting Yeo atlas to patient T1 space...');
+      this.updateOutput('Projecting Yeo atlas to patient T1 space for visual alignment QC...');
       await this.projectAtlasToPatientSpace();
     }
     this.viewerLayerVisibility.atlasQc = true;
     await this.renderPatientLayerStack();
     this.refreshViewerLayerControls();
+    this.updateOutput('Atlas alignment QC overlay displayed. This is a visual check, not an automated pass/fail score.');
     return this.patientAtlasFile;
   }
 
@@ -1918,6 +1931,7 @@ export class LesionNetworkMappingApp {
       'downloadLesionMaskButton',
       'downloadNetworkMapButton',
       'downloadThresholdedNetworkMapButton',
+      'checkAtlasAlignmentButton',
       'showSubjectAtlasButton',
       'downloadSubjectAtlasButton'
     ];

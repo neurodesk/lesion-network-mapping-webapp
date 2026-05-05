@@ -45,6 +45,7 @@ const requiredIds = [
   '#downloadLesionMaskButton',
   // Phase 3.4 additions: registration button.
   '#runRegistrationButton',
+  '#checkAtlasAlignmentButton',
   // Phase 4.4 additions: Network map subsection.
   '#computeNetworkMapButton',
   '#downloadNetworkMapButton',
@@ -82,12 +83,25 @@ for (const id of requiredIds) {
 
 const prealignButton = html.match(/<button\b[^>]*id=["']prealignToMniButton["'][^>]*>([\s\S]*?)<\/button>/i);
 assert.ok(prealignButton, '#prealignToMniButton must be a button element');
-assert.equal(prealignButton[1].trim(), 'Pre-align T1',
+assert.equal(prealignButton[1].trim(), '2 Pre-align T1',
   '#prealignToMniButton visible label must stay compact');
 assert.doesNotMatch(prealignButton[1], /<sup\b/i,
   '#prealignToMniButton must not embed unit/superscript text that wraps into a broken label');
 assert.match(prealignButton[0], /title=["']Pre-align T1 to the MNI160 1 mm grid["']/,
   '#prealignToMniButton title must retain the MNI160 1 mm detail');
+
+const advancedWorkflow = html.match(/<div\b[^>]*class=["'][^"']*\badvanced-workflow\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+assert.ok(advancedWorkflow, 'advanced controls must expose an ordered workflow container');
+assert.match(
+  advancedWorkflow[1],
+  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion segmentation[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → Yeo grid[\s\S]*7 Compute Yeo overlap[\s\S]*8 Compute network map/,
+  'advanced controls must show the manual stage buttons in execution order'
+);
+assert.match(
+  advancedWorkflow[1],
+  /id=["']runRegistrationButton["'][\s\S]*id=["']checkAtlasAlignmentButton["'][\s\S]*id=["']applyRegistrationToLesionButton["']/,
+  'atlas alignment QC button must sit between registration and lesion warp'
+);
 
 assert.doesNotMatch(html, /id=["']pipelineSelect["']/,
   'Pipeline selector must not be visible; Run analysis is input-driven');

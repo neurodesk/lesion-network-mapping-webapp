@@ -801,6 +801,54 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'patient-space projection must not fall back to the atlas preview');
 }
 
+// ---- Test 17b: advanced atlas-alignment QC button mirrors subject-atlas
+//      enablement and invokes the existing visual QC overlay path ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const makeButton = id => ({
+    disabled: false,
+    addEventListener: (eventName, handler) => { listeners[`${id}:${eventName}`] = handler; }
+  });
+  const controls = {
+    checkAtlasAlignmentButton: makeButton('checkAtlasAlignmentButton'),
+    showSubjectAtlasButton: makeButton('showSubjectAtlasButton'),
+    downloadSubjectAtlasButton: makeButton('downloadSubjectAtlasButton')
+  };
+  const restoreDocument = useMockElements(controls);
+  let qcCalls = 0;
+  app.showSubjectSpaceAtlas = async () => { qcCalls += 1; };
+
+  try {
+    app.bindEvents();
+    assert.equal(controls.checkAtlasAlignmentButton.disabled, true,
+      'advanced atlas QC button starts disabled before registration');
+    assert.equal(controls.showSubjectAtlasButton.disabled, true,
+      'results atlas QC button starts disabled before registration');
+
+    app.structuralFile = { name: 't1.nii' };
+    app.hasRegistrationDisplacement = false;
+    app.refreshSubjectAtlasControls();
+    assert.equal(controls.checkAtlasAlignmentButton.disabled, true,
+      'advanced atlas QC button stays disabled until registration displacement exists');
+    assert.equal(controls.showSubjectAtlasButton.disabled, true,
+      'results atlas QC button stays disabled until registration displacement exists');
+
+    app.hasRegistrationDisplacement = true;
+    app.refreshSubjectAtlasControls();
+    assert.equal(controls.checkAtlasAlignmentButton.disabled, false,
+      'advanced atlas QC button enables after structural T1 + registration');
+    assert.equal(controls.showSubjectAtlasButton.disabled, false,
+      'results atlas QC button enables after structural T1 + registration');
+
+    listeners['checkAtlasAlignmentButton:click']();
+    await waitForMicrotaskCondition(() => qcCalls === 1,
+      'advanced atlas QC button must invoke showSubjectSpaceAtlas');
+  } finally {
+    restoreDocument();
+  }
+}
+
 // ---- Test 18: patient projection resamples Yeo threshold onto lnm-mni160,
 //      not the structural/prealign affine ----
 {
@@ -1111,4 +1159,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: 21 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: 22 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

@@ -99,14 +99,15 @@
                 </div>
                 <input type="file" id="lesionFileInput" accept=".nii,.gz">
               </div>
-              <div class="step-buttons">
-                <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">Brain extraction</button>
-                <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">Pre-align T1</button>
-                <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton">Lesion segmentation</button>
-                <button class="btn btn-secondary btn-sm" id="runRegistrationButton">MNI registration (SynthMorph)</button>
-                <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">Warp lesion → Yeo grid</button>
-                <button class="btn btn-secondary btn-sm" id="computeOverlapButton">Compute Yeo overlap</button>
-                <button class="btn btn-secondary btn-sm" id="computeNetworkMapButton">Compute network map</button>
+              <div class="step-buttons advanced-workflow" aria-label="Advanced workflow order">
+                <button class="btn btn-secondary btn-sm" id="runBrainExtractionButton">1 Brain extraction</button>
+                <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">2 Pre-align T1</button>
+                <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton">3 Lesion segmentation</button>
+                <button class="btn btn-secondary btn-sm" id="runRegistrationButton">4 MNI registration (SynthMorph)</button>
+                <button class="btn btn-secondary btn-sm" id="checkAtlasAlignmentButton" disabled>5 Check atlas alignment</button>
+                <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">6 Warp lesion → Yeo grid</button>
+                <button class="btn btn-secondary btn-sm" id="computeOverlapButton">7 Compute Yeo overlap</button>
+                <button class="btn btn-secondary btn-sm" id="computeNetworkMapButton">8 Compute network map</button>
               </div>
             </div>
           </details>
