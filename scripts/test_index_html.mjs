@@ -30,6 +30,8 @@ const requiredIds = [
   //  section's Advanced disclosure.)
   '#resultsSection',
   '#networkOverlapTable',
+  '#directFunctionProfileResults',
+  '#directFunctionProfileTable',
   '#downloadOverlapCsv',
   '#computeOverlapButton',
   '#outsideAtlasWarning',
@@ -56,6 +58,8 @@ const requiredIds = [
   '#networkThresholdMinCluster',
   '#affectedNetworkResults',
   '#affectedNetworkTable',
+  '#mapFunctionProfileResults',
+  '#mapFunctionProfileTable',
   '#downloadThresholdedNetworkMapButton',
   '#showSubjectAtlasButton',
   '#downloadSubjectAtlasButton',
@@ -132,6 +136,14 @@ assert.match(html, /Connectivity-map effects/,
   'threshold results must clearly label the affected-network table');
 assert.match(html, /surviving the thresholded connectivity map/,
   'affected-network help must explain that the second table comes from the thresholded map');
+assert.match(html, /Functional associations from direct lesion overlap/,
+  'direct lesion functional profile section must clearly identify its source table');
+assert.match(html, /Functional associations from connectivity-map effects/,
+  'connectivity-map functional profile section must clearly identify its source table');
+assert.match(html, /Exploratory literature terms are weighted by the same Yeo networks/,
+  'direct functional profile help must frame terms as exploratory literature associations');
+assert.match(html, /they are not clinical predictions/,
+  'functional profile help must avoid clinical prediction framing');
 assert.match(html, /Show subject atlas/,
   'results actions must expose subject-space atlas QC');
 

@@ -577,6 +577,7 @@ Pipeline-specific dependencies (added incrementally):
 - **Registration**: SynthMorph (Hoffmann 2022, Apache-2.0); UNet-only ONNX cut (layers 0–33); JS-side SVF integration + warp.
 - **Atlas**: Schaefer 2018 400 × 7 networks (CC-BY).
 - **Connectome**: ADHD-200 group functional connectivity (computed by `scripts/build_yeo7_connectome.py`, N=30 subjects, Yeo7 ROI seed-to-voxel t-maps); Lead-DBS GSP1000 + Schaefer 400 are a future hardening upgrade.
+- **Functional profiles**: Exploratory Yeo7 term associations from a compact Neurosynth v7 / NiMARE profile asset, rebuilt offline with `scripts/build_yeo7_function_profiles.py` and weighted in-browser by direct lesion overlap or thresholded connectivity-map effects.
 
 ## Local development
 
@@ -584,10 +585,8 @@ Pipeline-specific dependencies (added incrementally):
 npm install
 bash web/setup.sh   # downloads ONNX Runtime WASM
 bash web/run.sh     # serves http://localhost:8080/
-npm test            # 12 Node-only suites: lint, tasks, manifest, parcel-overlap,
-                    #                      overlap-export, volume-utils,
-                    #                      brain-extraction, registration,
-                    #                      fc-weighted-sum, worker, app, html
+npm test            # full Node-only suite: lint, manifest, overlap,
+                    # function profiles, inference helpers, worker, app, html
 ```
 
 ### Browser smoke tests

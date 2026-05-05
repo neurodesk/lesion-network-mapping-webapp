@@ -28,6 +28,7 @@ Common issues it catches:
 - `web/js/app/lnm-labels.js` — Yeo 7-network label table and NiiVue colormap
 - `web/js/modules/overlap-export.js` — Pure JS CSV serialization for LNM overlap summaries
 - `web/js/modules/overlap-render.js` — DOM rendering for the LNM network-overlap and affected-network results tables
+- `web/js/modules/function-profiles.js` — Browser-side loader, weighted term ranking, and DOM rendering for exploratory Neurosynth/NiMARE functional association profiles
 - `web/js/app/sct-tasks.js` — SCT stable task inventory and task status helpers
 - `web/js/app/labels.js` — Task labels + NiiVue colormap
 - `web/js/modules/parcel-overlap.js` — Pure JS parcel and network overlap reducers
@@ -61,6 +62,7 @@ Common issues it catches:
 - Do not expose a visible pipeline selector. `Run analysis` is input-driven: structural T1 selects the full auto chain, and researcher-mode Yeo-grid masks select the hidden manual network-map path; advanced users can still run individual stages with the compact per-stage buttons.
 - Keep sidebar help copy behind compact inline `i` help popovers (`.help-icon` / `.help-popover`) rather than always-visible helper paragraphs, matching the QSMbly-style controls.
 - Results copy must preserve the distinction between `Direct lesion overlap` (Yeo networks containing lesion voxels directly; `% of lesion`) and `Connectivity-map effects` (Yeo networks containing voxels that survive thresholding of the group-FC weighted connectivity map; `% of map`).
+- Functional profile copy must stay exploratory: Yeo7 term profiles come from the compact `yeo7-neurosynth-v7-function-profiles` annotation asset, are combined with either direct lesion-overlap weights or thresholded connectivity-map weights, and must be described as Neurosynth/NiMARE literature associations rather than clinical predictions.
 - Keep advanced per-stage button labels compact. Technical grid details such as MNI160 1 mm belong in `title`/help text, not inline superscript/unit strings that wrap inside small buttons.
 - Threshold UI: when the mode flips between absolute / percentile, the slider's `min/max/step/value` are retuned (0..1 / 0..10 with 0.1% steps). Percentile mode is user-facing top-percent semantics (`5` keeps roughly the strongest 5%, `0` keeps none) and `applyNetworkThreshold()` converts that to the quantile cutoff expected by `applyThresholdDetailed`. The slider and min-cluster field re-fire thresholding on every input change; the summary reports how many voxels cluster cleanup removed, so "cluster size" changes that do not affect a large connected component are visible instead of silent. The thresholded mask, final affected Yeo-network table, summary, and live red `threshold-preview` overlay stay in sync while the scalar FC map remains visible.
 - Viewer layer toggles are stage-driven and must hide volumes by setting opacity to `0`, not by removing NiiVue volumes. `ViewerController` preserves per-stage visibility for `structural`, `brainmask`, `segmentation`/`lesion`, `threshold-preview`, and `atlas-qc` so toggles survive overlay replacement and threshold-slider refreshes.
@@ -77,6 +79,7 @@ Common issues it catches:
 | `npm run test:synthmorph-browser-model` | Browser-runtime SynthMorph contract: manifest must point at the 48×48×64 graph, declare 24×24×32 SVF dims, and keep the first Conv3D activation under 256 MiB |
 | `npm run test:parcel-overlap` | Pure-JS parcel-overlap reducer: voxel counting, network aggregation, network-size denominators, edge cases |
 | `npm run test:overlap-export` | CSV schema, ordering, numeric formatting, missing-network-size edge cases |
+| `npm run test:function-profiles` | Functional association profile ranking/rendering: weighted Yeo network terms, duplicate-term merge, filtering, source label, empty state |
 | `npm run test:volume-utils` | 3D resample / connectedComponents3D / removeSmallComponents reused across pipeline stages |
 | `npm run test:brain-extraction` | SynthStrip orchestration helpers (header round-trip, RAS reorientation, conform/center-pad) plus adaptive fast-mode target spacing regression |
 | `npm run test:registration` | SVF integration (scaling-and-squaring), displacement-field upsample, warpVolume + inverseWarpVolume — synthetic-warp roundtrip |

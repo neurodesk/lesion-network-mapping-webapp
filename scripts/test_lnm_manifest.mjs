@@ -4,7 +4,7 @@
 //
 // The LNM manifest extends the SCT shape with:
 //  - top-level 'pipelines' (renamed from 'tasks')
-//  - 'atlasAssets' and 'connectomeAssets' alongside 'modelAssets'
+//  - 'atlasAssets', 'connectomeAssets', and 'annotationAssets' alongside 'modelAssets'
 //  - every stage in every pipeline references an asset that exists in one of
 //    the asset registries (no silent fallbacks).
 
@@ -24,13 +24,13 @@ assert.ok(!('tasks' in manifest),
   "manifest must not retain SCT 'tasks' key after LNM migration");
 
 // Asset registries must exist (may be empty but must be arrays).
-for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets']) {
+for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets', 'annotationAssets']) {
   assert.ok(Array.isArray(manifest[key]),
     `manifest.${key} must be an array (may be empty)`);
 }
 
 // Every asset entry must have id + filename + sizeBytes + checksum + cacheKey.
-for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets']) {
+for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets', 'annotationAssets']) {
   for (const asset of manifest[key]) {
     for (const field of ['id', 'filename', 'sizeBytes', 'checksum', 'cacheKey']) {
       assert.ok(asset[field] !== undefined,
@@ -44,10 +44,11 @@ for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets']) {
 const allIds = [
   ...manifest.modelAssets.map(a => a.id),
   ...manifest.atlasAssets.map(a => a.id),
-  ...manifest.connectomeAssets.map(a => a.id)
+  ...manifest.connectomeAssets.map(a => a.id),
+  ...manifest.annotationAssets.map(a => a.id)
 ];
 assert.equal(new Set(allIds).size, allIds.length,
-  'asset IDs must be globally unique across modelAssets/atlasAssets/connectomeAssets');
+  'asset IDs must be globally unique across modelAssets/atlasAssets/connectomeAssets/annotationAssets');
 
 // Phase 2a.1: SynthStrip brain-extraction model must be registered as a
 // supported modelAsset so the worker can fetch it. Pin the asset id literal
@@ -140,6 +141,23 @@ for (const expected of ['Visual', 'Default']) {
   assert.ok(yeoLabelValues.has(expected),
     `Yeo7 networkLabels must include '${expected}'`);
 }
+
+// Phase 40: Yeo7 functional profiles for exploratory Neurosynth/NiMARE terms.
+const yeoProfiles = manifest.annotationAssets.find(a => a.id === 'yeo7-neurosynth-v7-function-profiles');
+assert.ok(yeoProfiles,
+  "Phase 40 manifest must register 'yeo7-neurosynth-v7-function-profiles' under annotationAssets");
+assert.equal(yeoProfiles.supportStatus, 'supported',
+  'Yeo7 function profiles must be supported once the compact JSON is committed');
+assert.match(yeoProfiles.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'Yeo7 function profiles must declare a real sha256 checksum');
+assert.ok(typeof yeoProfiles.sizeBytes === 'number' && yeoProfiles.sizeBytes > 0,
+  'Yeo7 function profiles must declare a non-zero sizeBytes');
+assert.match(yeoProfiles.sourceUrl, /yeo7_function_profiles\.json$/,
+  'Yeo7 function profiles sourceUrl must point at the JSON payload');
+assert.equal(yeoProfiles.atlasAssetId, 'yeo7-2mm',
+  'Yeo7 function profiles must declare the atlas they decode');
+assert.match(yeoProfiles.method, /NiMARE ROIAssociationDecoder/,
+  'Yeo7 function profiles must declare the NiMARE decoder method');
 
 // Pipelines must reference atlas/model/connectome assets that exist.
 const knownIds = new Set(allIds);

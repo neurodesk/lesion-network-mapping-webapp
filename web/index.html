@@ -141,6 +141,26 @@
             </thead>
             <tbody></tbody>
           </table>
+          <div id="directFunctionProfileResults" class="function-profile-results hidden">
+            <div class="panel-title-row">
+              <h3>Functional associations from direct lesion overlap</h3>
+              <button type="button" class="help-icon" aria-label="Direct functional associations help">i
+                <span class="help-popover" role="tooltip">
+                  Exploratory literature terms are weighted by the same Yeo networks that contain lesion voxels directly; they are not clinical predictions.
+                </span>
+              </button>
+            </div>
+            <table id="directFunctionProfileTable" class="results-table function-profile-table">
+              <thead>
+                <tr>
+                  <th>Term</th>
+                  <th>Score</th>
+                  <th>Network drivers</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
 
           <div class="threshold-controls" id="thresholdControls">
             <div class="panel-title-row">
@@ -192,6 +212,26 @@
                 </thead>
                 <tbody></tbody>
               </table>
+              <div id="mapFunctionProfileResults" class="function-profile-results hidden">
+                <div class="panel-title-row">
+                  <h3>Functional associations from connectivity-map effects</h3>
+                  <button type="button" class="help-icon" aria-label="Connectivity-map functional associations help">i
+                    <span class="help-popover" role="tooltip">
+                      Exploratory literature terms are weighted by Yeo networks containing voxels that survive the thresholded connectivity map; they are not clinical predictions.
+                    </span>
+                  </button>
+                </div>
+                <table id="mapFunctionProfileTable" class="results-table function-profile-table">
+                  <thead>
+                    <tr>
+                      <th>Term</th>
+                      <th>Score</th>
+                      <th>Network drivers</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
           </div>
 

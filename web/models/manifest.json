@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "_comment": "Lesion Network Mapping webapp asset registry. Asset IDs are globally unique across modelAssets/atlasAssets/connectomeAssets so stages can reference them unambiguously. checksum/sizeBytes are placeholders until the assets are uploaded to the Hugging Face dataset repo.",
+  "_comment": "Lesion Network Mapping webapp asset registry. Asset IDs are globally unique across modelAssets/atlasAssets/connectomeAssets/annotationAssets so stages and result interpreters can reference them unambiguously. checksum/sizeBytes are placeholders until the assets are uploaded to the Hugging Face dataset repo.",
   "pipelines": [
     {
       "id": "lnm-yeo-only",
@@ -200,6 +200,21 @@
       "statistic": "fisher-z",
       "supportStatus": "unsupported",
       "_comment": "Phase 4 connectome. 400 per-parcel group-FC maps at 4mm fp16, packed as one binary blob with byte-offset index."
+    }
+  ],
+  "annotationAssets": [
+    {
+      "id": "yeo7-neurosynth-v7-function-profiles",
+      "filename": "annotations/yeo7_function_profiles.json",
+      "sizeBytes": 3960,
+      "checksum": "sha256:14a248db877c5b96121676440394fb2f638f394efbdaf04352d222589dada619",
+      "cacheKey": "yeo7-neurosynth-v7-function-profiles-v1",
+      "sourceUrl": "./models/annotations/yeo7_function_profiles.json",
+      "sourceVersion": "Neurosynth-v7-abstract-terms-tfidf",
+      "atlasAssetId": "yeo7-2mm",
+      "method": "NiMARE ROIAssociationDecoder",
+      "supportStatus": "supported",
+      "_comment": "Phase 40 exploratory functional association profiles. Compact browser JSON keyed by Yeo7 network name; generated/rebuilt offline with scripts/build_yeo7_function_profiles.py from Neurosynth v7 term annotations through NiMARE, then combined at runtime with direct lesion-overlap and thresholded connectivity-map network weights. Intended for exploratory interpretation only, not clinical prediction."
     }
   ]
 }

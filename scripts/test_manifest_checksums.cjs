@@ -33,6 +33,7 @@ function candidatePaths(asset) {
   const paths = [];
   const base = path.basename(asset.filename || asset.id || '');
   if (base) paths.push(path.join(DEV_CACHE, base));
+  if (asset.filename) paths.push(path.join(ROOT, 'web/models', asset.filename));
   // Fixture overrides for committed copies.
   if (asset.id === 'yeo7-2mm') paths.push(path.join(FIXTURES, 'yeo7-mini/atlas.nii.gz'));
   return paths;
@@ -47,7 +48,7 @@ let verified = 0;
 let skipped = 0;
 let failures = 0;
 
-for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets']) {
+for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets', 'annotationAssets']) {
   for (const asset of MANIFEST[key] || []) {
     const checksum = asset.checksum;
     if (!checksum || !checksum.startsWith('sha256:')) continue;

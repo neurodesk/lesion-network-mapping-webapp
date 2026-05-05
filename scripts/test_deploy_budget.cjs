@@ -66,7 +66,7 @@ for (const [name, size] of topLevel) {
 const manifest = JSON.parse(fs.readFileSync(path.join(WEB, 'models/manifest.json'), 'utf8'));
 let runtimeTotal = 0;
 const runtimeBreakdown = [];
-for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets']) {
+for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets', 'annotationAssets']) {
   for (const asset of manifest[key] || []) {
     if (asset.supportStatus !== 'supported') continue;
     if (typeof asset.sizeBytes !== 'number') continue;

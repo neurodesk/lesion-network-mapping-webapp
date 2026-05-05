@@ -58,7 +58,9 @@ for (const method of [
   // Phase 21 additions: clear-results control.
   'clearResults',
   // Phase 31: auto-promote the pipeline selection on file drop.
-  '_autoPromotePipeline'
+  '_autoPromotePipeline',
+  // Phase 40 additions: exploratory functional profile result panels.
+  'ensureFunctionProfiles', 'updateDirectFunctionProfile', 'updateAffectedFunctionProfile'
 ]) {
   const re = new RegExp(`\\b${method}\\s*\\(`);
   assert.match(src, re, `LesionNetworkMappingApp must define method ${method}`);
@@ -314,10 +316,24 @@ assert.match(src, /from\s+['"]\.\/modules\/overlap-export\.js['"]/,
   'lnm-app.js must import from ./modules/overlap-export.js');
 assert.match(src, /from\s+['"]\.\/modules\/overlap-render\.js['"]/,
   'lnm-app.js must import from ./modules/overlap-render.js');
+assert.match(src, /from\s+['"]\.\/modules\/function-profiles\.js['"]/,
+  'lnm-app.js must import from ./modules/function-profiles.js');
 assert.match(src, /renderOverlapTable\s*\(/,
   'runYeoOverlap must call renderOverlapTable(...)');
 assert.match(src, /serializeOverlapCsv\s*\(/,
   'exportCsv must call serializeOverlapCsv(...)');
+assert.match(src, /loadFunctionProfilesFromManifest\s*\(/,
+  'lnm-app.js must load the compact functional profile asset');
+assert.match(src, /rankFunctionalTerms\s*\(/,
+  'lnm-app.js must rank terms from network-weighted summaries');
+assert.match(src, /renderFunctionalProfileTable\s*\(/,
+  'lnm-app.js must render functional profile result tables');
+assert.match(src, /['"]yeo7-neurosynth-v7-function-profiles['"]/,
+  'lnm-app.js must reference the Yeo7 Neurosynth/NiMARE profile asset id literal');
+assert.match(src, /directFunctionProfileTable/,
+  'direct lesion overlap must render a functional profile table');
+assert.match(src, /mapFunctionProfileTable/,
+  'thresholded connectivity-map effects must render a functional profile table');
 
 // exportCsv must trigger a real download — Blob + createObjectURL + a .csv
 // filename. Source-grep is brittle but matches the SCT-style guardrails:

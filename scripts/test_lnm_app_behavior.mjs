@@ -498,6 +498,8 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const summaryEl = { textContent: '' };
   const affectedResultsEl = { classList: makeClassList(['hidden']) };
   const affectedTableEl = { innerHTML: '', appendChild: () => {} };
+  const mapFunctionResultsEl = { classList: makeClassList(['hidden']) };
+  const mapFunctionTableEl = { innerHTML: '', appendChild: () => {} };
   const elements = {
     networkThresholdValue: { value: '1' },
     networkThresholdMode: { value: 'absolute' },
@@ -506,6 +508,8 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     networkThresholdSummary: summaryEl,
     affectedNetworkResults: affectedResultsEl,
     affectedNetworkTable: affectedTableEl,
+    mapFunctionProfileResults: mapFunctionResultsEl,
+    mapFunctionProfileTable: mapFunctionTableEl,
     downloadThresholdedNetworkMapButton: { disabled: true }
   };
   const restoreDocument = useMockElements(elements);
@@ -550,9 +554,17 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       }
     }
   };
+  app.functionProfiles = {
+    sourceLabel: 'Neurosynth v7 via NiMARE',
+    networkProfiles: {
+      Somatomotor: [{ term: 'motor', score: 0.9 }],
+      Default: [{ term: 'memory', score: 0.8 }]
+    }
+  };
 
   try {
     const mask = app.applyNetworkThreshold();
+    await app._functionalProfileRenderPromise;
     assert.equal(mask.reduce((sum, value) => sum + value, 0), 3,
       'absolute threshold should keep the three high-valued voxels');
     assert.ok(app.affectedNetworkResult,
@@ -570,6 +582,12 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       'affected-network table must render secondary Yeo network names');
     assert.ok(renderedText.includes('% of map'),
       'affected-network table must use map-specific percent copy');
+    assert.equal(mapFunctionResultsEl.classList.contains('hidden'), false,
+      'connectivity-map functional profile table must become visible after thresholding');
+    assert.ok(renderedText.includes('motor'),
+      'connectivity-map functional profile must rank terms from affected Yeo networks');
+    assert.ok(renderedText.includes('Neurosynth v7 via NiMARE'),
+      'connectivity-map functional profile must show its source label');
   } finally {
     globalThis.document.createElement = originalCreateElement;
     restoreDocument();
@@ -711,6 +729,63 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     assert.deepEqual(classOps.at(-1), ['add', 'hidden'],
       'coverage note should hide when there are no unlabeled voxels');
   } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 16: direct lesion overlap renders exploratory functional terms ----
+{
+  const app = makeApp();
+  const directResultsEl = { classList: makeClassList(['hidden']) };
+  const directTableEl = { innerHTML: '', appendChild: () => {} };
+  const restoreDocument = useMockElements({
+    directFunctionProfileResults: directResultsEl,
+    directFunctionProfileTable: directTableEl
+  });
+  const originalCreateElement = globalThis.document.createElement;
+  const renderedText = [];
+  globalThis.document.createElement = (tagName) => {
+    let text = '';
+    return {
+      tagName,
+      children: [],
+      style: {},
+      classList: makeClassList(),
+      appendChild(child) { this.children.push(child); },
+      setAttribute: () => {},
+      set textContent(value) {
+        text = value;
+        renderedText.push(value);
+      },
+      get textContent() { return text; }
+    };
+  };
+  app.overlapResult = {
+    summary: {
+      networks: [
+        { network: 'Visual', fractionOfLesion: 0.6 },
+        { network: 'Default', fractionOfLesion: 0.4 }
+      ]
+    }
+  };
+  app.functionProfiles = {
+    sourceLabel: 'Neurosynth v7 via NiMARE',
+    networkProfiles: {
+      Visual: [{ term: 'visual', score: 0.8 }],
+      Default: [{ term: 'memory', score: 0.7 }]
+    }
+  };
+
+  try {
+    const ranked = await app.updateDirectFunctionProfile();
+    assert.equal(directResultsEl.classList.contains('hidden'), false,
+      'direct functional profile table must become visible after overlap');
+    assert.equal(ranked[0].term, 'visual',
+      'direct functional profile must weight terms by direct lesion-overlap fractions');
+    assert.ok(renderedText.includes('Neurosynth v7 via NiMARE'),
+      'direct functional profile must show its source label');
+  } finally {
+    globalThis.document.createElement = originalCreateElement;
     restoreDocument();
   }
 }
@@ -1159,4 +1234,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: 22 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

@@ -12,6 +12,11 @@ import { centroidOfMask, applyAffineToVoxel, computePrealignAffine, principalAxi
 import { writeNifti1 } from './modules/nifti-writer.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
+import {
+  loadFunctionProfilesFromManifest,
+  rankFunctionalTerms,
+  renderFunctionalProfileTable
+} from './modules/function-profiles.js';
 import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
 import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
@@ -114,6 +119,8 @@ export class LesionNetworkMappingApp {
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
     this.affectedNetworkResult = null;
+    this.functionProfiles = null;
+    this._functionalProfileRenderPromise = Promise.resolve();
     this._thresholdPreviewTimer = null;
     this._thresholdPreviewRenderPromise = Promise.resolve();
     this._thresholdPreviewVersion = 0;
@@ -644,6 +651,81 @@ export class LesionNetworkMappingApp {
       `${parcelResult.totalLesionVoxels} lesion voxels assigned to Yeo cortical ` +
       `network labels; ${parcelResult.voxelsOutsideAtlas} unlabeled).`
     );
+    await this.updateDirectFunctionProfile();
+  }
+
+  async ensureFunctionProfiles() {
+    if (this.functionProfiles) return this.functionProfiles;
+    const manifest = await this.ensureManifest();
+    const { profiles } = await loadFunctionProfilesFromManifest(
+      'yeo7-neurosynth-v7-function-profiles',
+      { manifest }
+    );
+    this.functionProfiles = profiles;
+    return profiles;
+  }
+
+  clearFunctionProfileTable(resultId, tableId) {
+    const resultEl = document.getElementById(resultId);
+    if (resultEl) resultEl.classList.add('hidden');
+    const tableEl = document.getElementById(tableId);
+    if (tableEl) tableEl.innerHTML = '';
+  }
+
+  async renderFunctionProfileForSummary(summary, {
+    resultId,
+    tableId,
+    emptyLabel = 'No functional associations'
+  }) {
+    const resultEl = document.getElementById(resultId);
+    const tableEl = document.getElementById(tableId);
+    if (!resultEl || !tableEl) return null;
+    if (!summary || !Array.isArray(summary.networks) || summary.networks.length === 0) {
+      this.clearFunctionProfileTable(resultId, tableId);
+      return null;
+    }
+
+    const profiles = await this.ensureFunctionProfiles();
+    const ranked = rankFunctionalTerms(summary, profiles, {
+      topN: 8,
+      minScore: 0.01
+    });
+    renderFunctionalProfileTable(tableEl, ranked, {
+      sourceLabel: profiles.sourceLabel || 'Neurosynth v7 via NiMARE',
+      emptyLabel
+    });
+    resultEl.classList.remove('hidden');
+    return ranked;
+  }
+
+  updateDirectFunctionProfile() {
+    this._functionalProfileRenderPromise = this._functionalProfileRenderPromise
+      .then(() => this.renderFunctionProfileForSummary(this.overlapResult?.summary, {
+        resultId: 'directFunctionProfileResults',
+        tableId: 'directFunctionProfileTable',
+        emptyLabel: 'No direct-overlap functional associations'
+      }))
+      .catch(err => {
+        this.clearFunctionProfileTable('directFunctionProfileResults', 'directFunctionProfileTable');
+        this.updateOutput(`Functional profiles unavailable: ${err.message}`);
+        return null;
+      });
+    return this._functionalProfileRenderPromise;
+  }
+
+  updateAffectedFunctionProfile() {
+    this._functionalProfileRenderPromise = this._functionalProfileRenderPromise
+      .then(() => this.renderFunctionProfileForSummary(this.affectedNetworkResult?.summary, {
+        resultId: 'mapFunctionProfileResults',
+        tableId: 'mapFunctionProfileTable',
+        emptyLabel: 'No connectivity-map functional associations'
+      }))
+      .catch(err => {
+        this.clearFunctionProfileTable('mapFunctionProfileResults', 'mapFunctionProfileTable');
+        this.updateOutput(`Functional profiles unavailable: ${err.message}`);
+        return null;
+      });
+    return this._functionalProfileRenderPromise;
   }
 
   // ---- Phase 2a.1.4b: brain extraction wiring ----
@@ -1195,6 +1277,7 @@ export class LesionNetworkMappingApp {
       });
     }
     if (resultEl) resultEl.classList.remove('hidden');
+    this.updateAffectedFunctionProfile();
     return this.affectedNetworkResult;
   }
 
@@ -1204,6 +1287,7 @@ export class LesionNetworkMappingApp {
     if (resultEl) resultEl.classList.add('hidden');
     const tableEl = document.getElementById('affectedNetworkTable');
     if (tableEl) tableEl.innerHTML = '';
+    this.clearFunctionProfileTable('mapFunctionProfileResults', 'mapFunctionProfileTable');
   }
 
   cancelThresholdPreviewOverlay({ removeOverlay = false } = {}) {
@@ -1942,6 +2026,7 @@ export class LesionNetworkMappingApp {
     // Wipe the overlap table body if present.
     const tbody = document.querySelector('#networkOverlapTable tbody');
     if (tbody) tbody.innerHTML = '';
+    this.clearFunctionProfileTable('directFunctionProfileResults', 'directFunctionProfileTable');
     // Reset the threshold summary.
     const summaryEl = document.getElementById('networkThresholdSummary');
     if (summaryEl) summaryEl.textContent = 'Compute a network map first to enable thresholding.';
