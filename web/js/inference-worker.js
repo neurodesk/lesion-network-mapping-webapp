@@ -1048,6 +1048,98 @@ function stepLoad(inputData) {
   postStepComplete('load');
 }
 
+function binaryMaskFromBuffer(maskBuffer, maskDims, expectedDims, label) {
+  if (!maskBuffer) return null;
+  if (!Array.isArray(maskDims) || maskDims.length !== 3) {
+    throw new Error(`${label} dims must be [X,Y,Z]`);
+  }
+  const dims = maskDims.map(v => Number(v));
+  if (dims.some(v => !Number.isInteger(v) || v <= 0)) {
+    throw new Error(`${label} dims are invalid: ${maskDims}`);
+  }
+  if (!dims.every((v, i) => v === expectedDims[i])) {
+    throw new Error(
+      `${label} dims ${dims.join('x')} must match registration grid ${expectedDims.join('x')}`
+    );
+  }
+  const src = new Uint8Array(maskBuffer);
+  const expectedLength = expectedDims[0] * expectedDims[1] * expectedDims[2];
+  if (src.length !== expectedLength) {
+    throw new Error(`${label} length ${src.length} != ${expectedLength}`);
+  }
+  const out = new Uint8Array(expectedLength);
+  let count = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] > 0) {
+      out[i] = 1;
+      count++;
+    }
+  }
+  if (count === 0) throw new Error(`${label} is empty`);
+  return { mask: out, count };
+}
+
+function foregroundMaskFromScalar(data, fractionOfMax = 0.05) {
+  let max = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = Number(data[i]);
+    if (v > max) max = v;
+  }
+  const threshold = (Number.isFinite(max) ? max : 0) * fractionOfMax;
+  const mask = new Uint8Array(data.length);
+  let count = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (Number(data[i]) > threshold) {
+      mask[i] = 1;
+      count++;
+    }
+  }
+  if (count === 0) throw new Error('registration foreground mask is empty');
+  return { mask, count };
+}
+
+function robustNormalizeMasked(data, mask = null, options = {}) {
+  const {
+    lowerQuantile = 0.01,
+    upperQuantile = 0.99,
+    zeroOutside = false,
+    maxSamples = 200000
+  } = options;
+  let selected = 0;
+  if (mask) {
+    for (let i = 0; i < mask.length; i++) if (mask[i]) selected++;
+  } else {
+    selected = data.length;
+  }
+  if (selected === 0) throw new Error('robustNormalizeMasked: empty normalization mask');
+  const sampleStep = Math.max(1, Math.floor(selected / maxSamples));
+  const samples = [];
+  let seen = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (mask && !mask[i]) continue;
+    if ((seen % sampleStep) === 0) samples.push(Number(data[i]) || 0);
+    seen++;
+  }
+  samples.sort((a, b) => a - b);
+  const valueAt = (q) => {
+    const idx = Math.max(0, Math.min(samples.length - 1, Math.floor(q * (samples.length - 1))));
+    return samples[idx];
+  };
+  const lo = valueAt(lowerQuantile);
+  const hi = valueAt(upperQuantile);
+  const range = (hi - lo) || 1;
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    if (zeroOutside && mask && !mask[i]) {
+      out[i] = 0;
+      continue;
+    }
+    const v = (Number(data[i]) - lo) / range;
+    out[i] = v < 0 ? 0 : (v > 1 ? 1 : v);
+  }
+  return { data: out, lo, hi, selected, sampleCount: samples.length };
+}
+
 async function restoreWorkerState(data) {
   resetState();
   loadStateFromInput(data.inputData, { emitUpdates: false });
@@ -1324,24 +1416,14 @@ async function stepRegister(params = {}) {
     modelInputDims = [160, 160, 192],
     svfDims = null,
     executionProviders = ['wasm'],
+    brainMaskBuffer = null,
+    brainMaskDims = null,
     nbSteps = 7
   } = params;
   if (!modelBaseUrl) throw new Error('run-register requires modelBaseUrl');
   if (!referenceUrl) throw new Error('run-register requires referenceUrl');
 
-  // Min-max normalise the source so its intensity range matches the
-  // lnm-mni160 reference (which was built min-max [0, 1]).
-  postProgress(0.05, 'Normalising source T1...');
-  let srcMin = Infinity, srcMax = -Infinity;
   const src = workerState.rasData;
-  for (let i = 0; i < src.length; i++) {
-    const v = src[i];
-    if (v < srcMin) srcMin = v;
-    if (v > srcMax) srcMax = v;
-  }
-  const range = (srcMax - srcMin) || 1;
-  const sourceNormalized = new Float32Array(src.length);
-  for (let i = 0; i < src.length; i++) sourceNormalized[i] = (src[i] - srcMin) / range;
 
   // Fetch + decode the MNI reference target (cached).
   postProgress(0.10, 'Fetching MNI reference...');
@@ -1364,9 +1446,44 @@ async function stepRegister(params = {}) {
   ];
   const refImage = nifti.readImage(refHeader, refBuf);
   // Reference was saved as float32 by the build pipeline.
-  const targetData = new Float32Array(refImage);
+  let targetData = new Float32Array(refImage);
   if (targetData.length !== 160 * 160 * 192) {
     throw new Error(`MNI reference has ${targetData.length} voxels; expected ${160 * 160 * 192}`);
+  }
+
+  postProgress(0.15, 'Normalising registration inputs...');
+  let sourceNormalized;
+  const sourceMask = binaryMaskFromBuffer(
+    brainMaskBuffer,
+    brainMaskDims,
+    expected,
+    'registration brain mask'
+  );
+  if (sourceMask) {
+    const targetMask = foregroundMaskFromScalar(targetData, 0.05);
+    const sourceNorm = robustNormalizeMasked(src, sourceMask.mask, { zeroOutside: true });
+    const targetNorm = robustNormalizeMasked(targetData, targetMask.mask, { zeroOutside: true });
+    sourceNormalized = sourceNorm.data;
+    targetData = targetNorm.data;
+    postLog(
+      `SynthMorph masked normalization: source=${sourceMask.count.toLocaleString()} voxels ` +
+      `(p01=${sourceNorm.lo.toFixed(3)}, p99=${sourceNorm.hi.toFixed(3)}), ` +
+      `target=${targetMask.count.toLocaleString()} voxels ` +
+      `(p01=${targetNorm.lo.toFixed(3)}, p99=${targetNorm.hi.toFixed(3)})`
+    );
+  } else {
+    // Keep the no-mask path bit-compatible with existing self-pair smoke
+    // coverage: source is min-max scaled and the MNI reference is already
+    // stored in the expected [0, 1] range.
+    let srcMin = Infinity, srcMax = -Infinity;
+    for (let i = 0; i < src.length; i++) {
+      const v = src[i];
+      if (v < srcMin) srcMin = v;
+      if (v > srcMax) srcMax = v;
+    }
+    const range = (srcMax - srcMin) || 1;
+    sourceNormalized = new Float32Array(src.length);
+    for (let i = 0; i < src.length; i++) sourceNormalized[i] = (src[i] - srcMin) / range;
   }
 
   // Fetch the SynthMorph SVF ONNX.

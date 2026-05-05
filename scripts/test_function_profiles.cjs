@@ -101,6 +101,10 @@ function makeElement(tagName) {
     const body = table.children.find(child => child.tagName === 'tbody');
     assert.ok(body, 'renderer must append a tbody');
     assert.equal(body.children.length, 3, 'renderer must append one row per ranked term');
+    assert.equal(body.children[0].children[2].textContent, 'Visual',
+      'single-network driver labels must not duplicate the numeric score');
+    assert.equal(body.children[1].children[2].textContent, 'Default; Visual',
+      'multi-network driver labels must list contributing networks without score repetition');
 
     const emptyTable = makeElement('table');
     renderFunctionalProfileTable(emptyTable, [], { emptyLabel: 'No terms' });

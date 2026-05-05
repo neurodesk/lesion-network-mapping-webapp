@@ -256,6 +256,21 @@ assert.match(
   /displacementMagnitudeField/,
   'stepRegister must compute displacement magnitude through the registration helper'
 );
+assert.match(
+  worker,
+  /brainMaskBuffer/,
+  'stepRegister must accept a prealigned brain mask for masked SynthMorph normalization'
+);
+assert.match(
+  worker,
+  /robustNormalizeMasked/,
+  'stepRegister must robustly normalize registration inputs inside foreground masks'
+);
+assert.match(
+  worker,
+  /foregroundMaskFromScalar\(targetData,\s*0\.05\)/,
+  'stepRegister must derive the MNI-template foreground mask before masked normalization'
+);
 
 // ---- (9) Patient-space threshold projection ----
 assert.match(

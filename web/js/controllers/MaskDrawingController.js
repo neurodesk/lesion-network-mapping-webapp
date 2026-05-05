@@ -174,6 +174,11 @@ export class MaskDrawingController {
     this.nv?.setDrawOpacity?.(Number.isFinite(opacity) ? opacity : this.defaultOpacity);
   }
 
+  setVisible(visible) {
+    this.nv?.setDrawOpacity?.(visible ? this.defaultOpacity : 0);
+    this.nv?.drawScene?.();
+  }
+
   smoothDrawing() {
     const bmp = this.nv?.drawBitmap;
     const dims = this.nv?.back?.dims || this.nv?.volumes?.[0]?.dims;
@@ -232,7 +237,16 @@ export class MaskDrawingController {
     return saved;
   }
 
-  close() {
+  close(options = {}) {
     this.nv?.setDrawingEnabled?.(false);
+    if (options.clearDrawing) {
+      if (typeof this.nv?.closeDrawing === 'function') {
+        this.nv.closeDrawing();
+      } else if (this.nv && Object.prototype.hasOwnProperty.call(this.nv, 'drawBitmap')) {
+        this.nv.drawBitmap = null;
+      }
+      this.manualUndoSnapshots = [];
+      this.nv?.drawScene?.();
+    }
   }
 }

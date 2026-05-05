@@ -47,6 +47,34 @@ function binarise(typedArray) {
   return out;
 }
 
+function foregroundMaskFromIntensity(data, dims = null, fractionOfMax = 0.05) {
+  let max = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = Number(data[i]);
+    if (v > max) max = v;
+  }
+  const threshold = (Number.isFinite(max) ? max : 0) * fractionOfMax;
+  const mask = new Uint8Array(data.length);
+  let count = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (Number(data[i]) > threshold) {
+      mask[i] = 1;
+      count++;
+    }
+  }
+  if (count === 0) {
+    let fallback = Math.floor(data.length / 2);
+    if (Array.isArray(dims) && dims.length === 3) {
+      const x = Math.min(Math.floor(dims[0] / 2), dims[0] - 1);
+      const y = Math.min(Math.floor(dims[1] / 2), dims[1] - 1);
+      const z = Math.min(Math.floor(dims[2] / 2), dims[2] - 1);
+      fallback = x + y * dims[0] + z * dims[0] * dims[1];
+    }
+    if (fallback >= 0 && fallback < mask.length) mask[fallback] = 1;
+  }
+  return mask;
+}
+
 function dimsEqual(a, b) {
   return Array.isArray(a) && Array.isArray(b) &&
     a.length === b.length &&
@@ -568,7 +596,10 @@ export class LesionNetworkMappingApp {
 
   refreshMaskDrawingControls() {
     const toolbar = document.getElementById('maskDrawingToolbar');
-    const available = !!(this.nativeStructuralFile || this.structuralFile || this.autoLesionSeedFile || this.confirmedNativeLesionFile);
+    const available = !!(
+      this.maskReviewActive &&
+      (this.nativeStructuralFile || this.structuralFile || this.autoLesionSeedFile || this.confirmedNativeLesionFile)
+    );
     if (toolbar) toolbar.classList.toggle('hidden', !available);
     const confirm = document.getElementById('confirmLesionMaskButton');
     if (confirm) confirm.disabled = !available;
@@ -616,7 +647,14 @@ export class LesionNetworkMappingApp {
       case 'brainmask':
         return !!this.brainmaskFile;
       case 'lesion':
-        return !!(this.lesionMaskFile || this.autoLesionSeedFile || this.confirmedNativeLesionFile || this.lesionFile);
+        return !!(
+          this.maskReviewActive ||
+          this.maskDrawingController?.hasDrawing ||
+          this.lesionMaskFile ||
+          this.autoLesionSeedFile ||
+          this.confirmedNativeLesionFile ||
+          this.lesionFile
+        );
       case 'threshold':
         return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
       case 'atlasQc':
@@ -632,7 +670,7 @@ export class LesionNetworkMappingApp {
       if (!el) continue;
       const available = this.getViewerLayerAvailable(config.layer);
       el.disabled = !available;
-      el.checked = this.viewerLayerVisibility[config.layer] !== false;
+      el.checked = available && this.viewerLayerVisibility[config.layer] !== false;
     }
     this.refreshSubjectAtlasControls();
   }
@@ -652,18 +690,25 @@ export class LesionNetworkMappingApp {
   }
 
   applyViewerLayerVisibility(layer = null) {
-    if (!this.viewerController?.setStageVisible) return;
-    for (const config of this.getViewerLayerControlConfig()) {
-      if (layer && config.layer !== layer) continue;
-      const visible = this.viewerLayerVisibility[config.layer] !== false;
-      for (const stage of config.stages) {
-        this.viewerController.setStageVisible(stage, visible);
+    if (this.viewerController?.setStageVisible) {
+      for (const config of this.getViewerLayerControlConfig()) {
+        if (layer && config.layer !== layer) continue;
+        const visible = this.viewerLayerVisibility[config.layer] !== false;
+        for (const stage of config.stages) {
+          this.viewerController.setStageVisible(stage, visible);
+        }
       }
     }
+    if (!layer || layer === 'lesion') this.applyMaskDrawingVisibility();
   }
 
   layerVisible(layer) {
     return this.viewerLayerVisibility[layer] !== false;
+  }
+
+  applyMaskDrawingVisibility() {
+    if (!this.maskDrawingController?.setVisible) return;
+    this.maskDrawingController.setVisible(this.maskReviewActive && this.layerVisible('lesion'));
   }
 
   // Phase 13 + Phase 40: populate every visible version slot from
@@ -1230,6 +1275,7 @@ export class LesionNetworkMappingApp {
     this.lesionMaskConfirmed = false;
     this.lesionMaskFile = null;
     this.setMaskDrawingTool('paint');
+    this.applyMaskDrawingVisibility();
     this.refreshViewerLayerControls();
     this.refreshMaskDrawingControls();
     this.updateOutput('Review/edit the lesion mask, then confirm it to continue analysis.');
@@ -1266,7 +1312,7 @@ export class LesionNetworkMappingApp {
     this.lesionMaskFile = arrayBufferToFile(mniNifti, 'lnm-lesion-confirmed-mni160.nii');
     this.lesionMaskConfirmed = true;
     this.maskReviewActive = false;
-    this.maskDrawingController.close();
+    this.maskDrawingController.close({ clearDrawing: true });
     const btn = document.getElementById('downloadLesionMaskButton');
     if (btn) btn.disabled = false;
     this.refreshViewerLayerControls();
@@ -2110,6 +2156,14 @@ export class LesionNetworkMappingApp {
     const registrationReady = this._waitForStepComplete('register');
     const inputBuffer = await this.structuralFile.arrayBuffer();
     await this.executor.loadVolume(inputBuffer);
+    let brainMaskBuffer = null;
+    let brainMaskDims = null;
+    if (this.brainmaskFile) {
+      const brainmask = await decodeNiftiBuffer(await this.brainmaskFile.arrayBuffer());
+      const mask = binarise(brainmask.data);
+      brainMaskBuffer = mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
+      brainMaskDims = brainmask.dims;
+    }
     await this.executor.runRegistration({
       modelAssetId: model.id,
       modelName: m.name || modelFileName,
@@ -2122,6 +2176,8 @@ export class LesionNetworkMappingApp {
       referenceAssetId: ref.id,
       referenceUrl: ref.sourceUrl,
       referenceCacheKey: ref.cacheKey,
+      brainMaskBuffer,
+      brainMaskDims,
       nbSteps: 7
     });
     await registrationReady;
@@ -2209,7 +2265,8 @@ export class LesionNetworkMappingApp {
     const mni160 = await getMni160Ref();
     const mni160Affine = affineFromHeader(mni160.header);
     this.fixedMni160Info = { dims: mni160.dims, affine: mni160Affine, spacing: [1, 1, 1] };
-    const mniCenterVox = mni160.dims.map(v => v / 2);
+    const mniForegroundMask = foregroundMaskFromIntensity(mni160.data, mni160.dims, 0.05);
+    const mniCenterVox = centroidOfMask(mniForegroundMask, mni160.dims);
     const { dstAffine, mniDims, eigenvalues } = principalAxisAlign(
       mask.data, t1.dims, t1Affine,
       { mniDims: mni160.dims, mniCenterVox }

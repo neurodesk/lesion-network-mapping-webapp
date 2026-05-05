@@ -24,6 +24,7 @@
     "test:synthstrip-parity": "node --no-warnings scripts/test_synthstrip_parity.mjs",
     "test:lesion-seg-parity": "node --no-warnings scripts/test_lesion_seg_parity.mjs",
     "test:registration-parity": "node --no-warnings scripts/test_registration_parity.mjs",
+    "test:registration-quality": "node --no-warnings scripts/test_registration_quality.mjs",
     "test:fc-weighted-sum-parity": "node --no-warnings scripts/test_fc_weighted_sum_parity.mjs",
     "test:resample-parity": "node scripts/test_resample_parity.cjs",
     "test:prealign": "node scripts/test_prealign.cjs",

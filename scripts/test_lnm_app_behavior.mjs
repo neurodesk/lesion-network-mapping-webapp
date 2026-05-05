@@ -163,7 +163,13 @@ function makeClassList(initial = []) {
   return {
     add: (...names) => names.forEach(name => classes.add(name)),
     remove: (...names) => names.forEach(name => classes.delete(name)),
-    contains: (name) => classes.has(name)
+    contains: (name) => classes.has(name),
+    toggle: (name, force) => {
+      const shouldAdd = force === undefined ? !classes.has(name) : !!force;
+      if (shouldAdd) classes.add(name);
+      else classes.delete(name);
+      return shouldAdd;
+    }
   };
 }
 
@@ -389,7 +395,17 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       supportStatus: 'supported'
     }]
   };
+  globalThis.nifti = niftiModule.default || niftiModule;
   app.structuralFile = { name: 'lnm-prealign-t1.nii', arrayBuffer: async () => new ArrayBuffer(8) };
+  app.brainmaskFile = makeNiftiFile('lnm-prealign-brainmask.nii', writeNifti1(
+    new Uint8Array([1, 0, 1, 0, 0, 1, 0, 1]),
+    {
+      dims: [2, 2, 2],
+      spacing: [1, 1, 1],
+      affine: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
+      description: 'registration brain mask'
+    }
+  ));
   let registrationSettings = null;
   app.executor = {
     loadVolume: async () => {},
@@ -405,6 +421,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   assert.equal(settled, false,
     'runRegistration must not resolve before register step-complete arrives');
   assert.deepEqual(registrationSettings.executionProviders, ['wasm']);
+  assert.deepEqual(registrationSettings.brainMaskDims, [2, 2, 2],
+    'runRegistration must pass the prealigned brain-mask dimensions to the worker');
+  assert.equal(registrationSettings.brainMaskBuffer.byteLength, 8,
+    'runRegistration must pass a compact binary brain mask to the worker');
 
   app.handleStepComplete('register');
   await promise;
@@ -610,12 +630,25 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     affine: flatten(nativeAffine),
     description: 'synthetic native drawing'
   }));
-  let closed = false;
+  let closeOptions = null;
   let resumed = false;
+  const toolbarClassList = makeClassList();
+  const toolbar = { classList: toolbarClassList };
+  const confirmButton = { disabled: false };
+  const downloadEditedButton = { disabled: false };
+  const status = { textContent: '' };
+  const downloadButton = { disabled: true };
+  const restoreDocument = useMockElements({
+    maskDrawingToolbar: toolbar,
+    confirmLesionMaskButton: confirmButton,
+    downloadEditedLesionMaskButton: downloadEditedButton,
+    maskReviewStatus: status,
+    downloadLesionMaskButton: downloadButton
+  });
   app.maskDrawingController = {
     hasDrawing: true,
     exportDrawingFile: async () => nativeFile,
-    close: () => { closed = true; }
+    close: (options) => { closeOptions = options; }
   };
   app.prealignSamplingAffine = prealignSamplingAffine;
   app.fixedMni160Info = {
@@ -625,8 +658,14 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   };
   app.resumePipelineAfterMaskConfirmation = async () => { resumed = true; };
 
-  const confirmed = await app.confirmLesionDrawing({ resumePipeline: true });
-  const decoded = decodeNiftiForTest(await confirmed.arrayBuffer());
+  let confirmed;
+  let decoded;
+  try {
+    confirmed = await app.confirmLesionDrawing({ resumePipeline: true });
+    decoded = decodeNiftiForTest(await confirmed.arrayBuffer());
+  } finally {
+    restoreDocument();
+  }
 
   assert.equal(app.confirmedNativeLesionFile, nativeFile,
     'confirmed native drawing must be kept for download/edit provenance');
@@ -636,8 +675,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'confirming must mark the lesion mask as user-approved');
   assert.equal(app.maskReviewActive, false,
     'confirming must leave mask-review mode');
-  assert.equal(closed, true,
-    'confirming must disable NiiVue drawing');
+  assert.deepEqual(closeOptions, { clearDrawing: true },
+    'confirming must clear the accepted NiiVue drawing overlay');
+  assert.equal(toolbarClassList.contains('hidden'), true,
+    'confirming must hide the mask-review toolbar');
   assert.equal(resumed, true,
     'confirming from the paused pipeline must resume analysis');
   assert.deepEqual(decoded.dims, nativeDims,
@@ -966,6 +1007,40 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
+// ---- Test 16: unavailable viewer layers are disabled and unchecked ----
+{
+  const app = makeApp();
+  app.structuralFile = { name: 't1.nii' };
+
+  const makeToggle = () => ({
+    checked: true,
+    disabled: false,
+    addEventListener: () => {}
+  });
+  const toggles = {
+    layerToggleT1: makeToggle(),
+    layerToggleBrainMask: makeToggle(),
+    layerToggleLesionMask: makeToggle(),
+    layerToggleThresholdMap: makeToggle(),
+    layerToggleAtlasQc: makeToggle()
+  };
+  const restoreDocument = useMockElements(toggles);
+
+  try {
+    app.refreshViewerLayerControls();
+    assert.equal(toggles.layerToggleT1.disabled, false,
+      'available structural layer must remain enabled');
+    assert.equal(toggles.layerToggleT1.checked, true,
+      'available structural layer must mirror the visible preference');
+    assert.equal(toggles.layerToggleAtlasQc.disabled, true,
+      'Yeo atlas toggle must be disabled before an atlas-QC volume is available');
+    assert.equal(toggles.layerToggleAtlasQc.checked, false,
+      'unavailable Yeo atlas toggle must not appear checked');
+  } finally {
+    restoreDocument();
+  }
+}
+
 // ---- Test 16: direct lesion overlap renders exploratory functional terms ----
 {
   const app = makeApp();
@@ -1031,6 +1106,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   app.lesionMaskFile = { name: 'lesion.nii' };
   app.thresholdedMaskFile = { name: 'threshold.nii' };
   app.patientAtlasFile = { name: 'atlas-patient.nii' };
+  app.maskReviewActive = true;
 
   const listeners = {};
   const makeToggle = id => ({
@@ -1047,11 +1123,16 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   };
   const restoreDocument = useMockElements(toggles);
   const stageVisibilityCalls = [];
+  const drawingVisibilityCalls = [];
   app.viewerController = {
     setStageVisible: (stage, visible) => {
       stageVisibilityCalls.push([stage, visible]);
       return true;
     }
+  };
+  app.maskDrawingController = {
+    hasDrawing: true,
+    setVisible: (visible) => { drawingVisibilityCalls.push(visible); }
   };
 
   try {
@@ -1072,6 +1153,12 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       'lesion toggle must hide the native segmentation stage');
     assert.ok(stageVisibilityCalls.some(call => call[0] === 'lesion' && call[1] === false),
       'lesion toggle must hide the Yeo/manual lesion stage');
+    assert.equal(drawingVisibilityCalls.at(-1), false,
+      'lesion toggle must hide the active editable drawing overlay');
+
+    listeners['layerToggleLesionMask:change']({ target: { checked: true } });
+    assert.equal(drawingVisibilityCalls.at(-1), true,
+      'lesion toggle must restore the active editable drawing overlay');
 
     listeners['layerToggleAtlasQc:change']({ target: { checked: false } });
     assert.deepEqual(stageVisibilityCalls.at(-1), ['atlas-qc', false],

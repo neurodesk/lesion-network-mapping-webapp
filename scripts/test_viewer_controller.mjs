@@ -503,6 +503,19 @@ function fakeFile(name) {
   controller.close();
   assert.equal(calls.setDrawingEnabled.at(-1), false,
     'close must disable drawing mode without clearing volumes');
+  assert.equal(calls.closeDrawing, 0,
+    'plain close must keep the drawing bitmap available for continued editing');
+  controller.setVisible(false);
+  assert.equal(calls.setDrawOpacity.at(-1), 0,
+    'setVisible(false) must hide the editable drawing overlay');
+  controller.setVisible(true);
+  assert.equal(calls.setDrawOpacity.at(-1), 0.65,
+    'setVisible(true) must restore the editable drawing opacity');
+  controller.close({ clearDrawing: true });
+  assert.equal(calls.closeDrawing, 1,
+    'accepted masks must be able to close and clear the drawing bitmap');
+  assert.equal(nv.drawBitmap, null,
+    'clearDrawing close must remove the stale editable drawing overlay');
 }
 
 console.log('ViewerController OK: 15 cases (Phase 4 call-shape, drawing wrapper, overlay replace path, scalar overlays, visibility, view + stage + colormap + live opacity).');

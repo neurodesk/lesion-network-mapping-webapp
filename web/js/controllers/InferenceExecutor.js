@@ -352,7 +352,8 @@ export class InferenceExecutor {
   // Phase 3.4: SynthMorph MNI registration stage. Posts to the worker's
   // 'run-register' op. Settings shape:
   //   { modelAssetId, modelName, modelBaseUrl, modelCacheKey,
-  //     referenceAssetId, referenceUrl, referenceCacheKey, nbSteps? }
+  //     referenceAssetId, referenceUrl, referenceCacheKey,
+  //     brainMaskBuffer?, brainMaskDims?, nbSteps? }
   async runRegistration(settings = {}) {
     await this.initialize();
     if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'register') {
@@ -362,7 +363,11 @@ export class InferenceExecutor {
     this.currentRunningStep = 'register';
     this.currentTaskId = settings?.modelAssetId || null;
     this.stepStatus.register = 'running';
-    this.worker.postMessage({ type: 'run-register', data: settings });
+    const transferList = [];
+    if (settings?.brainMaskBuffer instanceof ArrayBuffer) {
+      transferList.push(settings.brainMaskBuffer);
+    }
+    this.worker.postMessage({ type: 'run-register', data: settings }, transferList);
   }
 
   // Phase 3.5: warp a mask in F-order Uint8 voxel-bytes through the

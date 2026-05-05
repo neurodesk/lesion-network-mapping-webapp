@@ -142,7 +142,7 @@ function appendCell(row, text, className = '') {
 function contributorLabel(contributors) {
   if (!Array.isArray(contributors) || contributors.length === 0) return '';
   return contributors
-    .map(item => `${item.network} ${item.contribution.toFixed(3)}`)
+    .map(item => item.network)
     .join('; ');
 }
 
