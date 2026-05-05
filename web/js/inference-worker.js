@@ -1564,6 +1564,7 @@ async function stepInverseWarpMask(params = {}) {
     maskDims = [160, 160, 192],
     stage = 'threshold-patient',
     description = 'Threshold map projected to patient T1 space',
+    labelMap = false,
     iterations = 8
   } = params;
   if (!maskBuffer) throw new Error('inverse-warp-mask requires maskBuffer');
@@ -1579,14 +1580,23 @@ async function stepInverseWarpMask(params = {}) {
     workerState.displacementDims,
     { mode: 'nearest', iterations }
   );
-  const projectedBin = new Uint8Array(projected.length);
-  for (let i = 0; i < projected.length; i++) projectedBin[i] = projected[i] > 0.5 ? 1 : 0;
+  const projectedOut = new Uint8Array(projected.length);
+  for (let i = 0; i < projected.length; i++) {
+    if (labelMap) {
+      const label = Math.round(projected[i]);
+      projectedOut[i] = label > 0 ? Math.min(label, 255) : 0;
+    } else {
+      projectedOut[i] = projected[i] > 0.5 ? 1 : 0;
+    }
+  }
 
-  postProgress(0.85, 'Wrapping patient-space threshold map as NIfTI...');
-  const outNifti = createOutputNifti(projectedBin, workerState.origHeaderBytes, workerState.origDims);
+  postProgress(0.85, labelMap
+    ? 'Wrapping patient-space atlas as NIfTI...'
+    : 'Wrapping patient-space threshold map as NIfTI...');
+  const outNifti = createOutputNifti(projectedOut, workerState.origHeaderBytes, workerState.origDims);
   postStageData(stage, outNifti, description);
 
-  postProgress(1.0, 'Threshold projection complete');
+  postProgress(1.0, labelMap ? 'Atlas projection complete' : 'Threshold projection complete');
   postStepComplete('inverse-warp-mask');
 }
 

@@ -260,13 +260,23 @@ assert.match(
 );
 assert.match(
   worker,
+  /labelMap\s*=\s*false/,
+  "inverse-warp-mask must default to binary masks unless labelMap is requested"
+);
+assert.match(
+  worker,
   /createOutputNifti\(\s*warpedBin,\s*workerState\.referenceHeaderBytes/s,
   'warp-mask must wrap mni-lesion output with the fixed lnm-mni160 reference header'
 );
 assert.match(
   worker,
-  /createOutputNifti\(\s*projectedBin,\s*workerState\.origHeaderBytes,\s*workerState\.origDims\s*\)/,
-  'inverse-warp-mask must keep threshold-patient output on the source structural header'
+  /Math\.round\(projected\[i\]\)/,
+  'label-map inverse warp must preserve integer atlas labels instead of binarising them'
+);
+assert.match(
+  worker,
+  /createOutputNifti\(\s*projectedOut,\s*workerState\.origHeaderBytes,\s*workerState\.origDims\s*\)/,
+  'inverse-warp-mask must keep patient-space outputs on the source structural header'
 );
 assert.match(
   executor,

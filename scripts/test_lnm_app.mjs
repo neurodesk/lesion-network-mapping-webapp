@@ -279,10 +279,20 @@ assert.match(src, /\brunInverseWarpMask\s*\(/,
   'patient-space threshold projection must dispatch the inverse-warp worker path');
 assert.match(src, /stage:\s*['"]threshold-patient['"]/,
   'patient-space threshold projection must wait for the threshold-patient stage output');
+assert.match(src, /\brunInverseWarpStage\s*\(/,
+  'patient-space inverse-warp projections must be serialized through runInverseWarpStage');
 assert.match(src, /\brenderPatientLayerStack\s*\(/,
   'patient-space threshold projection must render the structural/brainmask/lesion/threshold viewer stack');
-assert.match(src, /layerToggleT1[\s\S]*?layerToggleThresholdMap/,
-  'lnm-app.js must bind viewer layer toggles for T1, brain mask, lesion mask, and threshold map');
+assert.match(src, /\bprojectAtlasToPatientSpace\s*\(/,
+  'orchestrator must expose a subject-space Yeo atlas QC projection');
+assert.match(src, /stage:\s*['"]atlas-patient['"]/,
+  'subject-space Yeo atlas QC must use the atlas-patient stage output');
+assert.match(src, /labelMap:\s*true/,
+  'subject-space Yeo atlas QC must request label-preserving inverse warp');
+assert.match(src, /layerToggleT1[\s\S]*?layerToggleThresholdMap[\s\S]*?layerToggleAtlasQc/,
+  'lnm-app.js must bind viewer layer toggles for T1, brain mask, lesion mask, threshold map, and Yeo atlas QC');
+assert.match(src, /showSubjectAtlasButton/,
+  'lnm-app.js must bind the subject-space atlas QC button');
 
 // Phase 2a.2.3: lesion-segmentation wiring. runLesionSegmentation reads
 // the lnm-stroke-lesion manifest entry, calls executor.runInference(...),

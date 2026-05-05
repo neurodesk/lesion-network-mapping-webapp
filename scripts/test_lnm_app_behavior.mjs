@@ -722,6 +722,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   app.brainmaskFile = { name: 'brainmask.nii' };
   app.lesionMaskFile = { name: 'lesion.nii' };
   app.thresholdedMaskFile = { name: 'threshold.nii' };
+  app.patientAtlasFile = { name: 'atlas-patient.nii' };
 
   const listeners = {};
   const makeToggle = id => ({
@@ -733,7 +734,8 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     layerToggleT1: makeToggle('layerToggleT1'),
     layerToggleBrainMask: makeToggle('layerToggleBrainMask'),
     layerToggleLesionMask: makeToggle('layerToggleLesionMask'),
-    layerToggleThresholdMap: makeToggle('layerToggleThresholdMap')
+    layerToggleThresholdMap: makeToggle('layerToggleThresholdMap'),
+    layerToggleAtlasQc: makeToggle('layerToggleAtlasQc')
   };
   const restoreDocument = useMockElements(toggles);
   const stageVisibilityCalls = [];
@@ -762,6 +764,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       'lesion toggle must hide the native segmentation stage');
     assert.ok(stageVisibilityCalls.some(call => call[0] === 'lesion' && call[1] === false),
       'lesion toggle must hide the Yeo/manual lesion stage');
+
+    listeners['layerToggleAtlasQc:change']({ target: { checked: false } });
+    assert.deepEqual(stageVisibilityCalls.at(-1), ['atlas-qc', false],
+      'atlas QC toggle must target the subject-space atlas viewer stage');
   } finally {
     restoreDocument();
   }
@@ -985,4 +991,124 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: 20 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+// ---- Test 20: subject-space Yeo atlas QC uses the fixed MNI160 grid and
+//      requests a label-preserving inverse warp ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const mni160Data = new Uint8Array(2 * 2 * 2);
+  const yeoData = new Uint8Array(5 * 5 * 5);
+  yeoData[0] = 7;
+  const affine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  const mni160Buffer = writeNifti1(mni160Data, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'synthetic lnm-mni160'
+  });
+  const yeoBuffer = writeNifti1(yeoData, {
+    dims: [5, 5, 5],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'synthetic Yeo atlas'
+  });
+  const projectedAtlasBuffer = writeNifti1(new Uint8Array([7, 0, 0, 0, 0, 0, 0, 0]), {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine,
+    description: 'synthetic subject-space atlas'
+  });
+
+  app.structuralFile = makeNiftiFile('lnm-prealign-t1.nii', mni160Buffer);
+  app.hasRegistrationDisplacement = true;
+  let inverseSettings = null;
+  app.executor = {
+    runInverseWarpMask: async (settings) => {
+      inverseSettings = settings;
+      queueMicrotask(() => {
+        app.handleStageData({ stage: 'atlas-patient', niftiData: projectedAtlasBuffer });
+        app.handleStepComplete('inverse-warp-mask');
+      });
+    }
+  };
+  const renderedStacks = [];
+  app.viewerController = {
+    loadVolumeStack: async (entries) => { renderedStacks.push(entries); },
+    setStageVisible: () => true
+  };
+
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  globalThis.caches = undefined;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.includes('manifest.json')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            atlasAssets: [
+              {
+                id: 'lnm-mni160',
+                sourceUrl: 'https://example.test/qc-mni160.nii',
+                cacheKey: 'lnm-mni160-qc-test',
+                dims: [2, 2, 2],
+                supportStatus: 'supported'
+              },
+              {
+                id: 'yeo7-2mm',
+                sourceUrl: 'https://example.test/qc-yeo7.nii',
+                cacheKey: 'yeo7-qc-test',
+                dims: [5, 5, 5],
+                supportStatus: 'supported'
+              }
+            ]
+          };
+        }
+      };
+    }
+    if (href === 'https://example.test/qc-mni160.nii') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return mni160Buffer; }
+      };
+    }
+    if (href === 'https://example.test/qc-yeo7.nii') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return yeoBuffer; }
+      };
+    }
+    throw new Error(`unexpected fetch in atlas QC test: ${href}`);
+  };
+
+  try {
+    await app.showSubjectSpaceAtlas();
+    assert.ok(app.patientAtlasFile,
+      'subject-space atlas QC must store the projected atlas file');
+    assert.equal(inverseSettings.stage, 'atlas-patient',
+      'subject-space atlas QC must use the atlas-patient stage');
+    assert.equal(inverseSettings.labelMap, true,
+      'subject-space atlas QC must request label-preserving inverse warp');
+    assert.deepEqual(inverseSettings.maskDims, [2, 2, 2],
+      'subject-space atlas QC must inverse-warp from the fixed lnm-mni160 grid');
+    assert.equal(new Uint8Array(inverseSettings.maskBuffer)[0], 7,
+      'Yeo labels must survive the Yeo-grid to MNI160 resample before inverse warp');
+    const atlasEntry = renderedStacks.at(-1).find(entry => entry.stage === 'atlas-qc');
+    assert.ok(atlasEntry, 'patient viewer stack must include the atlas QC layer');
+    assert.equal(atlasEntry.colormap, 'lnm-yeo7',
+      'atlas QC layer must use the Yeo label colormap');
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+  }
+}
+
+console.log('lnm-app behavior OK: 21 dispatch + precondition + explicit-start + worker-wait + threshold-preview/projection + subject-atlas QC + affected-network labels + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

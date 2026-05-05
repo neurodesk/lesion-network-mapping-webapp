@@ -112,11 +112,13 @@ export class LesionNetworkMappingApp {
     this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.patientThresholdedMaskFile = null;
+    this.patientAtlasFile = null;
     this.affectedNetworkResult = null;
     this._thresholdPreviewTimer = null;
     this._thresholdPreviewRenderPromise = Promise.resolve();
     this._thresholdPreviewVersion = 0;
     this._thresholdProjectionWarningShown = false;
+    this._inverseWarpQueue = Promise.resolve();
     this.hasRegistrationDisplacement = false;
     this.mniLesionFile = null;       // Phase 6: warped lesion at MNI160 1mm (pre-resample)
     this._mniLesionResolver = null;  // Phase 6: one-shot promise for warp-mask stage data
@@ -132,7 +134,8 @@ export class LesionNetworkMappingApp {
       structural: true,
       brainmask: true,
       lesion: true,
-      threshold: true
+      threshold: true,
+      atlasQc: true
     };
 
     this.executor = new InferenceExecutor({
@@ -333,6 +336,22 @@ export class LesionNetworkMappingApp {
       downloadThreshBtn.addEventListener('click', () => this.downloadThresholdedNetworkMap());
     }
 
+    const showAtlasQcBtn = document.getElementById('showSubjectAtlasButton');
+    if (showAtlasQcBtn) {
+      showAtlasQcBtn.disabled = true;
+      showAtlasQcBtn.addEventListener('click', () => {
+        this.showSubjectSpaceAtlas().catch(
+          err => this.updateOutput(`Subject-space atlas failed: ${err.message}`)
+        );
+      });
+    }
+
+    const downloadAtlasQcBtn = document.getElementById('downloadSubjectAtlasButton');
+    if (downloadAtlasQcBtn) {
+      downloadAtlasQcBtn.disabled = true;
+      downloadAtlasQcBtn.addEventListener('click', () => this.downloadSubjectSpaceAtlas());
+    }
+
     const copyConsole = document.getElementById('copyConsole');
     if (copyConsole) copyConsole.addEventListener('click', () => this.console.copyToClipboard());
 
@@ -415,7 +434,8 @@ export class LesionNetworkMappingApp {
       { layer: 'structural', id: 'layerToggleT1', stages: ['structural'] },
       { layer: 'brainmask', id: 'layerToggleBrainMask', stages: ['brainmask'] },
       { layer: 'lesion', id: 'layerToggleLesionMask', stages: ['segmentation', 'lesion'] },
-      { layer: 'threshold', id: 'layerToggleThresholdMap', stages: ['threshold-preview'] }
+      { layer: 'threshold', id: 'layerToggleThresholdMap', stages: ['threshold-preview'] },
+      { layer: 'atlasQc', id: 'layerToggleAtlasQc', stages: ['atlas-qc'] }
     ];
   }
 
@@ -442,6 +462,8 @@ export class LesionNetworkMappingApp {
         return !!(this.lesionMaskFile || this.lesionFile);
       case 'threshold':
         return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
+      case 'atlasQc':
+        return !!this.patientAtlasFile;
       default:
         return false;
     }
@@ -455,6 +477,19 @@ export class LesionNetworkMappingApp {
       el.disabled = !available;
       el.checked = this.viewerLayerVisibility[config.layer] !== false;
     }
+    this.refreshSubjectAtlasControls();
+  }
+
+  refreshSubjectAtlasControls() {
+    const canProject = !!(
+      this.structuralFile &&
+      this.hasRegistrationDisplacement &&
+      this.executor?.runInverseWarpMask
+    );
+    const showBtn = document.getElementById('showSubjectAtlasButton');
+    if (showBtn) showBtn.disabled = !canProject;
+    const downloadBtn = document.getElementById('downloadSubjectAtlasButton');
+    if (downloadBtn) downloadBtn.disabled = !this.patientAtlasFile;
   }
 
   applyViewerLayerVisibility(layer = null) {
@@ -506,6 +541,7 @@ export class LesionNetworkMappingApp {
     this.structuralFile = file;
     this.hasRegistrationDisplacement = false;
     this.patientThresholdedMaskFile = null;
+    this.patientAtlasFile = null;
     this._thresholdProjectionWarningShown = false;
     await this.viewerController.loadBaseVolume(file, {
       stage: 'structural',
@@ -768,6 +804,13 @@ export class LesionNetworkMappingApp {
       this.patientThresholdedMaskFile = arrayBufferToFile(data.niftiData, 'lnm-network-map-thresh-patient.nii');
       this.refreshViewerLayerControls();
       this.updateOutput('Threshold map projected to patient T1 space.');
+      this._resolveStageData(data.stage, data);
+      return;
+    }
+    if (data.stage === 'atlas-patient' && data.niftiData) {
+      this.patientAtlasFile = arrayBufferToFile(data.niftiData, 'lnm-yeo7-atlas-patient.nii');
+      this.refreshViewerLayerControls();
+      this.updateOutput('Yeo atlas projected to patient T1 space.');
       this._resolveStageData(data.stage, data);
     }
   }
@@ -1222,17 +1265,25 @@ export class LesionNetworkMappingApp {
     const { mask, dims } = await this.resampleThresholdMaskToStructuralGrid();
     if (version !== this._thresholdPreviewVersion) return null;
 
-    const thresholdReady = this._waitForStageData('threshold-patient');
-    const inverseWarpDone = this._waitForStepComplete('inverse-warp-mask');
     const maskBuffer = mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
-    await this.executor.runInverseWarpMask({
+    await this.runInverseWarpStage({
       maskBuffer,
       maskDims: dims,
       stage: 'threshold-patient',
       description: 'Threshold map projected to patient T1 space'
-    });
-    await Promise.all([thresholdReady, inverseWarpDone]);
+    }, 'threshold-patient');
     return this.patientThresholdedMaskFile;
+  }
+
+  async runInverseWarpStage(settings, stage) {
+    const run = this._inverseWarpQueue.catch(() => {}).then(async () => {
+      const stageReady = this._waitForStageData(stage);
+      const inverseWarpDone = this._waitForStepComplete('inverse-warp-mask');
+      await this.executor.runInverseWarpMask(settings);
+      await Promise.all([stageReady, inverseWarpDone]);
+    });
+    this._inverseWarpQueue = run.catch(() => {});
+    await run;
   }
 
   async resampleThresholdMaskToStructuralGrid() {
@@ -1271,6 +1322,60 @@ export class LesionNetworkMappingApp {
     return { mask, dims: mni160.dims };
   }
 
+  async projectYeoAtlasToMni160Grid() {
+    const [atlas, mni160] = await Promise.all([
+      loadAtlasFromManifest('yeo7-2mm'),
+      loadAtlasFromManifest('lnm-mni160')
+    ]);
+    const atlasAffine = affineFromHeader(atlas.header);
+    const mni160Affine = affineFromHeader(mni160.header);
+    const atlasLabels = new Uint8Array(atlas.data.length);
+    for (let i = 0; i < atlas.data.length; i++) {
+      const label = Math.round(Number(atlas.data[i]) || 0);
+      atlasLabels[i] = label > 0 ? Math.min(label, 255) : 0;
+    }
+    const resampled = resampleAffine(
+      atlasLabels,
+      atlas.dims, atlasAffine,
+      mni160.dims, mni160Affine,
+      'nearest'
+    );
+    return {
+      labels: resampled instanceof Uint8Array ? resampled : new Uint8Array(resampled),
+      dims: mni160.dims
+    };
+  }
+
+  async projectAtlasToPatientSpace() {
+    if (!this.structuralFile) {
+      throw new Error('No structural T1 is available.');
+    }
+    if (!this.hasRegistrationDisplacement) {
+      throw new Error('Run MNI registration first.');
+    }
+    const { labels, dims } = await this.projectYeoAtlasToMni160Grid();
+    const maskBuffer = labels.buffer.slice(labels.byteOffset, labels.byteOffset + labels.byteLength);
+    await this.runInverseWarpStage({
+      maskBuffer,
+      maskDims: dims,
+      stage: 'atlas-patient',
+      description: 'Yeo atlas projected to patient T1 space',
+      labelMap: true
+    }, 'atlas-patient');
+    return this.patientAtlasFile;
+  }
+
+  async showSubjectSpaceAtlas() {
+    if (!this.patientAtlasFile) {
+      this.updateOutput('Projecting Yeo atlas to patient T1 space...');
+      await this.projectAtlasToPatientSpace();
+    }
+    this.viewerLayerVisibility.atlasQc = true;
+    await this.renderPatientLayerStack();
+    this.refreshViewerLayerControls();
+    return this.patientAtlasFile;
+  }
+
   async renderPatientLayerStack() {
     if (!this.structuralFile) return;
     const entries = [{
@@ -1285,6 +1390,15 @@ export class LesionNetworkMappingApp {
         opacity: 0.4,
         stage: 'brainmask',
         visible: this.layerVisible('brainmask')
+      });
+    }
+    if (this.patientAtlasFile) {
+      entries.push({
+        file: this.patientAtlasFile,
+        colormap: 'lnm-yeo7',
+        opacity: 0.45,
+        stage: 'atlas-qc',
+        visible: this.layerVisible('atlasQc')
       });
     }
     const lesionOverlay = this.lesionMaskFile || this.lesionFile;
@@ -1349,6 +1463,21 @@ export class LesionNetworkMappingApp {
     URL.revokeObjectURL(url);
   }
 
+  downloadSubjectSpaceAtlas() {
+    if (!this.patientAtlasFile) {
+      this.updateOutput('No patient-space Yeo atlas available yet.');
+      return;
+    }
+    const url = URL.createObjectURL(this.patientAtlasFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lnm-yeo7-atlas-patient.nii';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   // Phase 3.4: SynthMorph MNI registration. Looks up the model + reference
   // in the manifest, posts to the worker. The worker stashes the integrated
   // displacement field on its state for the lnm-yeo-auto bridge (Phase 3.5)
@@ -1372,6 +1501,8 @@ export class LesionNetworkMappingApp {
     const modelLocalUrl = new URL(`models/_dev_cache/${modelFileName}`, window.location.href).href;
 
     this.updateOutput('Starting MNI registration (SynthMorph deformable)...');
+    this.patientAtlasFile = null;
+    this.refreshViewerLayerControls();
     const registrationReady = this._waitForStepComplete('register');
     const inputBuffer = await this.structuralFile.arrayBuffer();
     await this.executor.loadVolume(inputBuffer);
@@ -1392,6 +1523,7 @@ export class LesionNetworkMappingApp {
     await registrationReady;
     this.hasRegistrationDisplacement = true;
     this._thresholdProjectionWarningShown = false;
+    this.refreshViewerLayerControls();
   }
 
   // Phase 16.2: in-browser affine pre-registration (centroid match) so
@@ -1509,6 +1641,7 @@ export class LesionNetworkMappingApp {
     this.networkMapData = null;
     this.thresholdedMaskFile = null;
     this.patientThresholdedMaskFile = null;
+    this.patientAtlasFile = null;
     this.networkMapBaseFile = null;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
     this.clearAffectedNetworkTable();
@@ -1767,6 +1900,7 @@ export class LesionNetworkMappingApp {
     this.networkMapBaseFile = null;
     this.thresholdedMaskFile = null;
     this.patientThresholdedMaskFile = null;
+    this.patientAtlasFile = null;
     this.hasRegistrationDisplacement = false;
     this._thresholdProjectionWarningShown = false;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
@@ -1783,7 +1917,9 @@ export class LesionNetworkMappingApp {
       'downloadBrainMaskButton',
       'downloadLesionMaskButton',
       'downloadNetworkMapButton',
-      'downloadThresholdedNetworkMapButton'
+      'downloadThresholdedNetworkMapButton',
+      'showSubjectAtlasButton',
+      'downloadSubjectAtlasButton'
     ];
     for (const id of buttonIds) {
       const el = document.getElementById(id);

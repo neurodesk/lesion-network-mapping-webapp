@@ -56,6 +56,8 @@ const requiredIds = [
   '#affectedNetworkResults',
   '#affectedNetworkTable',
   '#downloadThresholdedNetworkMapButton',
+  '#showSubjectAtlasButton',
+  '#downloadSubjectAtlasButton',
   // Phase 6 additions: warp+resample bridge button + one-click full chain.
   '#applyRegistrationToLesionButton',
   '#runFullPipelineButton',
@@ -69,7 +71,8 @@ const requiredIds = [
   '#layerToggleT1',
   '#layerToggleBrainMask',
   '#layerToggleLesionMask',
-  '#layerToggleThresholdMap'
+  '#layerToggleThresholdMap',
+  '#layerToggleAtlasQc'
 ];
 for (const id of requiredIds) {
   const escaped = id.slice(1);
@@ -105,6 +108,8 @@ assert.doesNotMatch(html, /auto-promoted on file drop|auto-fires/i,
   'UI copy must not imply processing starts on file load');
 assert.match(html, /Affected Yeo networks/,
   'threshold results must include the affected Yeo network table title');
+assert.match(html, /Show subject atlas/,
+  'results actions must expose subject-space atlas QC');
 
 // Module loader points at the new orchestrator, not the old SCT app.
 assert.match(html, /<script\s[^>]*src=["']js\/lnm-app\.js["'][^>]*type=["']module["']/,
