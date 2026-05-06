@@ -22,12 +22,28 @@ assert.ok(Array.isArray(manifest.pipelines),
   "manifest must use 'pipelines' (renamed from 'tasks')");
 assert.ok(!('tasks' in manifest),
   "manifest must not retain SCT 'tasks' key after LNM migration");
+assert.ok(Array.isArray(manifest.atlasOptions) && manifest.atlasOptions.length >= 2,
+  'manifest must declare selectable atlasOptions');
 
 // Asset registries must exist (may be empty but must be arrays).
 for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets', 'annotationAssets']) {
   assert.ok(Array.isArray(manifest[key]),
     `manifest.${key} must be an array (may be empty)`);
 }
+
+const atlasOptionsById = new Map(manifest.atlasOptions.map(option => [option.id, option]));
+const schaeferOption = atlasOptionsById.get('schaefer400');
+const yeoOption = atlasOptionsById.get('yeo7');
+assert.ok(schaeferOption, "atlasOptions must include 'schaefer400'");
+assert.ok(yeoOption, "atlasOptions must include 'yeo7'");
+assert.equal(schaeferOption.displayName, 'Schaefer 400 parcels');
+assert.equal(yeoOption.displayName, 'Yeo 7 networks');
+assert.equal(schaeferOption.weightSource, 'parcel',
+  'Schaefer option must weight FC maps by parcel');
+assert.equal(yeoOption.weightSource, 'network',
+  'Yeo option must weight FC maps by network');
+assert.equal(schaeferOption.functionProfileAssetId, 'schaefer400-neurosynth-v7-function-profiles',
+  'Schaefer option must expose its Schaefer functional-profile asset');
 
 // Every asset entry must have id + filename + sizeBytes + checksum + cacheKey.
 for (const key of ['modelAssets', 'atlasAssets', 'connectomeAssets', 'annotationAssets']) {
@@ -159,6 +175,30 @@ assert.equal(yeoProfiles.atlasAssetId, 'yeo7-2mm',
 assert.match(yeoProfiles.method, /NiMARE ROIAssociationDecoder/,
   'Yeo7 function profiles must declare the NiMARE decoder method');
 
+const schaeferProfiles = manifest.annotationAssets.find(a => a.id === 'schaefer400-neurosynth-v7-function-profiles');
+assert.ok(schaeferProfiles,
+  "manifest must register 'schaefer400-neurosynth-v7-function-profiles' under annotationAssets");
+assert.equal(schaeferProfiles.supportStatus, 'supported',
+  'Schaefer400 function profiles must be supported once the compact JSON is committed');
+assert.match(schaeferProfiles.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'Schaefer400 function profiles must declare a real sha256 checksum');
+assert.ok(typeof schaeferProfiles.sizeBytes === 'number' && schaeferProfiles.sizeBytes > 0,
+  'Schaefer400 function profiles must declare a non-zero sizeBytes');
+assert.match(schaeferProfiles.sourceUrl, /schaefer400_function_profiles\.json$/,
+  'Schaefer400 function profiles sourceUrl must point at the JSON payload');
+assert.equal(schaeferProfiles.atlasAssetId, 'schaefer400-7n-2mm',
+  'Schaefer400 function profiles must declare the atlas they decode');
+assert.equal(schaeferProfiles.method, 'NiMARE ROIAssociationDecoder',
+  'Schaefer400 function profiles must declare parcel-wise NiMARE ROI decoding');
+assert.match(schaeferProfiles.sourceVersion, /schaefer400-parcel-roi/,
+  'Schaefer400 function profiles must declare the parcel-wise ROI source build');
+assert.equal(schaeferProfiles.parcelProfileCount, 400,
+  'Schaefer400 function profiles must cover all 400 parcels');
+assert.equal(schaeferProfiles.topTermsPerParcel, 24,
+  'Schaefer400 function profiles must declare the retained term depth');
+assert.equal(schaeferProfiles.minimumSourceScore, 0.01,
+  'Schaefer400 function profiles must declare the source-score filter');
+
 // Pipelines must reference atlas/model/connectome assets that exist.
 const knownIds = new Set(allIds);
 for (const pipeline of manifest.pipelines) {
@@ -173,6 +213,77 @@ for (const pipeline of manifest.pipelines) {
     }
   }
 }
+
+// Atlas options must reference registered assets. Schaefer's public-N155
+// connectome is sharded, but it is now a supported runtime asset.
+for (const option of manifest.atlasOptions) {
+  assert.ok(knownIds.has(option.overlapAtlasAssetId),
+    `atlas option ${option.id} overlapAtlasAssetId must reference a known asset`);
+  assert.ok(knownIds.has(option.connectomeAssetId),
+    `atlas option ${option.id} connectomeAssetId must reference a known asset`);
+  if (option.affectedAtlasAssetId) {
+    assert.ok(knownIds.has(option.affectedAtlasAssetId),
+      `atlas option ${option.id} affectedAtlasAssetId must reference a known asset`);
+  }
+}
+
+const schaeferAtlas = manifest.atlasAssets.find(a => a.id === 'schaefer400-7n-2mm');
+assert.ok(schaeferAtlas, "manifest must register 'schaefer400-7n-2mm'");
+assert.equal(schaeferAtlas.supportStatus, 'supported',
+  'Schaefer 2mm overlap atlas must be supported once the official atlas metadata is wired');
+assert.equal(schaeferAtlas.parcelCount, 400);
+assert.deepEqual(schaeferAtlas.dims, [91, 109, 91]);
+assert.match(schaeferAtlas.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'Schaefer atlas must declare a real sha256 checksum');
+assert.equal(Object.keys(schaeferAtlas.parcelLabels || {}).length, 400,
+  'Schaefer atlas must include parcelLabels for all 400 parcels');
+assert.equal(schaeferAtlas.parcelLabels['1'], 'LH_Vis_1',
+  'Schaefer parcelLabels must omit the 7Networks_ display prefix');
+assert.ok(Object.values(schaeferAtlas.parcelLabels || {}).every(label => !String(label).startsWith('7Networks_')),
+  'Schaefer 2mm parcelLabels must not expose the 7Networks_ display prefix');
+assert.equal(Object.keys(schaeferAtlas.networkLabels || {}).length, 400,
+  'Schaefer atlas must include 7-network membership for all 400 parcels');
+
+const schaeferAtlas4mm = manifest.atlasAssets.find(a => a.id === 'schaefer400-7n-4mm');
+assert.ok(schaeferAtlas4mm, "manifest must register 'schaefer400-7n-4mm'");
+assert.equal(schaeferAtlas4mm.supportStatus, 'supported',
+  'Schaefer 4mm affected-map companion atlas must be supported once the FC shards are uploaded');
+assert.deepEqual(schaeferAtlas4mm.dims, [50, 59, 50]);
+assert.equal(schaeferAtlas4mm.parcelCount, 400);
+assert.match(schaeferAtlas4mm.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'Schaefer 4mm companion atlas must declare a real sha256 checksum');
+assert.ok(typeof schaeferAtlas4mm.sizeBytes === 'number' && schaeferAtlas4mm.sizeBytes > 0,
+  'Schaefer 4mm companion atlas must declare non-zero sizeBytes');
+assert.equal(Object.keys(schaeferAtlas4mm.parcelLabels || {}).length, 400,
+  'Schaefer 4mm companion atlas must include parcelLabels for all 400 parcels');
+assert.equal(schaeferAtlas4mm.parcelLabels['1'], 'LH_Vis_1',
+  'Schaefer 4mm parcelLabels must omit the 7Networks_ display prefix');
+assert.ok(Object.values(schaeferAtlas4mm.parcelLabels || {}).every(label => !String(label).startsWith('7Networks_')),
+  'Schaefer 4mm parcelLabels must not expose the 7Networks_ display prefix');
+assert.equal(Object.keys(schaeferAtlas4mm.networkLabels || {}).length, 400,
+  'Schaefer 4mm companion atlas must include 7-network membership for all 400 parcels');
+
+const schaeferFc = manifest.connectomeAssets.find(a => a.id === 'schaefer400-fc-pack-development-n155-4mm');
+assert.ok(schaeferFc, "manifest must register the Schaefer400 development-fMRI FC pack contract");
+assert.equal(schaeferFc.supportStatus, 'supported',
+  'Schaefer400 development-fMRI FC pack must be supported once lazy shards are uploaded');
+assert.match(schaeferFc.checksum, /^sha256:[0-9a-f]{64}$/i,
+  'Schaefer400 FC pack index must declare a real sha256 checksum');
+assert.ok(typeof schaeferFc.sizeBytes === 'number' && schaeferFc.sizeBytes > 0,
+  'Schaefer400 FC pack index must declare non-zero sizeBytes');
+assert.equal(schaeferFc.parcelCount, 400);
+assert.equal(schaeferFc.channelCount, 400);
+assert.equal(schaeferFc.weightSource, 'parcel');
+assert.equal(schaeferFc.dtype, 'float16');
+assert.equal(schaeferFc.voxelOrder, 'row-major');
+assert.equal(schaeferFc.atlasAssetId, 'schaefer400-7n-4mm');
+assert.equal(schaeferFc.overlapAtlasAssetId, 'schaefer400-7n-2mm');
+assert.equal(schaeferFc.sharded, true,
+  'Schaefer400 FC pack must use lazy sharded loading');
+assert.equal(schaeferFc.shardCount, 10);
+assert.equal(schaeferFc.totalShardBytes, 118000000);
+assert.match(schaeferFc.indexSourceUrl, /connectomes\/schaefer400\/schaefer400_fc_pack_dev155_4mm\.index\.json$/,
+  'Schaefer400 FC pack indexSourceUrl must point at the uploaded sharded index');
 
 // Cross-check with lnm-tasks.js: every pipeline declared in code must exist
 // in the manifest so internal pipeline dispatch cannot select a pipeline whose

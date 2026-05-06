@@ -148,7 +148,8 @@ function contributorLabel(contributors) {
 
 export function renderFunctionalProfileTable(tableEl, rankedTerms, {
   sourceLabel = DEFAULT_SOURCE_LABEL,
-  emptyLabel = 'No functional associations'
+  emptyLabel = 'No functional associations',
+  driverHeader = 'Network drivers'
 } = {}) {
   tableEl.innerHTML = '';
 
@@ -158,7 +159,7 @@ export function renderFunctionalProfileTable(tableEl, rankedTerms, {
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Term', 'Score', 'Network drivers']) {
+  for (const label of ['Term', 'Score', driverHeader]) {
     const th = document.createElement('th');
     th.textContent = label;
     headerRow.appendChild(th);

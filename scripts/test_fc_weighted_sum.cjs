@@ -15,6 +15,8 @@ const { pathToFileURL } = require('node:url');
     fcWeightedSum,
     summaryToNetworkWeights,
     decodeFcPack,
+    float16ToFloat32Array,
+    parcelResultToChannelWeights,
     rowMajorToNiftiOrder
   } = await import(moduleUrl);
 
@@ -45,6 +47,24 @@ const { pathToFileURL } = require('node:url');
     // network-name lookup preserved.
     assert.equal(pack.byNetwork['Visual'], pack.tMaps[0]);
     assert.equal(pack.byNetwork['Default'], pack.tMaps[6]);
+  }
+
+  // ---- decodeFcPack: arbitrary channel counts + float16 assets ----
+  {
+    const halfBits = new Uint16Array([0x3c00, 0x4000, 0xc200, 0x4400, 0x0000, 0x3800]);
+    const decoded = float16ToFloat32Array(halfBits);
+    assert.deepEqual(Array.from(decoded), [1, 2, -3, 4, 0, 0.5]);
+    const index = {
+      shape: [3, 2, 1, 1],
+      voxelsPerMap: 2,
+      channelLabels: { 1: 'Parcel 1', 2: 'Parcel 2', 3: 'Parcel 3' },
+      dtype: 'float16',
+      voxelOrder: 'nifti'
+    };
+    const pack = decodeFcPack(halfBits.buffer, index);
+    assert.equal(pack.tMaps.length, 3, 'must split arbitrary channel count');
+    assert.equal(pack.tMaps[1][0], -3);
+    assert.equal(pack.byChannel['Parcel 3'], pack.tMaps[2]);
   }
 
   // ---- decodeFcPack: row-major asset bytes are converted to NIfTI order ----
@@ -129,6 +149,26 @@ const { pathToFileURL } = require('node:url');
     }
   }
 
+  // ---- parcelResultToChannelWeights: Schaefer-style parcel weighting ----
+  {
+    const parcelResult = {
+      totalLesionVoxels: 10,
+      parcels: [
+        { label: 7, voxelsInLesion: 6, fractionOfLesion: 0.6 },
+        { label: 22, voxelsInLesion: 4, fractionOfLesion: 0.4 }
+      ]
+    };
+    const { weights, labels } = parcelResultToChannelWeights(parcelResult, {
+      7: 'LH_Vis_7',
+      22: 'LH_SomMot_22',
+      99: 'RH_Default_99'
+    });
+    assert.deepEqual(labels, ['7', '22', '99']);
+    assert.ok(Math.abs(weights[0] - 0.6) < 1e-6);
+    assert.ok(Math.abs(weights[1] - 0.4) < 1e-6);
+    assert.equal(weights[2], 0);
+  }
+
   // (2) Identity case: weight = [0, ..., 0, 1, 0, ...] picks tMap[k] verbatim.
   {
     const dims = [3, 3, 3];
@@ -184,7 +224,7 @@ const { pathToFileURL } = require('node:url');
     );
   }
 
-  console.log('fc-weighted-sum OK: 5 functional cases + decodeFcPack voxel order + summaryToNetworkWeights.');
+  console.log('fc-weighted-sum OK: generic channel decode, float16, parcel weights, weighted sums.');
 })().catch(err => {
   console.error(err.stack || err.message);
   process.exit(1);

@@ -5,14 +5,46 @@ lesions, running entirely in the browser:
 
 1. Auto-segment a stroke lesion from a structural MRI (ONNX model in a Web Worker).
 2. Normalize the patient brain to MNI152 with a deep-learning registration model.
-3. Compute lesion overlap with a parcellation atlas (Schaefer 400 x 7 networks).
-4. Combine per-parcel precomputed normative functional-connectivity maps
-   (Lead-DBS / Lead-Mapper style) into a lesion-network map.
+3. Choose an `Atlas` and compute lesion overlap with either Yeo 7 networks or
+   Schaefer 400 parcels.
+4. Combine precomputed normative functional-connectivity maps into a
+   lesion-network map. Yeo uses the supported 7-channel development_fmri pack;
+   Schaefer uses the supported public N=155 development_fmri pack through the
+   lazy-shard loader.
 5. Threshold and visualize on top of MNI.
 
 No backend. No data upload. Hosted on GitHub Pages.
 
 ## Status
+
+**Selectable atlas implementation (current)** — the run controls now include a
+visible select field labelled exactly `Atlas`.
+
+- `Schaefer 400 parcels` is the default atlas. `Yeo 7 networks` remains fully
+  supported and selectable for compatibility and comparison.
+- `Schaefer 400 parcels` is available for direct lesion overlap via the
+  official Schaefer2018 400-parcel, 7-network, 2 mm atlas. Result tables and
+  CSV export use parcel labels instead of Yeo network names; Schaefer display
+  labels omit the leading `7Networks_` prefix.
+- The atlas registry in `web/js/app/atlas-options.js` maps each option to its
+  overlap atlas, connectome asset, FC weighting mode (`network` or `parcel`),
+  colormap, affected-map label atlas, and optional functional-profile asset.
+- Schaefer FC generation is implemented as
+  [`scripts/build_schaefer400_connectome.py`](scripts/build_schaefer400_connectome.py):
+  it fetches public Nilearn `development_fmri` subjects, computes 400
+  parcel-seed group t-stat maps, emits float16 row-major shards, writes a
+  4 mm Schaefer label companion, and can upload to the HF dataset when
+  `HF_TOKEN` is available. The manifest points at the uploaded 10-shard,
+  118 MB pack and counts only the small index as cold-load because the browser
+  fetches only shards containing lesion-hit parcels.
+- Functional profile panels work for both atlas choices. Yeo uses the compact
+  Yeo7 Neurosynth/NiMARE profile asset directly; Schaefer uses a parcel-wise
+  NiMARE ROI decode over all 400 Schaefer parcels. Neither Yeo nor Schaefer is
+  described as a dedicated language-area atlas.
+- Spatial guardrails tag app-created NIfTI files as `native-t1`, `mni160`, or
+  `atlas:<assetId>` and assert those spaces before computation and viewer
+  overlay steps. This prevents atlas-grid masks, native review masks, and
+  MNI160 registration products from being mixed silently.
 
 **Phase 1 complete (v0.1.0)** — manual-mask Yeo 7-network overlap. Drop a
 binary lesion mask aligned to MNI152NLin2009cAsym 2mm, click "Compute
@@ -81,7 +113,7 @@ T1-only — the second input was researcher-mode noise. Simplified:
 
 - The lesion file input moves under Advanced as "Researcher mode:
   pre-computed lesion mask" with a clear note that the mask must
-  already be on the 99×117×95 2 mm grid.
+  already be on the selected atlas grid.
 - The Input section now shows ONE input (T1) plus a help line
   explaining the auto chain handles everything from raw T1.
 - `lnm-yeo-only` and `lnm-network-map` pipelines are flagged
@@ -489,9 +521,9 @@ SCT-era behaviour for which the button was originally drawn.
 **Phase 13 complete (v0.9.0)** — UX surface.
 
 - Pipeline dropdown now lists every runnable pipeline declared in
-  `lnm-tasks.js`, not just `lnm-yeo-only`. The Schaefer400 / GSP1000
-  placeholder (`lnm-default`) is flagged `hidden: true` until those
-  assets ship.
+  `lnm-tasks.js`, not just `lnm-yeo-only`. The Schaefer400 legacy pipeline
+  (`lnm-default`) remains `hidden: true`; the user-facing Schaefer path is the
+  `Atlas` selector.
 - New `isPipelineRunnable(pipeline)` helper + Node test enforces the
   dropdown filter contract.
 - About modal now shows the actual `Config.VERSION` instead of an
@@ -575,9 +607,9 @@ Pipeline-specific dependencies (added incrementally):
 - **Brain extraction**: SynthStrip (Hoopes 2022, Apache-2.0); ONNX export ported from `neurodesk/vesselboost-webapp`.
 - **Lesion segmentation**: SynthStroke baseline (Chalcroft 2025 MELBA, MIT); 3D MONAI UNet, T1.
 - **Registration**: SynthMorph (Hoffmann 2022, Apache-2.0); UNet-only ONNX cut (layers 0–33); JS-side SVF integration + warp.
-- **Atlas**: Schaefer 2018 400 × 7 networks (CC-BY).
-- **Connectome**: ADHD-200 group functional connectivity (computed by `scripts/build_yeo7_connectome.py`, N=30 subjects, Yeo7 ROI seed-to-voxel t-maps); Lead-DBS GSP1000 + Schaefer 400 are a future hardening upgrade.
-- **Functional profiles**: Exploratory Yeo7 term associations from a compact Neurosynth v7 / NiMARE profile asset, rebuilt offline with `scripts/build_yeo7_function_profiles.py` and weighted in-browser by direct lesion overlap or thresholded connectivity-map effects.
+- **Atlases**: Yeo 2011 7-network cortical atlas; Schaefer 2018 400 × 7 networks (CC-BY).
+- **Connectomes**: Yeo7 development_fmri N=155 group functional connectivity (computed by `scripts/build_yeo7_connectome.py`, Yeo7 ROI seed-to-voxel t-maps). Schaefer400 development_fmri N=155 group functional connectivity is built by `scripts/build_schaefer400_connectome.py` and served as 10 lazy float16 shards with a 4 mm Schaefer companion atlas.
+- **Functional profiles**: Exploratory term associations from compact Neurosynth v7 / NiMARE profile assets. Yeo7 profiles are rebuilt offline with `scripts/build_yeo7_function_profiles.py`; Schaefer400 profiles are generated by `scripts/build_schaefer400_function_profiles.py` with a parcel-wise NiMARE `ROIAssociationDecoder` over all 400 Schaefer ROIs. Both are weighted in-browser by direct lesion overlap or thresholded connectivity-map effects.
 
 ## Local development
 
@@ -586,7 +618,8 @@ npm install
 bash web/setup.sh   # downloads ONNX Runtime WASM
 bash web/run.sh     # serves http://localhost:8080/
 npm test            # full Node-only suite: lint, manifest, overlap,
-                    # function profiles, inference helpers, worker, app, html
+                    # function profiles, spatial checks, inference helpers,
+                    # worker, app, html
 ```
 
 ### Browser smoke tests

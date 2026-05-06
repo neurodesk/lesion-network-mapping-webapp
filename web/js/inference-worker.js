@@ -295,20 +295,29 @@ function extractAffine(view) {
 
 // ==================== NIfTI Output ====================
 
-function createOutputNifti(uint8Data, sourceHeader, dims) {
+function createOutputNifti(labelData, sourceHeader, dims) {
   const srcView = new DataView(sourceHeader);
   const voxOffset = srcView.getFloat32(108, true);
   const headerSize = Math.ceil(voxOffset);
+  const payload = new Uint8Array(
+    labelData.buffer,
+    labelData.byteOffset || 0,
+    labelData.byteLength
+  );
 
-  const buffer = new ArrayBuffer(headerSize + uint8Data.length);
+  const buffer = new ArrayBuffer(headerSize + payload.byteLength);
   const destBytes = new Uint8Array(buffer);
   const destView = new DataView(buffer);
 
   destBytes.set(new Uint8Array(sourceHeader).slice(0, headerSize));
 
-  // Set datatype to UINT8
-  destView.setInt16(70, 2, true);
-  destView.setInt16(72, 8, true);
+  if (labelData instanceof Uint16Array) {
+    destView.setInt16(70, 512, true);
+    destView.setInt16(72, 16, true);
+  } else {
+    destView.setInt16(70, 2, true);
+    destView.setInt16(72, 8, true);
+  }
 
   // Update dims if provided
   if (dims) {
@@ -323,13 +332,13 @@ function createOutputNifti(uint8Data, sourceHeader, dims) {
   destView.setFloat32(116, 0, true);  // scl_inter
 
   let maxVal = 0;
-  for (let i = 0; i < uint8Data.length; i++) {
-    if (uint8Data[i] > maxVal) maxVal = uint8Data[i];
+  for (let i = 0; i < labelData.length; i++) {
+    if (labelData[i] > maxVal) maxVal = labelData[i];
   }
   destView.setFloat32(124, Math.max(1, maxVal), true);  // cal_max
   destView.setFloat32(128, 0, true);                    // cal_min
 
-  new Uint8Array(buffer, headerSize).set(uint8Data);
+  new Uint8Array(buffer, headerSize).set(payload);
   return buffer;
 }
 
@@ -1710,12 +1719,15 @@ async function stepInverseWarpMask(params = {}) {
     stage = 'threshold-patient',
     description = 'Threshold map projected to patient T1 space',
     labelMap = false,
+    labelDataType = 'uint8',
     iterations = 8
   } = params;
   if (!maskBuffer) throw new Error('inverse-warp-mask requires maskBuffer');
 
   postProgress(0.10, 'Projecting threshold map to patient space...');
-  const mask = new Uint8Array(maskBuffer);
+  const mask = labelMap && labelDataType === 'uint16'
+    ? new Uint16Array(maskBuffer)
+    : new Uint8Array(maskBuffer);
   const maskF32 = new Float32Array(mask.length);
   for (let i = 0; i < mask.length; i++) maskF32[i] = mask[i];
   const projected = inverseWarpVolume(
@@ -1725,11 +1737,13 @@ async function stepInverseWarpMask(params = {}) {
     workerState.displacementDims,
     { mode: 'nearest', iterations }
   );
-  const projectedOut = new Uint8Array(projected.length);
+  const projectedOut = labelMap && labelDataType === 'uint16'
+    ? new Uint16Array(projected.length)
+    : new Uint8Array(projected.length);
   for (let i = 0; i < projected.length; i++) {
     if (labelMap) {
       const label = Math.round(projected[i]);
-      projectedOut[i] = label > 0 ? Math.min(label, 255) : 0;
+      projectedOut[i] = label > 0 ? label : 0;
     } else {
       projectedOut[i] = projected[i] > 0.5 ? 1 : 0;
     }

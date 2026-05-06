@@ -26,6 +26,11 @@ import { fileURLToPath } from 'node:url';
 import * as niftiModule from 'nifti-reader-js';
 import { writeNifti1 } from '../web/js/modules/nifti-writer.js';
 import { LESION_MASK_COLORMAP_ID } from '../web/js/app/lnm-labels.js';
+import {
+  VOLUME_SPACES,
+  atlasVolumeSpace,
+  tagSpatialFile
+} from '../web/js/modules/spatial-file.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -188,7 +193,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const calls = [];
   app._runStage = async (stage) => { calls.push(stage.id); };
   // Skip the precondition gate for parcel-overlap-first pipelines.
-  app._lesionFileMatchesYeoGrid = async () => true;
+  app._lesionFileMatchesAtlasGrid = async () => true;
   app.lesionFile = {};   // satisfy precondition
   app.selectedPipeline = {
     id: 'test-pipeline',
@@ -220,7 +225,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     calls.push(stage.id);
     if (stage.id === 'fc') throw new Error('synthetic FC failure');
   };
-  app._lesionFileMatchesYeoGrid = async () => true;
+  app._lesionFileMatchesAtlasGrid = async () => true;
   app.lesionFile = {};
   app.selectedPipeline = {
     id: 'test-pipeline',
@@ -853,7 +858,9 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     0, 1, 0, 0,
     0, 0, 1, 0
   ];
+  app.selectedAtlasOptionId = 'yeo7';
   app.overlapResult = {
+    atlasOption: app.atlasOptions.find(option => option.id === 'yeo7'),
     atlas: {
       data: new Int16Array([1, 2, 7, 2]),
       dims: [2, 2, 1],
@@ -1006,7 +1013,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   );
 }
 
-// ---- Test 15: Yeo label coverage note is neutral, not a brain-mask warning ----
+// ---- Test 15: atlas label coverage note is neutral, not a brain-mask warning ----
 {
   const app = makeApp();
   const classOps = [];
@@ -1020,16 +1027,16 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const restoreDocument = useMockElements({ outsideAtlasWarning: coverageEl });
 
   try {
-    app.showYeoLabelCoverageNote(2, 7);
+    app.showAtlasCoverageNote(2, 7);
     assert.equal(
       coverageEl.textContent,
-      '5 of 7 lesion voxels are assigned to Yeo cortical network labels; 2 are unlabeled by this cortical atlas.',
-      'coverage note must report assigned and unlabeled Yeo cortical-label voxels'
+      '5 of 7 lesion voxels are assigned to Schaefer 400 parcels labels; 2 are unlabeled by this atlas.',
+      'coverage note must report assigned and unlabeled atlas-label voxels'
     );
     assert.deepEqual(classOps.at(-1), ['remove', 'hidden'],
       'coverage note should be visible when any lesion voxels are unlabeled');
 
-    app.showYeoLabelCoverageNote(0, 7);
+    app.showAtlasCoverageNote(0, 7);
     assert.equal(coverageEl.textContent, '',
       'coverage note should clear when all lesion voxels are labelled');
     assert.deepEqual(classOps.at(-1), ['add', 'hidden'],
@@ -1103,7 +1110,9 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       get textContent() { return text; }
     };
   };
+  app.selectedAtlasOptionId = 'yeo7';
   app.overlapResult = {
+    atlasOption: app.atlasOptions.find(option => option.id === 'yeo7'),
     summary: {
       networks: [
         { network: 'Visual', fractionOfLesion: 0.6 },
@@ -1317,6 +1326,122 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   } finally {
     restoreDocument();
   }
+}
+
+// ---- Test 16c: mask-review brain-mask toggle uses the native-space mask ----
+{
+  const app = makeApp();
+  const affine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  app.structuralFile = tagSpatialFile({ name: 'lnm-prealign-t1.nii' }, {
+    space: VOLUME_SPACES.MNI160,
+    dims: [160, 160, 192],
+    affine
+  });
+  app.nativeStructuralFile = tagSpatialFile({ name: 'native-t1.nii' }, {
+    space: VOLUME_SPACES.NATIVE_T1,
+    dims: [128, 128, 128],
+    affine
+  });
+  app.viewerBaseFile = app.nativeStructuralFile;
+  app.brainmaskFile = tagSpatialFile({ name: 'lnm-prealign-brainmask.nii' }, {
+    space: VOLUME_SPACES.MNI160,
+    dims: [160, 160, 192],
+    affine
+  });
+  app.nativeBrainmaskFile = tagSpatialFile({ name: 'native-brainmask.nii' }, {
+    space: VOLUME_SPACES.NATIVE_T1,
+    dims: [128, 128, 128],
+    affine
+  });
+  app.maskReviewActive = true;
+  const activeStages = new Set(['structural']);
+  const listeners = {};
+  const overlayCalls = [];
+  const makeToggle = id => ({
+    checked: true,
+    disabled: false,
+    addEventListener: (eventName, handler) => { listeners[`${id}:${eventName}`] = handler; }
+  });
+  const toggles = {
+    layerToggleT1: makeToggle('layerToggleT1'),
+    layerToggleBrainMask: makeToggle('layerToggleBrainMask'),
+    layerToggleLesionMask: makeToggle('layerToggleLesionMask'),
+    layerToggleThresholdMap: makeToggle('layerToggleThresholdMap'),
+    layerToggleAtlasQc: makeToggle('layerToggleAtlasQc')
+  };
+  const restoreDocument = useMockElements(toggles);
+  app.viewerController = {
+    getVolumeIndexForStage: stage => {
+      if (stage === 'structural') return 0;
+      return activeStages.has(stage) ? 1 : null;
+    },
+    loadOverlay: async (file, colormap, opacity, options = {}) => {
+      overlayCalls.push([file, colormap, opacity, options]);
+      if (options.stage) activeStages.add(options.stage);
+    },
+    setStageVisible: () => true
+  };
+
+  try {
+    app.bindViewerLayerToggles();
+    assert.equal(toggles.layerToggleBrainMask.disabled, false,
+      'native-space brain mask must be available during lesion-mask review');
+    assert.equal(toggles.layerToggleBrainMask.checked, false,
+      'inactive review brain mask starts unchecked until the user activates it');
+
+    listeners['layerToggleBrainMask:change']({ target: { checked: true } });
+    await waitForMicrotaskCondition(() => activeStages.has('brainmask') && toggles.layerToggleBrainMask.checked,
+      'checking brain mask in review mode must load a brainmask overlay');
+    assert.equal(overlayCalls.at(-1)[0], app.nativeBrainmaskFile,
+      'review-mode brain-mask activation must load the native-space mask, not the prealigned mask');
+    assert.equal(overlayCalls.at(-1)[3].stage, 'brainmask');
+  } finally {
+    restoreDocument();
+  }
+
+  app.viewerController = null;
+  app.nativeBrainmaskFile = null;
+  assert.equal(app.getViewerLayerAvailable('brainmask'), false,
+    'review-mode brain-mask layer must be unavailable rather than showing a wrong-space prealigned mask');
+}
+
+// ---- Test 16d: viewer overlays reject tagged space mismatches before render ----
+{
+  const app = makeApp();
+  const affine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  app.structuralFile = tagSpatialFile({ name: 'native-t1.nii' }, {
+    space: VOLUME_SPACES.NATIVE_T1,
+    dims: [2, 2, 2],
+    affine
+  });
+  app.viewerBaseFile = app.structuralFile;
+  app.brainmaskFile = tagSpatialFile({ name: 'mni-brainmask.nii' }, {
+    space: VOLUME_SPACES.MNI160,
+    dims: [2, 2, 2],
+    affine
+  });
+  let overlayCalls = 0;
+  app.viewerController = {
+    getVolumeIndexForStage: stage => stage === 'structural' ? 0 : null,
+    loadOverlay: async () => { overlayCalls += 1; }
+  };
+  await assert.rejects(
+    () => app.ensureViewerLayerLoaded('brainmask'),
+    /Brain mask overlay: base is in native-t1, overlay is in mni160/,
+    'brain-mask toggle must reject a wrong-space mask before loading the overlay'
+  );
+  assert.equal(overlayCalls, 0,
+    'wrong-space overlays must not be passed to NiiVue');
 }
 
 // ---- Test 17: threshold preview chooses patient-space projection when available ----
@@ -1638,8 +1763,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
   globalThis.caches = undefined;
+  const fetched = [];
   globalThis.fetch = async (url) => {
     const href = String(url);
+    fetched.push(href);
     if (href.includes('manifest.json')) {
       return {
         ok: true,
@@ -1717,6 +1844,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     affine: sourceAffine,
     description: 'synthetic source mask'
   }));
+  const sourceBrainmaskFile = app.brainmaskFile;
   const mni160Buffer = writeNifti1(new Uint8Array(64), {
     dims,
     spacing: [1, 1, 1],
@@ -1727,8 +1855,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
   globalThis.caches = undefined;
+  const fetched = [];
   globalThis.fetch = async (url) => {
     const href = String(url);
+    fetched.push(href);
     if (href.includes('manifest.json')) {
       return {
         ok: true,
@@ -1760,6 +1890,8 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     await app.prealignToMni160();
     const structural = decodeNiftiForTest(await app.structuralFile.arrayBuffer());
     const brainmask = decodeNiftiForTest(await app.brainmaskFile.arrayBuffer());
+    assert.equal(app.nativeBrainmaskFile, sourceBrainmaskFile,
+      'prealign must preserve the native-space brain mask for lesion-mask review overlays');
     assert.deepEqual(structural.dims, dims,
       'prealigned structural must use the fixed lnm-mni160 dims');
     assert.deepEqual(brainmask.dims, dims,
@@ -1815,6 +1947,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   });
 
   app.structuralFile = makeNiftiFile('lnm-prealign-t1.nii', mni160Buffer);
+  app.selectedAtlasOptionId = 'yeo7';
   app.hasRegistrationDisplacement = true;
   let inverseSettings = null;
   app.executor = {
@@ -1902,4 +2035,313 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/confirm/resume + threshold-preview/projection + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+// ---- Test 21: Atlas selection drives overlap metadata, labels, and bridge grid ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const schaeferData = new Uint8Array([1, 2, 0, 0, 0, 0, 0, 0]);
+  const lesionData = new Uint8Array([1, 1, 0, 0, 0, 0, 0, 0]);
+  const smallAffine = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0
+  ];
+  const schaeferAtlasBuffer = writeNifti1(schaeferData, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine: smallAffine,
+    description: 'synthetic Schaefer atlas'
+  });
+  const lesionAtlasBuffer = writeNifti1(lesionData, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine: smallAffine,
+    description: 'synthetic atlas-grid lesion'
+  });
+  const lesion160 = new Uint8Array(160 * 160 * 192);
+  lesion160[0] = 1;
+  const lesion160Buffer = writeNifti1(lesion160, {
+    dims: [160, 160, 192],
+    spacing: [1, 1, 1],
+    affine: smallAffine,
+    description: 'synthetic confirmed lesion'
+  });
+  const warpedMniBuffer = writeNifti1(lesionData, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine: smallAffine,
+    description: 'synthetic warped lesion'
+  });
+  const fcShardData = new Float32Array(16);
+  for (let v = 0; v < 8; v++) {
+    fcShardData[v] = 10;
+    fcShardData[8 + v] = 20;
+  }
+  const fcIndex = {
+    shape: [2, 2, 2, 2],
+    voxelsPerMap: 8,
+    dtype: 'float32',
+    voxelOrder: 'nifti',
+    atlasAssetId: 'schaefer400-7n-4mm',
+    atlasResolutionMm: 4,
+    channelLabels: {
+      1: 'LH_Vis_1',
+      2: 'RH_Default_2'
+    },
+    shards: [{
+      id: '001-002',
+      sourceUrl: 'https://example.test/schaefer-fc-shard-001-002.bin',
+      cacheKey: 'schaefer-fc-shard-test',
+      channelLabels: ['1', '2']
+    }]
+  };
+  const schaeferProfileJson = {
+    id: 'schaefer400-neurosynth-v7-function-profiles',
+    sourceLabel: 'Neurosynth v7 via NiMARE (parcel-wise Schaefer ROI decode)',
+    method: 'NiMARE ROIAssociationDecoder',
+    networkProfiles: {
+      LH_Vis_1: [{ term: 'visual', score: 0.8, rank: 1 }],
+      RH_Default_2: [{ term: 'language', score: 0.7, rank: 1 }]
+    }
+  };
+  const tableEl = { innerHTML: '', children: [], appendChild(child) { this.children.push(child); } };
+  const downloadEl = { disabled: true };
+  const networkDownloadEl = { disabled: true };
+  const coverageEl = { textContent: '', classList: makeClassList(['hidden']) };
+  const emptyResultEl = { classList: makeClassList(['hidden']) };
+  const emptyTableEl = { innerHTML: '' };
+  const directProfileTableEl = { innerHTML: '', children: [], appendChild(child) { this.children.push(child); } };
+  const restoreDocument = useMockElements({
+    atlasSelect: { value: 'yeo7', options: [], addEventListener: () => {} },
+    networkOverlapTable: tableEl,
+    downloadOverlapCsv: downloadEl,
+    downloadNetworkMapButton: networkDownloadEl,
+    outsideAtlasWarning: coverageEl,
+    affectedNetworkResults: emptyResultEl,
+    affectedNetworkTable: emptyTableEl,
+    mapFunctionProfileResults: emptyResultEl,
+    mapFunctionProfileTable: emptyTableEl,
+    directFunctionProfileResults: emptyResultEl,
+    directFunctionProfileTable: directProfileTableEl
+  });
+  const originalCreateElement = globalThis.document.createElement;
+  const renderedText = [];
+  globalThis.document.createElement = (tagName) => {
+    let text = '';
+    return {
+      tagName,
+      children: [],
+      style: {},
+      classList: makeClassList(),
+      appendChild(child) { this.children.push(child); },
+      setAttribute: () => {},
+      set textContent(value) {
+        text = value;
+        renderedText.push(value);
+      },
+      get textContent() { return text; }
+    };
+  };
+
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  globalThis.caches = undefined;
+  const selectableAtlasFetched = [];
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    selectableAtlasFetched.push(href);
+    if (href.includes('manifest.json')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          const schaeferAtlasEntry = {
+            sourceUrl: 'https://example.test/schaefer400.nii',
+            cacheKey: 'schaefer400-test',
+            dims: [2, 2, 2],
+            resolutionMm: 1,
+            supportStatus: 'supported',
+            parcelLabels: {
+              1: 'LH_Vis_1',
+              2: 'RH_Default_2'
+            },
+            networkLabels: {
+              1: 'Visual',
+              2: 'Default'
+            }
+          };
+          return {
+            atlasAssets: [{
+              id: 'schaefer400-7n-2mm',
+              ...schaeferAtlasEntry
+            }, {
+              id: 'schaefer400-7n-4mm',
+              ...schaeferAtlasEntry,
+              sourceUrl: 'https://example.test/schaefer400-4mm.nii',
+              cacheKey: 'schaefer400-4mm-test',
+              resolutionMm: 4
+            }],
+            connectomeAssets: [{
+              id: 'schaefer400-fc-pack-development-n155-4mm',
+              sourceUrl: 'https://example.test/schaefer-fc.index.json',
+              indexSourceUrl: 'https://example.test/schaefer-fc.index.json',
+              cacheKey: 'schaefer-fc-test',
+              supportStatus: 'supported',
+              atlasAssetId: 'schaefer400-7n-4mm',
+              atlasResolutionMm: 4,
+              dtype: 'float32',
+              voxelOrder: 'nifti',
+              weightSource: 'parcel',
+              channelCount: 2
+            }],
+            annotationAssets: [{
+              id: 'schaefer400-neurosynth-v7-function-profiles',
+              sourceUrl: 'https://example.test/schaefer400-function-profiles.json',
+              cacheKey: 'schaefer400-function-profiles-test',
+              supportStatus: 'supported'
+            }]
+          };
+        }
+      };
+    }
+    if (href === 'https://example.test/schaefer400.nii') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return schaeferAtlasBuffer; }
+      };
+    }
+    if (href === 'https://example.test/schaefer400-4mm.nii') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return schaeferAtlasBuffer; }
+      };
+    }
+    if (href === 'https://example.test/schaefer-fc.index.json') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return new TextEncoder().encode(JSON.stringify(fcIndex)).buffer; }
+      };
+    }
+    if (href === 'https://example.test/schaefer-fc-shard-001-002.bin') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return fcShardData.buffer; }
+      };
+    }
+    if (href === 'https://example.test/schaefer400-function-profiles.json') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() { return new TextEncoder().encode(JSON.stringify(schaeferProfileJson)).buffer; }
+      };
+    }
+    throw new Error(`unexpected fetch in selectable-atlas test: ${href}`);
+  };
+
+  try {
+    app.handleAtlasSelectionChange('schaefer400');
+    const option = app.getAtlasOption();
+    assert.equal(option.overlapAtlasAssetId, 'schaefer400-7n-2mm',
+      'Atlas selection must change the overlap atlas asset');
+    assert.equal(option.connectomeAssetId, 'schaefer400-fc-pack-development-n155-4mm',
+      'Atlas selection must change the connectome asset');
+    assert.equal(option.weightSource, 'parcel',
+      'Atlas selection must change the FC weighting mode to parcel for Schaefer');
+
+    app.lesionFile = tagSpatialFile(makeNiftiFile('lesion-wrong-grid.nii', lesionAtlasBuffer), {
+      space: atlasVolumeSpace('yeo7-mni2mm'),
+      dims: [2, 2, 2],
+      affine: [
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+      ]
+    });
+    await assert.rejects(
+      () => app.runAtlasOverlap(),
+      /Direct lesion overlap: expected atlas:schaefer400-7n-2mm, got atlas:yeo7-mni2mm/,
+      'direct overlap must reject a lesion tagged for a different atlas grid'
+    );
+
+    app.lesionFile = makeNiftiFile('lesion-schaefer-grid.nii', lesionAtlasBuffer);
+    await app.runAtlasOverlap();
+    assert.deepEqual(
+      app.overlapResult.summary.networks.map(row => row.network),
+      ['LH_Vis_1', 'RH_Default_2'],
+      'Schaefer overlap table data must use parcel labels, not Yeo network names'
+    );
+    assert.equal(downloadEl.disabled, false,
+      'atlas overlap must enable CSV export after the selected-atlas table is populated');
+    await app._functionalProfileRenderPromise;
+    assert.ok(renderedText.includes('Neurosynth v7 via NiMARE (parcel-wise Schaefer ROI decode)'),
+      'Schaefer direct overlap must render its functional-profile source label');
+    assert.ok(renderedText.includes('Atlas label drivers'),
+      `Schaefer direct overlap must use atlas-label functional-profile driver copy; got ${renderedText.join(' | ')}`);
+    assert.ok(renderedText.includes('language') || renderedText.includes('visual'),
+      'Schaefer direct overlap must rank terms from parcel-label profiles');
+    let fcStack = null;
+    app.viewerController = {
+      loadVolumeStack: async entries => { fcStack = entries; },
+      getVolumeIndexForStage: () => null
+    };
+    await app.runFcNetworkMap();
+    assert.deepEqual(app.networkMapDims, [2, 2, 2],
+      'Schaefer FC map must use the affected-map atlas grid');
+    assert.equal(app.networkMapData[0], 15,
+      'Schaefer FC map must weight the selected parcel channels');
+    assert.equal(networkDownloadEl.disabled, false,
+      'supported Schaefer FC must enable network-map download');
+    assert.ok(selectableAtlasFetched.includes('https://example.test/schaefer-fc.index.json'),
+      'supported Schaefer FC must fetch the lazy index');
+    assert.ok(selectableAtlasFetched.includes('https://example.test/schaefer-fc-shard-001-002.bin'),
+      'supported Schaefer FC must fetch the shard containing lesion-hit parcels');
+    assert.ok(!selectableAtlasFetched.includes('https://example.test/schaefer-fc.bin'),
+      'supported Schaefer FC must not fetch a whole-pack binary');
+    assert.equal(fcStack?.at(-1)?.stage, 'network-map',
+      'supported Schaefer FC must render the network-map overlay on the atlas grid');
+    assert.equal(fcStack?.some(entry => entry.stage === 'lesion'), false,
+      'Schaefer FC display must skip the 2 mm overlap lesion on the 4 mm FC-map grid');
+    assert.ok(
+      app._messages.some(m => /Lesion overlay skipped on network map: Network-map lesion overlay: base is in atlas:schaefer400-7n-4mm, overlay is in atlas:schaefer400-7n-2mm/.test(m)),
+      `Schaefer FC display must explain skipped cross-grid lesion overlay; got ${app._messages.join(' | ')}`
+    );
+
+    app.lesionMaskFile = makeNiftiFile('confirmed-lesion.nii', lesion160Buffer);
+    app.lesionMaskConfirmed = true;
+    app.structuralFile = makeNiftiFile('structural.nii', lesion160Buffer);
+    let baseLoads = 0;
+    let overlayLoads = 0;
+    app.viewerController = {
+      loadBaseVolume: async () => { baseLoads += 1; },
+      loadOverlay: async () => { overlayLoads += 1; },
+      getVolumeIndexForStage: () => null
+    };
+    app.executor = {
+      runWarpMask: async () => {
+        queueMicrotask(() => {
+          app.handleStageData({ stage: 'mni-lesion', niftiData: warpedMniBuffer });
+        });
+      }
+    };
+    const bridgeFile = await app.applyRegistrationToLesion();
+    assert.equal(bridgeFile.name, 'lnm-lesion-schaefer400.nii',
+      'registration bridge output filename must reflect the selected atlas');
+    const bridged = decodeNiftiForTest(await bridgeFile.arrayBuffer());
+    assert.deepEqual(bridged.dims, [2, 2, 2],
+      'registration bridge must resample the warped lesion onto the selected atlas grid');
+    assert.equal(baseLoads + overlayLoads, 0,
+      'atlas-grid lesion masks must not be rendered on the patient structural viewer stack');
+  } finally {
+    globalThis.document.createElement = originalCreateElement;
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+    restoreDocument();
+  }
+}
+
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/confirm/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

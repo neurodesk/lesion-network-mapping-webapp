@@ -19,7 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const { fetchCacheFirst } =
+const { fetchCacheFirst, loadConnectomeChannelsFromManifest } =
   await import(path.join(ROOT, 'web/js/modules/atlas-loader.js'));
 
 // Recording fake Cache that captures every put/match argument.
@@ -232,4 +232,77 @@ function restoreFetch() { globalThis.fetch = ORIG_FETCH; }
   } finally { restoreFetch(); }
 }
 
-console.log('atlas-loader cache OK: URL fragment fix + streaming progress + 6 round-trip / failure cases.');
+// ---- Test 9: Schaefer-style lazy channel loading fetches only needed shards ----
+{
+  const originalCaches = globalThis.caches;
+  globalThis.caches = undefined;
+  const fetched = [];
+  const index = {
+    dtype: 'float16',
+    shape: [4, 2, 1, 1],
+    voxelsPerMap: 2,
+    shards: [
+      {
+        id: '001-002',
+        sourceUrl: 'https://example.com/schaefer-shard-a.bin',
+        cacheKey: 'schaefer-shard-a',
+        channelLabels: ['1', '2']
+      },
+      {
+        id: '003-004',
+        sourceUrl: 'https://example.com/schaefer-shard-b.bin',
+        cacheKey: 'schaefer-shard-b',
+        channelLabels: ['3', '4']
+      }
+    ]
+  };
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    fetched.push(href);
+    if (href.includes('manifest.json')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            connectomeAssets: [{
+              id: 'schaefer400-test-pack',
+              sourceUrl: 'https://example.com/schaefer-full.bin',
+              indexSourceUrl: 'https://example.com/schaefer-index.json',
+              cacheKey: 'schaefer-test-pack',
+              supportStatus: 'supported'
+            }]
+          };
+        }
+      };
+    }
+    if (href === 'https://example.com/schaefer-index.json') {
+      const payload = new TextEncoder().encode(JSON.stringify(index)).buffer;
+      return { ok: true, status: 200, async arrayBuffer() { return payload; } };
+    }
+    if (href === 'https://example.com/schaefer-shard-b.bin') {
+      const payload = new Uint8Array([1, 2, 3, 4]).buffer;
+      return { ok: true, status: 200, async arrayBuffer() { return payload; } };
+    }
+    throw new Error(`unexpected fetch in lazy-channel test: ${href}`);
+  };
+
+  try {
+    const result = await loadConnectomeChannelsFromManifest('schaefer400-test-pack', ['3']);
+    assert.equal(result.shards.length, 1,
+      'lazy connectome loading must return only shards containing requested channels');
+    assert.deepEqual(result.shards[0].neededLabels, ['3'],
+      'lazy connectome loading must record the exact requested labels per shard');
+    assert.ok(!fetched.includes('https://example.com/schaefer-full.bin'),
+      'lazy connectome loading must not fetch the whole Schaefer pack');
+    assert.ok(!fetched.includes('https://example.com/schaefer-shard-a.bin'),
+      'lazy connectome loading must not fetch unrelated Schaefer shards');
+    assert.ok(fetched.includes('https://example.com/schaefer-shard-b.bin'),
+      'lazy connectome loading must fetch the shard containing the requested parcel');
+  } finally {
+    restoreFetch();
+    globalThis.caches = originalCaches;
+  }
+}
+
+console.log('atlas-loader cache OK: URL fragment fix + streaming progress + lazy channel loading + failure cases.');

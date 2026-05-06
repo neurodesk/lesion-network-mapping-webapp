@@ -45,7 +45,7 @@
   <aside class="app-sidebar">
     <div class="sidebar-scroll">
 
-      <!-- 1. INPUT — choose a structural T1 or a Yeo-aligned lesion mask. -->
+      <!-- 1. INPUT — choose a structural T1 or an atlas-aligned lesion mask. -->
       <section class="sidebar-section" id="stepLoadSection">
         <h2 class="section-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -74,11 +74,18 @@
           2. Run analysis
           <button type="button" class="help-icon" aria-label="Run analysis help">i
             <span class="help-popover" role="tooltip">
-              Runs the selected chain: brain extraction, prealign when needed, lesion segmentation, registration, Yeo overlap, FC map, and thresholding.
+              Runs the selected chain: brain extraction, prealign when needed, lesion segmentation, registration, atlas overlap, FC map, and thresholding.
             </span>
           </button>
         </h2>
         <div class="section-content">
+          <div class="param-group">
+            <label class="param-label" for="atlasSelect">Atlas</label>
+            <select id="atlasSelect" class="select-input">
+              <option value="schaefer400" selected>Schaefer 400 parcels</option>
+              <option value="yeo7">Yeo 7 networks</option>
+            </select>
+          </div>
           <div class="step-buttons">
             <button class="btn btn-primary" id="runFullPipelineButton">
               Run analysis
@@ -125,8 +132,8 @@
                     aria-label="Registered patient opacity over fixed MNI template"
                   >
                 </div>
-                <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">6 Warp lesion → Yeo grid</button>
-                <button class="btn btn-secondary btn-sm" id="computeOverlapButton">7 Compute Yeo overlap</button>
+                <button class="btn btn-secondary btn-sm" id="applyRegistrationToLesionButton">6 Warp lesion → atlas grid</button>
+                <button class="btn btn-secondary btn-sm" id="computeOverlapButton">7 Compute atlas overlap</button>
                 <button class="btn btn-secondary btn-sm" id="computeNetworkMapButton">8 Compute network map</button>
               </div>
             </div>
@@ -146,7 +153,7 @@
             <h3>Direct lesion overlap</h3>
             <button type="button" class="help-icon" aria-label="Direct lesion overlap help">i
               <span class="help-popover" role="tooltip">
-                Networks listed here contain lesion voxels directly. Lesion % is the share of lesion voxels in each Yeo network.
+                Atlas labels listed here contain lesion voxels directly. Lesion % is the share of lesion voxels in each label.
               </span>
             </button>
           </div>
@@ -154,7 +161,7 @@
           <table id="networkOverlapTable" class="results-table">
             <thead>
               <tr>
-                <th>Network</th>
+                <th>Atlas label</th>
                 <th>Voxels</th>
                 <th>Lesion %</th>
               </tr>
@@ -166,7 +173,7 @@
               <h3>Functional associations from direct lesion overlap</h3>
               <button type="button" class="help-icon" aria-label="Direct functional associations help">i
                 <span class="help-popover" role="tooltip">
-                  Exploratory literature terms are weighted by the same Yeo networks that contain lesion voxels directly; they are not clinical predictions.
+                  Exploratory literature terms are available for selected atlas labels; they are not clinical predictions.
                 </span>
               </button>
             </div>
@@ -175,7 +182,7 @@
                 <tr>
                   <th>Term</th>
                   <th>Score</th>
-                  <th>Network drivers</th>
+                  <th>Atlas label drivers</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -211,14 +218,14 @@
                 <h3>Connectivity-map effects</h3>
                 <button type="button" class="help-icon" aria-label="Connectivity-map effects help">i
                   <span class="help-popover" role="tooltip">
-                    Networks listed here contain voxels surviving the thresholded connectivity map. Map % is the share of thresholded map voxels in each Yeo network.
+                    Atlas labels listed here contain voxels surviving the thresholded connectivity map. Map % is the share of thresholded map voxels in each label.
                   </span>
                 </button>
               </div>
               <table id="affectedNetworkTable" class="results-table">
                 <thead>
                   <tr>
-                    <th>Network</th>
+                    <th>Atlas label</th>
                     <th>Voxels</th>
                     <th>Map %</th>
                   </tr>
@@ -230,7 +237,7 @@
                   <h3>Functional associations from connectivity-map effects</h3>
                   <button type="button" class="help-icon" aria-label="Connectivity-map functional associations help">i
                     <span class="help-popover" role="tooltip">
-                      Exploratory literature terms are weighted by Yeo networks containing voxels that survive the thresholded connectivity map; they are not clinical predictions.
+                      Exploratory literature terms are available for selected atlas labels; they are not clinical predictions.
                     </span>
                   </button>
                 </div>
@@ -239,7 +246,7 @@
                     <tr>
                       <th>Term</th>
                       <th>Score</th>
-                      <th>Network drivers</th>
+                      <th>Atlas label drivers</th>
                     </tr>
                   </thead>
                   <tbody></tbody>
@@ -362,7 +369,7 @@
           </label>
           <label class="viewer-checkbox">
             <input type="checkbox" id="layerToggleAtlasQc" checked disabled>
-            <span>Yeo atlas</span>
+            <span>Atlas</span>
           </label>
         </div>
 
@@ -432,7 +439,7 @@
         </div>
       </div>
       <p>This app loads a structural T1 (or a manual MNI-aligned lesion mask) locally, runs the full lesion-network-mapping chain in the browser, and never uploads patient data.</p>
-      <p>The pipeline: SynthStrip brain extraction &rarr; SynthStroke baseline lesion segmentation &rarr; SynthMorph deformable registration to MNI152 (160<sup>3</sup> 1mm) &rarr; affine-aware resample to the Yeo7 grid (99&times;117&times;95 2mm) &rarr; Yeo7 parcel overlap &rarr; Yeo7 group-FC weighted-sum (ADHD-200 N=30) &rarr; threshold + cluster cleanup. All stages are exposed as individual buttons; "Run full pipeline" chains them in one click.</p>
+      <p>The pipeline: SynthStrip brain extraction &rarr; SynthStroke baseline lesion segmentation &rarr; SynthMorph deformable registration to MNI152 (160<sup>3</sup> 1mm) &rarr; affine-aware resample to the selected atlas grid &rarr; atlas overlap &rarr; group-FC weighted-sum &rarr; threshold + cluster cleanup. All stages are exposed as individual buttons; "Run full pipeline" chains them in one click.</p>
       <h4>Version</h4>
       <div class="about-version-table">
         <div class="about-version-row">
@@ -484,6 +491,10 @@
         <div class="citation-item">
           <strong>Yeo 7-network atlas</strong>
           <p>Yeo BTT, Krienen FM, Sepulcre J, et al. The organization of the human cerebral cortex estimated by intrinsic functional connectivity. Journal of Neurophysiology. 2011;106(3):1125-65.</p>
+        </div>
+        <div class="citation-item">
+          <strong>Schaefer 400-parcel atlas</strong>
+          <p>Schaefer A, Kong R, Gordon EM, et al. Local-global parcellation of the human cerebral cortex from intrinsic functional connectivity MRI. Cerebral Cortex. 2018;28(9):3095-3114.</p>
         </div>
       </div>
       <div class="citation-section">

@@ -16,6 +16,7 @@ import { parse } from 'acorn';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP_PATH = path.join(ROOT, 'web/js/lnm-app.js');
+const ATLAS_OPTIONS_PATH = path.join(ROOT, 'web/js/app/atlas-options.js');
 
 assert.ok(fs.existsSync(APP_PATH), 'web/js/lnm-app.js must exist');
 assert.ok(
@@ -24,6 +25,7 @@ assert.ok(
 );
 
 const src = fs.readFileSync(APP_PATH, 'utf8');
+const atlasOptionsSrc = fs.readFileSync(ATLAS_OPTIONS_PATH, 'utf8');
 
 // Acorn parse — catches stray syntax errors before they ship.
 parse(src, { ecmaVersion: 'latest', sourceType: 'module' });
@@ -74,7 +76,8 @@ const requiredImports = [
   /from\s+['"]\.\/app\/lnm-tasks\.js['"]/,
   /from\s+['"]\.\/app\/lnm-labels\.js['"]/,
   /from\s+['"]\.\/modules\/parcel-overlap\.js['"]/,
-  /from\s+['"]\.\/modules\/atlas-loader\.js['"]/
+  /from\s+['"]\.\/modules\/atlas-loader\.js['"]/,
+  /from\s+['"]\.\/modules\/spatial-file\.js['"]/
 ];
 for (const re of requiredImports) {
   assert.match(src, re, `lnm-app.js must import ${re}`);
@@ -90,31 +93,45 @@ for (const re of forbiddenImports) {
   assert.doesNotMatch(src, re, `lnm-app.js must not reference ${re}`);
 }
 
-// runYeoOverlap is the linchpin of the Phase 1 flow: it must call both
+// runAtlasOverlap/runYeoOverlap is the linchpin of the overlap flow: it must call both
 // computeParcelOverlap and summarizeNetworkOverlap from parcel-overlap.js so
-// the UI gets per-network aggregates. The acorn parse above guarantees the
+// the UI gets per-atlas aggregates. The acorn parse above guarantees the
 // file is parseable; here we pin behaviour.
 assert.match(src, /computeParcelOverlap\s*\(/,
-  'runYeoOverlap must call computeParcelOverlap');
+  'atlas overlap must call computeParcelOverlap');
 assert.match(src, /summarizeNetworkOverlap\s*\(/,
-  'runYeoOverlap must call summarizeNetworkOverlap');
+  'Yeo atlas overlap must still call summarizeNetworkOverlap');
 
-// Yeo asset ID matches the manifest entry; if these drift the loader silently
-// fails. Pin the string here so the test catches typos.
-assert.match(src, /['"]yeo7-2mm['"]/,
-  'lnm-app.js must reference the yeo7-2mm asset ID literal');
+// Atlas selection must be driven by the shared registry instead of hidden
+// hard-coded Yeo literals.
+assert.match(src, /from\s+['"]\.\/app\/atlas-options\.js['"]/,
+  'lnm-app.js must import the selectable atlas registry');
+assert.match(src, /atlasSelect/,
+  'lnm-app.js must bind the visible Atlas selector');
+assert.match(src, /runAtlasOverlap\s*\(/,
+  'lnm-app.js must expose an atlas-neutral overlap method');
+assert.match(src, /loadConnectomeChannelsFromManifest\s*\(/,
+  'Schaefer connectomes must be loadable through lazy channel loading');
+assert.match(src, /tagSpatialFile\s*\(/,
+  'pipeline files must be tagged with spatial metadata at app boundaries');
+assert.match(src, /assertSameSpace\s*\(/,
+  'viewer overlays must assert that base and overlay share a spatial contract');
+assert.match(src, /assertSpace\s*\(/,
+  'atlas and registration stages must assert expected input spaces');
+assert.match(src, /viewerBaseFile/,
+  'viewer overlay checks must track the active viewer base, not only structuralFile');
+assert.match(src, /assertVolumeStackSpaces\s*\(/,
+  'multi-volume viewer stacks must validate all overlay spaces before rendering');
 
-// Phase 1c.2 + coverage-note follow-up: the reducer still reports
-// voxelsOutsideAtlas, but the UI must present it as unlabeled Yeo cortical
-// label coverage rather than a brain-mask warning.
+// Phase 1c.2 + atlas selector follow-up: the reducer still reports
+// voxelsOutsideAtlas, but the UI must present it as unlabeled atlas-label
+// coverage rather than a brain-mask warning.
 assert.match(src, /voxelsOutsideAtlas/,
-  'lnm-app.js must reference voxelsOutsideAtlas (Yeo label coverage-note wiring)');
+  'lnm-app.js must reference voxelsOutsideAtlas (atlas label coverage-note wiring)');
 assert.match(src, /outsideAtlasWarning/,
   'lnm-app.js must keep the #outsideAtlasWarning element for compatibility');
-assert.match(src, /Yeo cortical network labels/,
-  'coverage note must describe labelled Yeo cortical network voxels');
-assert.match(src, /unlabeled by this cortical atlas/,
-  'coverage note must describe label-0 voxels as unlabeled by the cortical atlas');
+assert.match(src, /selected atlas|Atlas set to|showAtlasCoverageNote/,
+  'coverage note must be atlas-neutral');
 
 // runYeoOverlap must call the atlas loader rather than the Phase 1c.1 stub.
 assert.match(src, /loadAtlasFromManifest|fetchAndDecodeAtlas|loadAtlas/,
@@ -147,9 +164,9 @@ assert.match(src, /['"]lnm-mni160['"]/,
 assert.match(src, /executionProviders:\s*model\.browserRuntime\?\.executionProviders/,
   'orchestrator must pass SynthMorph manifest executionProviders into the worker');
 
-// Phase 4.4: FC weighted-sum wiring. runFcNetworkMap loads the
-// yeo7-fc-pack via loadConnectomeFromManifest, calls fcWeightedSum,
-// wraps as NIfTI, enables #downloadNetworkMapButton.
+// Phase 4.4+: FC weighted-sum wiring. runFcNetworkMap loads the selected
+// connectome, calls fcWeightedSum, wraps as NIfTI, enables
+// #downloadNetworkMapButton.
 assert.match(src, /from\s+['"]\.\/modules\/fc-weighted-sum\.js['"]/,
   'lnm-app.js must import fc-weighted-sum.js');
 assert.match(src, /\bfcWeightedSum\s*\(/,
@@ -157,25 +174,29 @@ assert.match(src, /\bfcWeightedSum\s*\(/,
 assert.match(src, /\bdecodeFcPack\s*\(/,
   'orchestrator must decode the FC pack via decodeFcPack');
 assert.match(src, /\bsummaryToNetworkWeights\s*\(/,
-  'orchestrator must convert overlap summary to network weights');
-assert.match(src, /['"]yeo7-fc-pack['"]/,
-  'orchestrator must reference the yeo7-fc-pack connectome asset id literal');
+  'orchestrator must convert Yeo overlap summary to network weights');
+assert.match(src, /\bparcelResultToChannelWeights\s*\(/,
+  'orchestrator must convert Schaefer parcel overlaps to channel weights');
 assert.match(src, /\bloadConnectomeFromManifest\s*\(/,
   'orchestrator must load the FC pack via loadConnectomeFromManifest');
 assert.match(src, /this\.networkMapAffine\s*=\s*flatAffine/,
   'runFcNetworkMap must retain the atlas affine for network-map NIfTI outputs');
 assert.match(src, /affine:\s*this\.networkMapAffine/,
-  'network-map NIfTI writers must use the Yeo atlas affine, not a default centered grid');
+  'network-map NIfTI writers must use the selected atlas affine, not a default centered grid');
 assert.match(src, /scalar:\s*true[\s\S]*?symmetricCal:\s*true/,
   'network-map overlay must render as a scalar t-map with symmetric calibration');
 assert.match(src, /\bdisplayNetworkMapOnYeoTemplate\s*\(/,
-  'runFcNetworkMap must display FC maps on a Yeo-grid display base');
+  'Yeo display helper alias must remain for compatibility');
+assert.match(src, /\bdisplayNetworkMapOnAtlasTemplate\s*\(/,
+  'runFcNetworkMap must display FC maps on the selected atlas-space display base');
 assert.match(src, /\bbuildYeoBrainMaskBaseFile\s*\(/,
-  'network-map display must use a Yeo atlas brain-mask base with matching FOV');
+  'Yeo brain-mask display helper alias must remain for compatibility');
+assert.match(src, /\bbuildAtlasBrainMaskBaseFile\s*\(/,
+  'network-map display must use an atlas brain-mask base with matching FOV');
 assert.match(src, /\bloadVolumeStack\s*\(/,
   'network-map display must replace the patient-space viewer stack with an atlas-space stack');
-assert.match(src, /stage:\s*['"]yeo-brain-mask['"]/,
-  'network-map display base must be stage-tracked as yeo-brain-mask');
+assert.match(src, /stage:\s*['"]atlas-brain-mask['"]/,
+  'network-map display base must be stage-tracked as atlas-brain-mask');
 assert.match(src, /downloadNetworkMapButton[\s\S]*?disabled\s*=\s*false|disabled\s*=\s*false[\s\S]*?downloadNetworkMapButton/,
   'lnm-app.js must enable #downloadNetworkMapButton after a successful run');
 
@@ -348,8 +369,12 @@ assert.match(src, /rankFunctionalTerms\s*\(/,
   'lnm-app.js must rank terms from network-weighted summaries');
 assert.match(src, /renderFunctionalProfileTable\s*\(/,
   'lnm-app.js must render functional profile result tables');
-assert.match(src, /['"]yeo7-neurosynth-v7-function-profiles['"]/,
-  'lnm-app.js must reference the Yeo7 Neurosynth/NiMARE profile asset id literal');
+assert.match(atlasOptionsSrc, /functionProfileAssetId[\s\S]*?['"]yeo7-neurosynth-v7-function-profiles['"]/,
+  'atlas registry must attach the Yeo7 Neurosynth/NiMARE profile asset id to the Yeo option');
+assert.match(atlasOptionsSrc, /functionProfileAssetId[\s\S]*?['"]schaefer400-neurosynth-v7-function-profiles['"]/,
+  'atlas registry must attach the Schaefer400 Neurosynth/NiMARE profile asset id to the Schaefer option');
+assert.match(src, /Atlas label drivers/,
+  'parcel-based functional profile tables must use atlas-label driver copy');
 assert.match(src, /directFunctionProfileTable/,
   'direct lesion overlap must render a functional profile table');
 assert.match(src, /mapFunctionProfileTable/,
@@ -365,10 +390,12 @@ assert.match(src, /URL\.createObjectURL\s*\(/,
 assert.match(src, /\.csv['"]/,
   'exportCsv must reference a .csv filename');
 
-// renderOverlapTable receives the Yeo7 colormap so the bars match the
-// canonical Yeo palette across the app + the NiiVue overlay.
+// renderOverlapTable receives atlas colormaps so bars match the active
+// atlas palette across the app + the NiiVue overlay.
 assert.match(src, /YEO7_COLORMAP/,
-  'overlap rendering must reference YEO7_COLORMAP for bar colors');
+  'overlap rendering must keep the YEO7_COLORMAP path for Yeo compatibility');
+assert.match(src, /SCHAEFER400_COLORMAP/,
+  'overlap rendering must support a Schaefer400 colormap');
 
 // Once an overlap result exists, the CSV download button must become
 // interactive. Source-grep the toggle so a regression that leaves the button

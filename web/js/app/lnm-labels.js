@@ -48,3 +48,39 @@ export const YEO7_NETWORK_LABELS = Object.fromEntries(
     .filter(label => label.index > 0)
     .map(label => [label.index, label.name])
 );
+
+function hsvToRgb(h, s, v) {
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255)
+  ];
+}
+
+function buildSchaeferColormap() {
+  const labels = ['Background'];
+  const R = [0], G = [0], B = [0], A = [0], I = [0];
+  for (let label = 1; label <= 400; label++) {
+    const hue = (label * 137.508) % 360;
+    const [r, g, b] = hsvToRgb(hue, 0.62, 0.88);
+    labels.push(`Parcel ${label}`);
+    R.push(r);
+    G.push(g);
+    B.push(b);
+    A.push(255);
+    I.push(label);
+  }
+  return { R, G, B, A, I, labels };
+}
+
+export const SCHAEFER400_COLORMAP = buildSchaeferColormap();

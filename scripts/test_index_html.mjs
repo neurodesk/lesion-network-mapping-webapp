@@ -36,6 +36,7 @@ const requiredIds = [
   '#computeOverlapButton',
   '#outsideAtlasWarning',
   '#structuralFileInput',
+  '#atlasSelect',
   '#lesionFileInput',
   // Phase 2a.1.4b additions: brain-extraction button (explicit trigger) and
   // the brain-mask download button.
@@ -122,9 +123,15 @@ const advancedWorkflow = workflowStart >= 0 && workflowEnd > workflowStart
 assert.ok(advancedWorkflow, 'advanced controls must expose an ordered workflow container');
 assert.match(
   advancedWorkflow,
-  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*Manual mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → Yeo grid[\s\S]*7 Compute Yeo overlap[\s\S]*8 Compute network map/,
+  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*Manual mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → atlas grid[\s\S]*7 Compute atlas overlap[\s\S]*8 Compute network map/,
   'advanced controls must show the seed/manual mask review workflow in execution order'
 );
+assert.match(html, /<label\b[^>]*for=["']atlasSelect["'][^>]*>Atlas<\/label>/,
+  'atlas selector label must be exactly Atlas');
+assert.match(html, /<option\s+value=["']schaefer400["']\s+selected>Schaefer 400 parcels<\/option>/,
+  'atlas selector must select Schaefer 400 parcels by default');
+assert.match(html, /<option\s+value=["']yeo7["']>Yeo 7 networks<\/option>/,
+  'atlas selector must keep Yeo 7 networks selectable for compatibility');
 assert.match(
   advancedWorkflow,
   /aria-label=["']Lesion mask source choice["'][\s\S]*id=["']runLesionSegmentationButton["'][\s\S]*id=["']startManualMaskButton["']/,
@@ -195,7 +202,7 @@ assert.doesNotMatch(html, /auto-promoted on file drop|auto-fires/i,
   'UI copy must not imply processing starts on file load');
 assert.match(html, /Direct lesion overlap/,
   'direct lesion result section must clearly label the lesion-overlap table');
-assert.match(html, /Networks listed here contain lesion voxels directly/,
+assert.match(html, /Atlas labels listed here contain lesion voxels directly/,
   'direct lesion help must explain that the first table is direct lesion overlap');
 assert.match(html, /Threshold connectivity map/,
   'threshold panel must identify the second result source as a connectivity map');
@@ -209,8 +216,10 @@ assert.match(html, /Functional associations from direct lesion overlap/,
   'direct lesion functional profile section must clearly identify its source table');
 assert.match(html, /Functional associations from connectivity-map effects/,
   'connectivity-map functional profile section must clearly identify its source table');
-assert.match(html, /Exploratory literature terms are weighted by the same Yeo networks/,
+assert.match(html, /Exploratory literature terms are available for selected atlas labels/,
   'direct functional profile help must frame terms as exploratory literature associations');
+assert.match(html, /Atlas label drivers/,
+  'static functional profile tables must use atlas-label driver copy for the default Schaefer atlas');
 assert.match(html, /they are not clinical predictions/,
   'functional profile help must avoid clinical prediction framing');
 assert.match(html, /Show subject atlas/,

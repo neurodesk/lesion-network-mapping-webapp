@@ -22,8 +22,8 @@ assert.ok(Array.isArray(LNM_PIPELINES) && LNM_PIPELINES.length >= 1,
   'LNM_PIPELINES must export a non-empty array');
 
 // Phase 1 ships the 'lnm-yeo-only' pipeline (manual mask -> Yeo7 overlap).
-// The 'lnm-default' Schaefer/GSP1000 pipeline is declared but stages may be
-// marked unsupported until later phases.
+// The 'lnm-default' Schaefer/development-fMRI pipeline remains hidden because
+// the visible Atlas selector is the supported Schaefer surface.
 const yeo = getPipelineById('lnm-yeo-only');
 assert.ok(yeo, "Pipeline 'lnm-yeo-only' must exist for Phase 1");
 assert.ok(typeof yeo.displayName === 'string' && yeo.displayName.length > 0);
@@ -141,7 +141,7 @@ assert.equal(isPipelineRunnable(getPipelineById('lnm-network-map')), false,
 assert.equal(isPipelineRunnable(getPipelineById('lnm-yeo-auto')), true,
   'lnm-yeo-auto must be a runnable pipeline (the visible default)');
 assert.equal(isPipelineRunnable(getPipelineById('lnm-default')), false,
-  'lnm-default is a Schaefer400/GSP1000 placeholder; must stay hidden');
+  'lnm-default is legacy internal wiring; Schaefer is selected through Atlas');
 
 // Phase 34: lnm-yeo-auto must include the prealign stage between
 // brain-extraction and lesion segmentation so the auto chain swallows

@@ -5,11 +5,10 @@
 // connectome). Asset IDs resolve against web/models/manifest.json so the
 // loader can fetch the correct file from a CDN.
 //
-// Phase 1 ships only the 'lnm-yeo-only' pipeline (manual lesion mask in MNI
-// space -> Yeo 7-network overlap). Later phases extend with auto-segmentation,
-// MNI registration, and parcel-FC weighted sums; their stages are declared
-// but their modules / assets are not yet implemented. isStageRunnable() is
-// the single source of truth for whether the UI is allowed to invoke a stage.
+// Phase 1 shipped the 'lnm-yeo-only' compatibility pipeline (manual lesion mask
+// in MNI space -> Yeo 7-network overlap). The visible app now uses the Atlas
+// selector to choose the overlap atlas/connectome while retaining those hidden
+// Yeo paths for old smoke tests and programmatic manual-mask runs.
 
 export const LNM_PIPELINES = [
   {
@@ -42,8 +41,7 @@ export const LNM_PIPELINES = [
       '(SynthStrip) runs first; the lesion-segmentation model ' +
       '(SynthStroke baseline) operates on the brain-masked structural and produces a ' +
       'binary lesion mask in the input image\'s native space, downloadable ' +
-      'as NIfTI. No MNI registration / no Yeo overlap (those land in ' +
-      'Phases 3-4).',
+      'as NIfTI. No MNI registration or atlas overlap.',
     stages: [
       {
         id: 'brainmask',
@@ -96,11 +94,11 @@ export const LNM_PIPELINES = [
   },
   {
     id: 'lnm-yeo-auto',
-    displayName: 'Auto Yeo overlap (T1 -> SynthStrip -> prealign -> seg -> MNI -> Yeo)',
+    displayName: 'Auto lesion network map (T1 -> SynthStrip -> prealign -> seg -> atlas)',
     description:
       'End-to-end automatic flow: drop ANY structural T1, get brain extraction + ' +
       'in-browser PCA prealign to MNI160 1mm + lesion segmentation, then SynthMorph ' +
-      'deformable registration onto MNI152NLin2009cAsym, then Yeo 7-network overlap + ' +
+      'deformable registration onto MNI152NLin2009cAsym, then selected-atlas overlap + ' +
       'group-FC weighted-sum + threshold. The prealign stage is no-op when the input ' +
       'is already 160x160x192 1mm.',
     stages: [
@@ -155,15 +153,14 @@ export const LNM_PIPELINES = [
   },
   {
     id: 'lnm-default',
-    // Hidden until Schaefer400 / GSP1000 assets land — see plan note in
-    // README ("Schaefer 400 / GSP1000 connectome upgrade is license-
-    // blocked").
+    // The visible Atlas selector is the public surface for Schaefer; keep this
+    // legacy pipeline hidden so Run analysis stays input-driven.
     hidden: true,
-    displayName: 'Lesion Network Mapping (Schaefer400 / GSP1000)',
+    displayName: 'Lesion Network Mapping (Schaefer400 / development fMRI)',
     description:
       'Full pipeline: ONNX lesion segmentation -> deep-learning MNI ' +
       'registration -> Schaefer400 parcel overlap -> per-parcel functional ' +
-      'connectivity weighted sum (GSP1000) -> threshold.',
+      'connectivity weighted sum (public development_fmri N=155) -> threshold.',
     stages: [
       {
         id: 'segment',
@@ -187,7 +184,7 @@ export const LNM_PIPELINES = [
       {
         id: 'network',
         module: 'fc-weighted-sum',
-        connectomeAssetId: 'gsp1000-schaefer400-4mm',
+        connectomeAssetId: 'schaefer400-fc-pack-development-n155-4mm',
         required: true
       },
       {
@@ -218,7 +215,7 @@ const IMPLEMENTED_MODULES = new Set([
   // Phase 3: SynthMorph SVF in web/js/modules/registration.js + integrate /
   // upsample / warp helpers, dispatched by the worker's 'run-register' op.
   'registration',
-  // Phase 4: Yeo7 group-FC weighted sum in web/js/modules/fc-weighted-sum.js,
+  // Phase 4+: atlas-aware group-FC weighted sum in web/js/modules/fc-weighted-sum.js,
   // dispatched by the worker's 'run-fc-weighted-sum' op.
   'fc-weighted-sum',
   // Phase 5: applyThreshold in web/js/modules/threshold.js, driven by
@@ -260,10 +257,8 @@ export function isStageRunnable(stage) {
 }
 
 // Phase 13: a pipeline is "runnable" only when every required stage is
-// runnable AND the pipeline is not flagged hidden:true (placeholder
-// declarations whose assets aren't shipped yet, e.g. Schaefer400/GSP1000).
-// The dropdown filter uses this so partially-implemented pipelines stay
-// hidden until they actually work end-to-end.
+// runnable AND the pipeline is not flagged hidden:true. Legacy/manual
+// declarations stay hidden while Run analysis remains input-driven.
 export function isPipelineRunnable(pipeline) {
   if (!pipeline || !Array.isArray(pipeline.stages)) return false;
   if (pipeline.hidden === true) return false;

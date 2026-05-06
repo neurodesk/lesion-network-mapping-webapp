@@ -62,7 +62,10 @@ for (const [name, size] of topLevel) {
 }
 
 // Runtime-fetched assets from the manifest. Sum sizeBytes for every
-// entry whose supportStatus is 'supported'.
+// entry whose supportStatus is 'supported'. Lazy sharded connectomes
+// use sizeBytes for the always-fetched index JSON only; totalShardBytes
+// documents the full pack but is not part of cold-load because the
+// browser fetches only shards containing lesion-hit parcels.
 const manifest = JSON.parse(fs.readFileSync(path.join(WEB, 'models/manifest.json'), 'utf8'));
 let runtimeTotal = 0;
 const runtimeBreakdown = [];

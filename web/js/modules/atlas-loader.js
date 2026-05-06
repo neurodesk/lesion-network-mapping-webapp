@@ -95,6 +95,18 @@ async function fetchAtlasBuffer(manifestEntry) {
   return fetchCacheFirst(manifestEntry.sourceUrl, manifestEntry.cacheKey, cache);
 }
 
+async function loadConnectomeIndex(manifestEntry, cache) {
+  const indexCacheKey = manifestEntry.cacheKey
+    ? `${manifestEntry.cacheKey}:index`
+    : null;
+  const indexUrl = manifestEntry.indexSourceUrl;
+  if (!indexUrl) {
+    throw new Error(`Connectome ${manifestEntry.id} missing indexSourceUrl`);
+  }
+  const indexBuf = await fetchCacheFirst(indexUrl, indexCacheKey, cache);
+  return JSON.parse(new TextDecoder('utf-8').decode(indexBuf));
+}
+
 // Phase 4: load a connectome pack (.bin + companion index.json) via the
 // same Cache Storage path the atlas-loader uses for atlases. Returns the
 // raw ArrayBuffer for the .bin plus the parsed index.
@@ -126,20 +138,54 @@ export async function loadConnectomeFromManifest(connectomeAssetId, { manifest, 
     { onProgress, label: connectomeAssetId }
   );
 
-  // The companion index.json is small (~hundreds of bytes); fetch fresh
-  // each time. Cache it under cacheKey + ':index' so the byte-offsets
-  // round-trip if the cache backend prefers one round-trip per key.
-  const indexCacheKey = manifestEntry.cacheKey
-    ? `${manifestEntry.cacheKey}:index`
-    : null;
-  const indexUrl = manifestEntry.indexSourceUrl;
-  if (!indexUrl) {
-    throw new Error(`Connectome ${connectomeAssetId} missing indexSourceUrl`);
-  }
-  const indexBuf = await fetchCacheFirst(indexUrl, indexCacheKey, cache);
-  const index = JSON.parse(new TextDecoder('utf-8').decode(indexBuf));
+  // The companion index.json is small (~hundreds of bytes); fetch and cache it
+  // under cacheKey + ':index' so the byte-offsets round-trip too.
+  const index = await loadConnectomeIndex(manifestEntry, cache);
 
   return { arrayBuffer, index, manifestEntry };
+}
+
+export async function loadConnectomeChannelsFromManifest(connectomeAssetId, channelIds, {
+  manifest,
+  onProgress
+} = {}) {
+  const assetManifest = manifest || await loadManifest();
+  const manifestEntry = assetManifest.connectomeAssets?.find(
+    a => a.id === connectomeAssetId
+  );
+  if (!manifestEntry) {
+    throw new Error(`Connectome asset not found: ${connectomeAssetId}`);
+  }
+  if (manifestEntry.supportStatus !== 'supported') {
+    throw new Error(`Connectome asset is not supported: ${connectomeAssetId}`);
+  }
+
+  let cache = null;
+  if (typeof caches !== 'undefined') cache = await caches.open(ATLAS_CACHE);
+  const index = await loadConnectomeIndex(manifestEntry, cache);
+
+  const requested = new Set((channelIds || []).map(id => String(id)));
+  if (!Array.isArray(index.shards) || index.shards.length === 0 || requested.size === 0) {
+    return loadConnectomeFromManifest(connectomeAssetId, { manifest: assetManifest, onProgress });
+  }
+
+  const shards = [];
+  for (const shard of index.shards) {
+    const labels = (shard.channelLabels || []).map(id => String(id));
+    const neededLabels = labels.filter(label => requested.has(label));
+    if (neededLabels.length === 0) continue;
+    const arrayBuffer = await fetchCacheFirst(
+      shard.sourceUrl,
+      shard.cacheKey || `${manifestEntry.cacheKey}:shard:${shard.id || shards.length}`,
+      cache,
+      { onProgress, label: shard.id || connectomeAssetId }
+    );
+    shards.push({ shard, arrayBuffer, neededLabels });
+  }
+  if (shards.length === 0) {
+    throw new Error(`No connectome shards cover requested channels: ${Array.from(requested).join(',')}`);
+  }
+  return { index, manifestEntry, shards };
 }
 
 // Shared fetch+cache helper. Returns ArrayBuffer. Uses the URL itself as
@@ -234,6 +280,7 @@ export async function loadAtlasFromManifest(atlasAssetId, { manifest } = {}) {
     // affine for affine-aware resampling onto the atlas grid.
     header: decoded.header,
     manifestEntry,
-    networkLabels: manifestEntry.networkLabels
+    networkLabels: manifestEntry.networkLabels,
+    parcelLabels: manifestEntry.parcelLabels
   };
 }

@@ -3,15 +3,45 @@ import { ViewerController } from './controllers/ViewerController.js';
 import { InferenceExecutor } from './controllers/InferenceExecutor.js';
 import { MaskDrawingController } from './controllers/MaskDrawingController.js';
 import { LNM_PIPELINES, getPipelineById } from './app/lnm-tasks.js';
-import { LESION_MASK_COLORMAP, LESION_MASK_COLORMAP_ID, YEO7_COLORMAP } from './app/lnm-labels.js';
+import {
+  ATLAS_OPTIONS,
+  DEFAULT_ATLAS_OPTION_ID,
+  getAtlasOptionById
+} from './app/atlas-options.js';
+import {
+  LESION_MASK_COLORMAP,
+  LESION_MASK_COLORMAP_ID,
+  SCHAEFER400_COLORMAP,
+  YEO7_COLORMAP
+} from './app/lnm-labels.js';
 import { computeParcelOverlap, summarizeNetworkOverlap } from './modules/parcel-overlap.js';
-import { loadAtlasFromManifest, loadConnectomeFromManifest, decodeNiftiBuffer } from './modules/atlas-loader.js';
-import { fcWeightedSum, decodeFcPack, summaryToNetworkWeights } from './modules/fc-weighted-sum.js';
+import {
+  loadAtlasFromManifest,
+  loadConnectomeFromManifest,
+  loadConnectomeChannelsFromManifest,
+  decodeNiftiBuffer
+} from './modules/atlas-loader.js';
+import {
+  fcWeightedSum,
+  decodeFcPack,
+  parcelResultToChannelWeights,
+  summaryToNetworkWeights
+} from './modules/fc-weighted-sum.js';
 import { applyThresholdDetailed } from './modules/threshold.js';
 import { affineFromHeader, resampleAffine } from './modules/resample.js';
 import { centroidOfMask, applyAffineToVoxel, computePrealignAffine, principalAxisAlign } from './modules/prealign.js';
 import { writeNifti1 } from './modules/nifti-writer.js';
 import { resampleBinaryMask, writeBinaryMaskNifti } from './modules/mask-transform.js';
+import {
+  VOLUME_SPACES,
+  atlasOptionSpace,
+  atlasVolumeSpace,
+  assertSameSpace,
+  assertSpace,
+  assertVolumeStackSpaces,
+  getSpatialMetadata,
+  tagSpatialFile
+} from './modules/spatial-file.js';
 import { serializeOverlapCsv } from './modules/overlap-export.js';
 import { renderOverlapTable } from './modules/overlap-render.js';
 import {
@@ -32,11 +62,12 @@ function splitModelUrl(url) {
   return { base: url.slice(0, i), name: url.slice(i + 1) };
 }
 
-function arrayBufferToFile(buffer, name) {
+function arrayBufferToFile(buffer, name, spatial = null) {
   // The worker emits uncompressed NIfTI bytes (createOutputNifti); files
   // ending in .nii are raw, .nii.gz are gzip-compressed. We use .nii.
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
-  return new File([blob], name, { type: 'application/octet-stream' });
+  const file = new File([blob], name, { type: 'application/octet-stream' });
+  return spatial ? tagSpatialFile(file, spatial) : file;
 }
 
 function binarise(typedArray) {
@@ -102,15 +133,51 @@ function flattenAffine3Rows(affine) {
   ];
 }
 
-function computeNetworkSizes(atlasData, networkLabels) {
+function computeLabelSizes(atlasData, labelMap) {
   const sizes = {};
   for (let i = 0; i < atlasData.length; i++) {
     const label = atlasData[i];
-    if (label === 0 || !Object.prototype.hasOwnProperty.call(networkLabels, label)) continue;
-    const network = networkLabels[label];
+    if (label === 0 || !Object.prototype.hasOwnProperty.call(labelMap, label)) continue;
+    const network = labelMap[label];
     sizes[network] = (sizes[network] || 0) + 1;
   }
   return sizes;
+}
+
+function computeNetworkSizes(atlasData, networkLabels) {
+  return computeLabelSizes(atlasData, networkLabels);
+}
+
+function summarizeParcelLabelOverlap(parcelResult, parcelLabels) {
+  const labelMap = parcelLabels || {};
+  const networks = parcelResult.parcels.map(parcel => ({
+    network: Object.prototype.hasOwnProperty.call(labelMap, parcel.label)
+      ? labelMap[parcel.label]
+      : `Parcel ${parcel.label}`,
+    voxelsInLesion: parcel.voxelsInLesion,
+    fractionOfLesion: parcel.fractionOfLesion,
+    parcels: [parcel.label]
+  }));
+  return { totalLesionVoxels: parcelResult.totalLesionVoxels, networks };
+}
+
+function labelMapForAtlas(atlas, atlasOption) {
+  if (atlasOption?.weightSource === 'parcel') {
+    return atlas.parcelLabels || atlas.manifestEntry?.parcelLabels || {};
+  }
+  return atlas.networkLabels || atlas.manifestEntry?.networkLabels || {};
+}
+
+function summarizeAtlasOverlap(parcelResult, atlas, atlasOption) {
+  const labelMap = labelMapForAtlas(atlas, atlasOption);
+  if (atlasOption?.weightSource === 'parcel') {
+    return summarizeParcelLabelOverlap(parcelResult, labelMap);
+  }
+  return summarizeNetworkOverlap(parcelResult, labelMap);
+}
+
+function atlasSpaceName(atlasOption) {
+  return atlasOption?.displayName || 'selected atlas';
 }
 
 export function formatVersionLabel(version, buildInfo = null) {
@@ -135,6 +202,7 @@ export class LesionNetworkMappingApp {
     this.console = new ConsoleOutput('consoleOutput');
     this.progress = new ProgressManager(Config.PROGRESS_CONFIG);
     this.structuralFile = null;
+    this.viewerBaseFile = null;
     this.nativeStructuralFile = null;
     this.nativeStructuralInfo = null;
     this.fixedMni160Info = null;
@@ -142,6 +210,7 @@ export class LesionNetworkMappingApp {
     this.lesionFile = null;
     this.overlapResult = null;
     this.brainmaskFile = null;     // populated by handleStageData('brainmask')
+    this.nativeBrainmaskFile = null; // brain mask in nativeStructuralFile space for lesion-mask review
     this.lesionMaskFile = null;    // confirmed edited mask on fixed lnm-mni160
     this.lesionMaskConfirmed = false;
     this.autoLesionSeedFile = null;
@@ -155,6 +224,7 @@ export class LesionNetworkMappingApp {
     this.networkMapSpacing = null;
     this.networkMapAffine = null;
     this.networkMapBaseFile = null;
+    this.networkMapLabelAtlas = null;
     this.thresholdedMaskFile = null; // Phase 5: thresholded binary NIfTI
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
@@ -181,8 +251,10 @@ export class LesionNetworkMappingApp {
     this._stageDataResolvers = new Map();
     this._stepCompleteResolvers = new Map();
     this.manifest = null;          // populated lazily by ensureManifest()
+    this.atlasOptions = ATLAS_OPTIONS;
+    this.selectedAtlasOptionId = DEFAULT_ATLAS_OPTION_ID;
     // Run analysis is input-driven: structural T1 uses the full auto chain,
-    // while researcher-mode Yeo masks auto-select the manual network-map path.
+    // while researcher-mode atlas-grid masks auto-select the manual network-map path.
     this.selectedPipeline = getPipelineById('lnm-yeo-auto') || LNM_PIPELINES[0];
     this.viewerLayerVisibility = {
       structural: true,
@@ -230,8 +302,10 @@ export class LesionNetworkMappingApp {
 
     await this.setupViewer();
     this.viewerController.registerSctColormap(YEO7_COLORMAP, 'lnm-yeo7');
+    this.viewerController.registerSctColormap(SCHAEFER400_COLORMAP, 'lnm-schaefer400');
     this.viewerController.registerSctColormap(LESION_MASK_COLORMAP, LESION_MASK_COLORMAP_ID);
     this.bindEvents();
+    this.populateAtlasSelect();
     this.populateVersionLabel();
     this.updateOutput('Ready.');
   }
@@ -259,8 +333,14 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    const atlasSelect = document.getElementById('atlasSelect');
+    if (atlasSelect) {
+      atlasSelect.value = this.selectedAtlasOptionId;
+      atlasSelect.addEventListener('change', () => this.handleAtlasSelectionChange(atlasSelect.value));
+    }
+
     const computeButton = document.getElementById('computeOverlapButton');
-    if (computeButton) computeButton.addEventListener('click', () => this.runYeoOverlap());
+    if (computeButton) computeButton.addEventListener('click', () => this.runAtlasOverlap());
 
     const csvButton = document.getElementById('downloadOverlapCsv');
     if (csvButton) {
@@ -515,6 +595,55 @@ export class LesionNetworkMappingApp {
     this.bindCloseButton('closeCitations', this.citationsModal);
   }
 
+  getAtlasOption() {
+    return getAtlasOptionById(this.selectedAtlasOptionId, this.atlasOptions) ||
+      this.atlasOptions[0] ||
+      ATLAS_OPTIONS[0];
+  }
+
+  getAtlasColormap(atlasOption = this.getAtlasOption()) {
+    return atlasOption?.id === 'schaefer400' ? SCHAEFER400_COLORMAP : YEO7_COLORMAP;
+  }
+
+  populateAtlasSelect() {
+    const select = document.getElementById('atlasSelect');
+    if (!select) return;
+    const existing = new Set(Array.from(select.options).map(option => option.value));
+    for (const option of this.atlasOptions) {
+      if (existing.has(option.id)) continue;
+      const item = document.createElement('option');
+      item.value = option.id;
+      item.textContent = option.displayName;
+      select.appendChild(item);
+    }
+    select.value = this.selectedAtlasOptionId;
+  }
+
+  handleAtlasSelectionChange(value) {
+    const option = getAtlasOptionById(value, this.atlasOptions);
+    if (!option) return;
+    this.selectedAtlasOptionId = option.id;
+    this.overlapResult = null;
+    this.affectedNetworkResult = null;
+    this.networkMapFile = null;
+    this.networkMapData = null;
+    this.networkMapDims = null;
+    this.networkMapSpacing = null;
+    this.networkMapAffine = null;
+    this.networkMapBaseFile = null;
+    this.networkMapLabelAtlas = null;
+    this.thresholdedMaskFile = null;
+    this.patientThresholdedMaskFile = null;
+    this.patientAtlasFile = null;
+    this.functionProfiles = null;
+    this.clearAffectedNetworkTable();
+    this.clearFunctionProfileTable('directFunctionProfileResults', 'directFunctionProfileTable');
+    const csvButton = document.getElementById('downloadOverlapCsv');
+    if (csvButton) csvButton.disabled = true;
+    this.showAtlasCoverageNote(0, 0);
+    this.updateOutput(`Atlas set to ${option.displayName}.`);
+  }
+
   bindModalButton(buttonId, modal) {
     const button = document.getElementById(buttonId);
     if (button) button.addEventListener('click', () => modal.open());
@@ -675,7 +804,7 @@ export class LesionNetworkMappingApp {
       case 'structural':
         return !!this.structuralFile;
       case 'brainmask':
-        return !!this.brainmaskFile;
+        return !!this.getBrainmaskFileForActiveViewer();
       case 'threshold':
         return !!(this.patientThresholdedMaskFile || this.thresholdedMaskFile);
       case 'atlasQc':
@@ -703,7 +832,7 @@ export class LesionNetworkMappingApp {
       brainmask: 'brain mask',
       lesion: 'lesion mask',
       threshold: 'threshold map',
-      atlasQc: 'Yeo atlas'
+      atlasQc: 'atlas'
     }[layer] || layer;
   }
 
@@ -711,7 +840,7 @@ export class LesionNetworkMappingApp {
     if (this.isViewerLayerLoaded(layer)) return;
     if (layer === 'structural') {
       if (!this.structuralFile) throw new Error('No structural T1 is available.');
-      await this.viewerController.loadBaseVolume(this.structuralFile, {
+      await this.loadViewerBaseVolume(this.structuralFile, {
         stage: 'structural',
         visible: this.layerVisible('structural')
       });
@@ -721,8 +850,14 @@ export class LesionNetworkMappingApp {
       throw new Error('Load a structural T1 base before adding overlays.');
     }
     if (layer === 'brainmask') {
-      if (!this.brainmaskFile) throw new Error('No brain mask is available.');
-      await this.viewerController.loadOverlay(this.brainmaskFile, 'green', 0.4, {
+      const brainmaskFile = this.getBrainmaskFileForActiveViewer();
+      if (!brainmaskFile) {
+        throw new Error(this.maskReviewActive
+          ? 'No native-space brain mask is available for mask review.'
+          : 'No brain mask is available.');
+      }
+      this.assertViewerOverlaySpace(brainmaskFile, 'Brain mask overlay');
+      await this.viewerController.loadOverlay(brainmaskFile, 'green', 0.4, {
         stage: 'brainmask',
         visible: this.layerVisible('brainmask')
       });
@@ -732,6 +867,7 @@ export class LesionNetworkMappingApp {
       if (this.maskReviewActive && this.maskDrawingController?.hasDrawing) return;
       const lesionOverlay = this.lesionMaskFile || this.lesionFile;
       if (!lesionOverlay) throw new Error('No lesion mask is available.');
+      this.assertViewerOverlaySpace(lesionOverlay, 'Lesion mask overlay');
       await this.viewerController.loadOverlay(lesionOverlay, LESION_MASK_COLORMAP_ID, 0.5, {
         stage: this.lesionMaskFile ? 'segmentation' : 'lesion',
         visible: this.layerVisible('lesion')
@@ -741,6 +877,7 @@ export class LesionNetworkMappingApp {
     if (layer === 'threshold') {
       const thresholdFile = this.patientThresholdedMaskFile || this.thresholdedMaskFile;
       if (!thresholdFile) throw new Error('No threshold map is available.');
+      this.assertViewerOverlaySpace(thresholdFile, 'Threshold map overlay');
       await this.viewerController.loadOverlay(thresholdFile, 'red', 0.65, {
         stage: 'threshold-preview',
         visible: this.layerVisible('threshold')
@@ -751,8 +888,9 @@ export class LesionNetworkMappingApp {
       if (!this.patientAtlasFile) {
         await this.projectAtlasToPatientSpace();
       }
-      if (!this.patientAtlasFile) throw new Error('No Yeo atlas projection is available.');
-      await this.viewerController.loadOverlay(this.patientAtlasFile, 'lnm-yeo7', 0.45, {
+      if (!this.patientAtlasFile) throw new Error('No atlas projection is available.');
+      this.assertViewerOverlaySpace(this.patientAtlasFile, 'Atlas QC overlay');
+      await this.viewerController.loadOverlay(this.patientAtlasFile, this.getAtlasOption().colormap, 0.45, {
         stage: 'atlas-qc',
         visible: this.layerVisible('atlasQc')
       });
@@ -803,6 +941,59 @@ export class LesionNetworkMappingApp {
     return this.viewerLayerVisibility[layer] !== false;
   }
 
+  tagFileSpace(file, { space, role, sourceStage, dims, affine } = {}) {
+    return tagSpatialFile(file, {
+      space,
+      role,
+      sourceStage,
+      dims,
+      affine
+    });
+  }
+
+  tagDecodedFileSpace(file, decoded, spatial = {}) {
+    return this.tagFileSpace(file, {
+      ...spatial,
+      dims: decoded?.dims,
+      affine: decoded?.header ? affineFromHeader(decoded.header) : undefined
+    });
+  }
+
+  async loadViewerBaseVolume(file, options = {}) {
+    await this.viewerController.loadBaseVolume(file, options);
+    this.viewerBaseFile = file;
+  }
+
+  async loadViewerVolumeStack(entries = []) {
+    await this.viewerController.loadVolumeStack(entries);
+    this.viewerBaseFile = entries[0]?.file || null;
+  }
+
+  getActiveViewerBaseFile() {
+    return this.viewerBaseFile || this.structuralFile;
+  }
+
+  structuralSpace() {
+    return getSpatialMetadata(this.structuralFile)?.space ||
+      (this.structuralFile && this.structuralFile === this.nativeStructuralFile ? VOLUME_SPACES.NATIVE_T1 : null);
+  }
+
+  assertViewerOverlaySpace(overlayFile, context) {
+    return assertSameSpace(this.getActiveViewerBaseFile(), overlayFile, context);
+  }
+
+  assertViewerStackSpaces(entries, context) {
+    return assertVolumeStackSpaces(entries, context);
+  }
+
+  getBrainmaskFileForActiveViewer() {
+    if (this.maskReviewActive) {
+      if (this.nativeBrainmaskFile) return this.nativeBrainmaskFile;
+      return this.structuralFile === this.nativeStructuralFile ? this.brainmaskFile : null;
+    }
+    return this.brainmaskFile;
+  }
+
   applyMaskDrawingVisibility() {
     if (!this.maskDrawingController?.setVisible) return;
     this.maskDrawingController.setVisible(this.maskReviewActive && this.layerVisible('lesion'));
@@ -839,6 +1030,11 @@ export class LesionNetworkMappingApp {
 
   async setStructural(file) {
     if (!file) return;
+    this.tagFileSpace(file, {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'structural',
+      sourceStage: 'input'
+    });
     this.structuralFile = file;
     this.nativeStructuralFile = file;
     this.nativeStructuralInfo = null;
@@ -858,7 +1054,7 @@ export class LesionNetworkMappingApp {
     this.displacementMagnitudeFile = null;
     this.registrationCheckerboardFile = null;
     this._thresholdProjectionWarningShown = false;
-    await this.viewerController.loadBaseVolume(file, {
+    await this.loadViewerBaseVolume(file, {
       stage: 'structural',
       visible: this.layerVisible('structural')
     });
@@ -872,14 +1068,22 @@ export class LesionNetworkMappingApp {
 
   async setLesion(file) {
     if (!file) return;
+    if (!this.structuralFile) {
+      this.tagFileSpace(file, {
+        space: atlasOptionSpace(this.getAtlasOption(), 'overlap'),
+        role: 'lesion',
+        sourceStage: 'input'
+      });
+    }
     this.lesionFile = file;
     if (this.structuralFile) {
+      this.assertViewerOverlaySpace(file, 'Lesion mask overlay');
       await this.viewerController.loadOverlay(file, LESION_MASK_COLORMAP_ID, 0.5, {
         stage: 'lesion',
         visible: this.layerVisible('lesion')
       });
     } else {
-      await this.viewerController.loadBaseVolume(file, {
+      await this.loadViewerBaseVolume(file, {
         stage: 'lesion',
         visible: this.layerVisible('lesion')
       });
@@ -905,20 +1109,32 @@ export class LesionNetworkMappingApp {
   }
 
   async runYeoOverlap() {
+    return this.runAtlasOverlap();
+  }
+
+  async runAtlasOverlap() {
     if (!this.lesionFile) {
       this.updateOutput('Drop a lesion mask before computing overlap.');
       return;
     }
-    this.updateOutput('Loading Yeo7 atlas...');
-    const atlas = await loadAtlasFromManifest('yeo7-2mm');
+    const atlasOption = this.getAtlasOption();
+    this.updateOutput(`Loading ${atlasSpaceName(atlasOption)} atlas...`);
+    const atlas = await loadAtlasFromManifest(atlasOption.overlapAtlasAssetId);
+    const overlapSpace = atlasOptionSpace(atlasOption, 'overlap');
+    assertSpace(this.lesionFile, overlapSpace, 'Direct lesion overlap');
     this.updateOutput('Decoding lesion mask...');
     const lesionBuf = await this.lesionFile.arrayBuffer();
     const lesion = await decodeNiftiBuffer(lesionBuf);
 
     if (!dimsEqual(lesion.dims, atlas.dims)) {
-      this.updateOutput(`Lesion dims ${lesion.dims.join('x')} do not match atlas ${atlas.dims.join('x')}. Re-register the mask to ${atlas.manifestEntry.mniSpace || 'MNI152 2mm'} first.`);
+      this.updateOutput(`Lesion dims ${lesion.dims.join('x')} do not match atlas ${atlas.dims.join('x')}. Re-register or warp the mask to the selected atlas first.`);
       return;
     }
+    this.tagDecodedFileSpace(this.lesionFile, lesion, {
+      space: overlapSpace,
+      role: 'lesion',
+      sourceStage: 'atlas-overlap'
+    });
 
     const lesionBin = binarise(lesion.data);
     const parcelResult = computeParcelOverlap({
@@ -926,16 +1142,17 @@ export class LesionNetworkMappingApp {
       atlas: atlas.data,
       dims: atlas.dims,
     });
-    const summary = summarizeNetworkOverlap(parcelResult, atlas.networkLabels);
-    const networkSizes = computeNetworkSizes(atlas.data, atlas.networkLabels);
-    this.overlapResult = { parcelResult, summary, atlas, networkSizes };
-    this.showYeoLabelCoverageNote(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
+    const labelMap = labelMapForAtlas(atlas, atlasOption);
+    const summary = summarizeAtlasOverlap(parcelResult, atlas, atlasOption);
+    const networkSizes = computeLabelSizes(atlas.data, labelMap);
+    this.overlapResult = { parcelResult, summary, atlas, networkSizes, atlasOption };
+    this.showAtlasCoverageNote(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
 
     const tableEl = document.getElementById('networkOverlapTable');
     if (tableEl) {
       renderOverlapTable(tableEl, summary, {
-        colormap: YEO7_COLORMAP,
-        networkLabels: atlas.networkLabels
+        colormap: this.getAtlasColormap(atlasOption),
+        percentHeader: 'Lesion %'
       });
     }
     this.clearAffectedNetworkTable();
@@ -943,19 +1160,23 @@ export class LesionNetworkMappingApp {
     if (csvButton) csvButton.disabled = false;
 
     this.updateOutput(
-      `Overlap computed for ${summary.networks.length} networks ` +
+      `Overlap computed for ${summary.networks.length} ${atlasOption.weightSource === 'parcel' ? 'parcels' : 'networks'} ` +
       `(${parcelResult.totalLesionVoxels - parcelResult.voxelsOutsideAtlas} of ` +
-      `${parcelResult.totalLesionVoxels} lesion voxels assigned to Yeo cortical ` +
-      `network labels; ${parcelResult.voxelsOutsideAtlas} unlabeled).`
+      `${parcelResult.totalLesionVoxels} lesion voxels assigned to ${atlasSpaceName(atlasOption)} ` +
+      `labels; ${parcelResult.voxelsOutsideAtlas} unlabeled).`
     );
     await this.updateDirectFunctionProfile();
   }
 
   async ensureFunctionProfiles() {
     if (this.functionProfiles) return this.functionProfiles;
+    const atlasOption = this.getAtlasOption();
+    if (!atlasOption?.functionProfileAssetId) {
+      throw new Error(`${atlasSpaceName(atlasOption)} has no functional profile asset.`);
+    }
     const manifest = await this.ensureManifest();
     const { profiles } = await loadFunctionProfilesFromManifest(
-      'yeo7-neurosynth-v7-function-profiles',
+      atlasOption.functionProfileAssetId,
       { manifest }
     );
     this.functionProfiles = profiles;
@@ -987,15 +1208,23 @@ export class LesionNetworkMappingApp {
       topN: 8,
       minScore: 0.01
     });
+    const atlasOption = this.getAtlasOption();
     renderFunctionalProfileTable(tableEl, ranked, {
       sourceLabel: profiles.sourceLabel || 'Neurosynth v7 via NiMARE',
-      emptyLabel
+      emptyLabel,
+      driverHeader: atlasOption?.weightSource === 'parcel'
+        ? 'Atlas label drivers'
+        : 'Network drivers'
     });
     resultEl.classList.remove('hidden');
     return ranked;
   }
 
   updateDirectFunctionProfile() {
+    if (!this.getAtlasOption()?.functionProfileAssetId) {
+      this.clearFunctionProfileTable('directFunctionProfileResults', 'directFunctionProfileTable');
+      return Promise.resolve(null);
+    }
     this._functionalProfileRenderPromise = this._functionalProfileRenderPromise
       .then(() => this.renderFunctionProfileForSummary(this.overlapResult?.summary, {
         resultId: 'directFunctionProfileResults',
@@ -1011,6 +1240,10 @@ export class LesionNetworkMappingApp {
   }
 
   updateAffectedFunctionProfile() {
+    if (!this.getAtlasOption()?.functionProfileAssetId) {
+      this.clearFunctionProfileTable('mapFunctionProfileResults', 'mapFunctionProfileTable');
+      return Promise.resolve(null);
+    }
     this._functionalProfileRenderPromise = this._functionalProfileRenderPromise
       .then(() => this.renderFunctionProfileForSummary(this.affectedNetworkResult?.summary, {
         resultId: 'mapFunctionProfileResults',
@@ -1034,6 +1267,13 @@ export class LesionNetworkMappingApp {
       throw new Error(`Failed to load manifest: HTTP ${response.status}`);
     }
     this.manifest = await response.json();
+    if (Array.isArray(this.manifest.atlasOptions) && this.manifest.atlasOptions.length > 0) {
+      this.atlasOptions = this.manifest.atlasOptions;
+      if (!getAtlasOptionById(this.selectedAtlasOptionId, this.atlasOptions)) {
+        this.selectedAtlasOptionId = this.atlasOptions[0].id;
+      }
+      this.populateAtlasSelect();
+    }
     return this.manifest;
   }
 
@@ -1045,6 +1285,11 @@ export class LesionNetworkMappingApp {
     }
     const decoded = await decodeNiftiBuffer(await file.arrayBuffer());
     this.nativeStructuralFile = file;
+    this.tagDecodedFileSpace(file, decoded, {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'structural',
+      sourceStage: 'native-structural'
+    });
     this.nativeStructuralInfo = {
       dims: decoded.dims,
       affine: affineFromHeader(decoded.header)
@@ -1166,11 +1411,20 @@ export class LesionNetworkMappingApp {
     if (!data || !data.stage) return;
     if (data.stage === 'brainmask' && data.niftiData) {
       const file = arrayBufferToFile(data.niftiData, 'brainmask.nii');
+      this.tagFileSpace(file, {
+        space: this.structuralSpace() || VOLUME_SPACES.NATIVE_T1,
+        role: 'brainmask',
+        sourceStage: 'brainmask'
+      });
       this.brainmaskFile = file;
+      if (this.structuralFile === this.nativeStructuralFile) {
+        this.nativeBrainmaskFile = file;
+      }
       // Render as a translucent overlay over the structural; if the user
       // dropped a lesion manually before the structural, the lesion stage
       // re-renders normally on its next setLesion() call.
       if (this.structuralFile) {
+        this.assertViewerOverlaySpace(file, 'Brain mask overlay');
         this.viewerController
           .loadOverlay(file, 'green', 0.4, {
             stage: 'brainmask',
@@ -1187,6 +1441,11 @@ export class LesionNetworkMappingApp {
     }
     if (data.stage === 'segmentation' && data.niftiData) {
       const file = arrayBufferToFile(data.niftiData, 'lesion.nii');
+      this.tagFileSpace(file, {
+        space: this.structuralSpace() || VOLUME_SPACES.MNI160,
+        role: 'lesion-seed',
+        sourceStage: 'segmentation'
+      });
       this.autoLesionSeedFile = file;
       this.lesionMaskFile = null;
       this.lesionMaskConfirmed = false;
@@ -1200,9 +1459,13 @@ export class LesionNetworkMappingApp {
     }
     // Phase 6.2: warp-mask emits the lesion warped onto MNI160 1mm. The
     // stage data is the NIfTI ArrayBuffer; applyRegistrationToLesion()
-    // awaits it via a one-shot resolver before resampling onto the Yeo grid.
+    // awaits it via a one-shot resolver before resampling onto the selected atlas grid.
     if (data.stage === 'mni-lesion' && data.niftiData) {
-      this.mniLesionFile = arrayBufferToFile(data.niftiData, 'lesion-mni1mm.nii');
+      this.mniLesionFile = arrayBufferToFile(data.niftiData, 'lesion-mni1mm.nii', {
+        space: VOLUME_SPACES.MNI160,
+        role: 'lesion',
+        sourceStage: 'mni-lesion'
+      });
       this.updateOutput('Lesion warped to MNI160 1mm.');
       if (this._mniLesionResolver) {
         const r = this._mniLesionResolver;
@@ -1213,29 +1476,46 @@ export class LesionNetworkMappingApp {
       return;
     }
     if (data.stage === 'registered-t1-mni160' && data.niftiData) {
-      this.registeredT1MniFile = arrayBufferToFile(data.niftiData, 'lnm-registered-t1-mni160.nii');
+      this.registeredT1MniFile = arrayBufferToFile(data.niftiData, 'lnm-registered-t1-mni160.nii', {
+        space: VOLUME_SPACES.MNI160,
+        role: 'structural',
+        sourceStage: 'registered-t1-mni160'
+      });
       this.registrationCheckerboardFile = null;
       this.updateOutput('Registered T1 QC volume ready on the MNI160 grid.');
       this._resolveStageData(data.stage, data);
       return;
     }
     if (data.stage === 'registration-displacement-mag' && data.niftiData) {
-      this.displacementMagnitudeFile = arrayBufferToFile(data.niftiData, 'lnm-registration-displacement-mag.nii');
+      this.displacementMagnitudeFile = arrayBufferToFile(data.niftiData, 'lnm-registration-displacement-mag.nii', {
+        space: VOLUME_SPACES.MNI160,
+        role: 'registration-displacement',
+        sourceStage: 'registration-displacement-mag'
+      });
       this.updateOutput('Registration displacement QC map ready.');
       this._resolveStageData(data.stage, data);
       return;
     }
     if (data.stage === 'threshold-patient' && data.niftiData) {
-      this.patientThresholdedMaskFile = arrayBufferToFile(data.niftiData, 'lnm-network-map-thresh-patient.nii');
+      this.patientThresholdedMaskFile = arrayBufferToFile(data.niftiData, 'lnm-network-map-thresh-patient.nii', {
+        space: this.structuralSpace() || VOLUME_SPACES.MNI160,
+        role: 'threshold-map',
+        sourceStage: 'threshold-patient'
+      });
       this.refreshViewerLayerControls();
       this.updateOutput('Threshold map projected to patient T1 space.');
       this._resolveStageData(data.stage, data);
       return;
     }
     if (data.stage === 'atlas-patient' && data.niftiData) {
-      this.patientAtlasFile = arrayBufferToFile(data.niftiData, 'lnm-yeo7-atlas-patient.nii');
+      const atlasOption = this.getAtlasOption();
+      this.patientAtlasFile = arrayBufferToFile(data.niftiData, `lnm-${atlasOption.id}-atlas-patient.nii`, {
+        space: this.structuralSpace() || VOLUME_SPACES.MNI160,
+        role: 'atlas-qc',
+        sourceStage: 'atlas-patient'
+      });
       this.refreshViewerLayerControls();
-      this.updateOutput('Yeo atlas projected to patient T1 space.');
+      this.updateOutput(`${atlasSpaceName(atlasOption)} atlas projected to patient T1 space.`);
       this._resolveStageData(data.stage, data);
     }
   }
@@ -1331,6 +1611,10 @@ export class LesionNetworkMappingApp {
 
   async resampleSeedMaskToNative(seedFile) {
     if (!seedFile) return null;
+    const seedSpace = getSpatialMetadata(seedFile)?.space;
+    if (seedSpace && ![VOLUME_SPACES.MNI160, VOLUME_SPACES.NATIVE_T1].includes(seedSpace)) {
+      throw new Error(`Editable lesion seed source: expected ${VOLUME_SPACES.MNI160} or ${VOLUME_SPACES.NATIVE_T1}, got ${seedSpace}.`);
+    }
     const native = await this.ensureNativeStructuralInfo();
     const seed = await decodeNiftiBuffer(await seedFile.arrayBuffer());
     const seedAffine = this.prealignSamplingAffine || affineFromHeader(seed.header);
@@ -1347,7 +1631,11 @@ export class LesionNetworkMappingApp {
       spacing: [1, 1, 1],
       description: 'LNM editable lesion seed projected to native T1 grid'
     });
-    this.nativeLesionSeedFile = arrayBufferToFile(nativeNifti, 'lnm-lesion-seed-native.nii');
+    this.nativeLesionSeedFile = arrayBufferToFile(nativeNifti, 'lnm-lesion-seed-native.nii', {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'lesion-seed',
+      sourceStage: 'mask-review'
+    });
     return this.nativeLesionSeedFile;
   }
 
@@ -1358,8 +1646,13 @@ export class LesionNetworkMappingApp {
       return null;
     }
     this.nativeStructuralFile = baseFile;
+    this.tagFileSpace(baseFile, {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'structural',
+      sourceStage: 'mask-review'
+    });
     await this.ensureNativeStructuralInfo();
-    await this.viewerController.loadBaseVolume(baseFile, {
+    await this.loadViewerBaseVolume(baseFile, {
       stage: 'structural',
       visible: this.layerVisible('structural')
     });
@@ -1388,7 +1681,11 @@ export class LesionNetworkMappingApp {
     if (!this.prealignSamplingAffine || !this.fixedMni160Info) {
       await this.prealignToMni160({ skipIfAligned: true });
     }
-    this.confirmedNativeLesionFile = nativeFile;
+    this.confirmedNativeLesionFile = this.tagFileSpace(nativeFile, {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'lesion',
+      sourceStage: 'mask-confirm-native'
+    });
     const fixed = await this.ensureFixedMni160Info();
     const native = await decodeNiftiBuffer(await nativeFile.arrayBuffer());
     const nativeAffine = affineFromHeader(native.header);
@@ -1406,7 +1703,13 @@ export class LesionNetworkMappingApp {
       description: 'LNM confirmed edited lesion mask on fixed lnm-mni160 grid'
     });
 
-    this.lesionMaskFile = arrayBufferToFile(mniNifti, 'lnm-lesion-confirmed-mni160.nii');
+    this.lesionMaskFile = arrayBufferToFile(mniNifti, 'lnm-lesion-confirmed-mni160.nii', {
+      space: VOLUME_SPACES.MNI160,
+      role: 'lesion',
+      sourceStage: 'mask-confirm-mni160',
+      dims: fixed.dims,
+      affine: fixed.affine
+    });
     this.lesionMaskConfirmed = true;
     this.maskReviewActive = false;
     this.maskDrawingController.close({ clearDrawing: true });
@@ -1429,48 +1732,136 @@ export class LesionNetworkMappingApp {
     if (status === 'complete') this.logPipelineComplete();
   }
 
-  // Phase 4.4: lesion network map via Yeo7 group-FC weighted sum. Pure
-  // main-thread (no worker) — the math is just a per-voxel linear combo
-  // of seven precomputed t-maps. Requires runYeoOverlap to have run first
-  // (we read the network-overlap result for the weights).
+  decodeLoadedConnectome(loadResult, requestedLabels = null) {
+    if (loadResult.arrayBuffer) {
+      const pack = decodeFcPack(loadResult.arrayBuffer, {
+        voxelOrder: loadResult.manifestEntry.voxelOrder,
+        ...loadResult.index
+      });
+      if (!requestedLabels || requestedLabels.length === 0) return pack;
+      const channelLabels = loadResult.index.channelLabels || loadResult.index.parcelLabels || {};
+      const orderedKeys = Object.keys(channelLabels).sort((a, b) => Number(a) - Number(b));
+      const wanted = new Set(requestedLabels.map(String));
+      const tMaps = [];
+      const selectedLabels = {};
+      for (let i = 0; i < orderedKeys.length; i++) {
+        const label = orderedKeys[i];
+        if (!wanted.has(label)) continue;
+        selectedLabels[label] = channelLabels[label];
+        tMaps.push(pack.tMaps[i]);
+      }
+      return { ...pack, tMaps, channelLabels: selectedLabels };
+    }
+
+    const tMaps = [];
+    const selectedLabels = {};
+    const dims = loadResult.index.shape?.slice(1);
+    for (const { shard, arrayBuffer, neededLabels } of loadResult.shards || []) {
+      const shardLabels = (shard.channelLabels || []).map(String);
+      const shardIndex = {
+        ...loadResult.index,
+        ...shard,
+        shape: [shardLabels.length, ...dims],
+        channelLabels: Object.fromEntries(shardLabels.map(label => [
+          label,
+          loadResult.index.channelLabels?.[label] || `Parcel ${label}`
+        ])),
+        voxelsPerMap: dims[0] * dims[1] * dims[2]
+      };
+      const pack = decodeFcPack(arrayBuffer, shardIndex);
+      for (const label of neededLabels) {
+        const i = shardLabels.indexOf(String(label));
+        if (i < 0) continue;
+        selectedLabels[label] = shardIndex.channelLabels[label];
+        tMaps.push(pack.tMaps[i]);
+      }
+    }
+    return {
+      tMaps,
+      channelLabels: selectedLabels,
+      voxelsPerMap: dims[0] * dims[1] * dims[2]
+    };
+  }
+
+  // Phase 4.4+: atlas-aware lesion network map. Pure main-thread math: a
+  // per-voxel linear combination of precomputed FC maps. Yeo weights by
+  // seven network overlaps; Schaefer weights by parcel overlaps and can
+  // lazy-load only the hit parcel channels.
   async runFcNetworkMap() {
     if (!this.overlapResult) {
-      this.updateOutput('Run "Compute overlap" first to get network weights.');
+      this.updateOutput('Run "Compute overlap" first to get atlas weights.');
       return;
     }
-    this.updateOutput('Loading Yeo7 group-FC pack...');
+    const atlasOption = this.overlapResult.atlasOption || this.getAtlasOption();
+    const manifest = await this.ensureManifest();
+    const connectomeEntry = manifest.connectomeAssets?.find(
+      asset => asset.id === atlasOption.connectomeAssetId
+    );
+    if (!connectomeEntry) {
+      throw new Error(`Connectome asset not found: ${atlasOption.connectomeAssetId}`);
+    }
+    if (connectomeEntry.supportStatus !== 'supported') {
+      this.updateOutput(
+        `${atlasSpaceName(atlasOption)} group-FC pack is not supported yet; ` +
+        'direct lesion overlap is ready, but network-map and threshold stages were skipped.'
+      );
+      return { stopPipeline: true };
+    }
+    this.updateOutput(`Loading ${atlasSpaceName(atlasOption)} group-FC pack...`);
     // Phase 37: surface download progress for the heavy FC pack
     // (~30 MB cold; cache hit is instant). The callback is throttled
     // to one progress message per ~512 KB to avoid spamming the
     // console + status bar.
     let lastTick = 0;
-    const { arrayBuffer, index, manifestEntry } =
-      await loadConnectomeFromManifest('yeo7-fc-pack', {
-        onProgress: ({ received, total, label }) => {
-          if (received - lastTick < 512 * 1024 && received !== total) return;
-          lastTick = received;
-          const mb = (received / 1048576).toFixed(1);
-          if (total) {
-            const totalMb = (total / 1048576).toFixed(0);
-            const pct = Math.round((received / total) * 100);
-            this.handleWorkerProgress(pct / 100, `Downloading ${label} (${mb}/${totalMb} MB)`);
-          } else {
-            this.updateOutput(`Downloading ${label}: ${mb} MB`);
-          }
+    let requestedLabels = null;
+    let weights = null;
+    if (atlasOption.weightSource === 'parcel') {
+      requestedLabels = this.overlapResult.parcelResult.parcels.map(parcel => String(parcel.label));
+      if (requestedLabels.length === 0) {
+        this.updateOutput(`No labelled ${atlasSpaceName(atlasOption)} parcels overlap the lesion; network map skipped.`);
+        return;
+      }
+    }
+    const progressOptions = {
+      onProgress: ({ received, total, label }) => {
+        if (received - lastTick < 512 * 1024 && received !== total) return;
+        lastTick = received;
+        const mb = (received / 1048576).toFixed(1);
+        if (total) {
+          const totalMb = (total / 1048576).toFixed(0);
+          const pct = Math.round((received / total) * 100);
+          this.handleWorkerProgress(pct / 100, `Downloading ${label} (${mb}/${totalMb} MB)`);
+        } else {
+          this.updateOutput(`Downloading ${label}: ${mb} MB`);
         }
-      });
-    const pack = decodeFcPack(arrayBuffer, {
-      voxelOrder: manifestEntry.voxelOrder,
-      ...index
-    });
-
-    const NETWORK_ORDER = [
-      'Visual', 'Somatomotor', 'DorsalAttention', 'VentralAttention',
-      'Limbic', 'Frontoparietal', 'Default'
-    ];
-    const weights = summaryToNetworkWeights(this.overlapResult.summary, NETWORK_ORDER);
-    const dims = index.shape.slice(1);   // shape = [7, X, Y, Z]
-    const atlasAssetId = index.atlasAssetId || manifestEntry.atlasAssetId || 'yeo7-2mm';
+      }
+    };
+    const loadResult = requestedLabels?.length
+      ? await loadConnectomeChannelsFromManifest(
+        atlasOption.connectomeAssetId,
+        requestedLabels,
+        { ...progressOptions, manifest }
+      )
+      : await loadConnectomeFromManifest(atlasOption.connectomeAssetId, { ...progressOptions, manifest });
+    const { index, manifestEntry } = loadResult;
+    const pack = this.decodeLoadedConnectome(loadResult, requestedLabels);
+    if (atlasOption.weightSource === 'parcel') {
+      const channelLabels = pack.channelLabels || index.channelLabels || index.parcelLabels || {};
+      weights = parcelResultToChannelWeights(this.overlapResult.parcelResult, channelLabels).weights;
+    } else {
+      const channelLabels = index.networkLabels || manifestEntry.networkLabels || {};
+      const networkOrder = Object.keys(channelLabels)
+        .sort((a, b) => Number(a) - Number(b))
+        .map(key => channelLabels[key]);
+      weights = summaryToNetworkWeights(this.overlapResult.summary, networkOrder);
+    }
+    const dims = index.shape.slice(1);
+    const atlasAssetId =
+      index.atlasAssetId ||
+      manifestEntry.atlasAssetId ||
+      atlasOption.affectedAtlasAssetId ||
+      atlasOption.overlapAtlasAssetId;
+    const networkMapSpace = atlasVolumeSpace(atlasAssetId);
     const atlas = await loadAtlasFromManifest(atlasAssetId);
     if (!dimsEqual(dims, atlas.dims)) {
       throw new Error(
@@ -1482,7 +1873,9 @@ export class LesionNetworkMappingApp {
     const flatAffine = flattenAffine3Rows(atlasAffine);
     this.updateOutput(
       `Computing network map: weights=[${
-        Array.from(weights).map(w => w.toFixed(2)).join(', ')
+        Array.from(weights).slice(0, 12).map(w => w.toFixed(2)).join(', ')
+      }${
+        weights.length > 12 ? ', ...' : ''
       }]`
     );
     const fcMap = fcWeightedSum(weights, pack.tMaps, dims);
@@ -1490,23 +1883,28 @@ export class LesionNetworkMappingApp {
     // Stash for Phase 5 re-thresholding without recomputing the FC sum.
     this.networkMapData = fcMap;
     this.networkMapDims = dims;
+    this.networkMapLabelAtlas = atlas;
     const spacingMm = manifestEntry.atlasResolutionMm || atlas.manifestEntry?.resolutionMm || 2;
     this.networkMapSpacing = [spacingMm, spacingMm, spacingMm];
     this.networkMapAffine = flatAffine;
 
-    // Wrap as a NIfTI for download / overlay. The Yeo atlas's spacing /
-    // affine is the canonical pose for the FC pack — manifestEntry from
-    // the connectome carries atlasResolutionMm; the Yeo atlas itself is
-    // the same grid (99x117x95 2mm).
+    // Wrap as a NIfTI for download / overlay. The selected connectome
+    // declares the atlas-space grid used for the FC pack.
     const niftiBuffer = writeNifti1(fcMap, {
       dims,
       spacing: this.networkMapSpacing,
       affine: this.networkMapAffine,
-      description: 'LNM Yeo7 FC weighted sum'
+      description: `LNM ${atlasSpaceName(atlasOption)} FC weighted sum`
     });
-    this.networkMapFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map.nii');
+    this.networkMapFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map.nii', {
+      space: networkMapSpace,
+      role: 'network-map',
+      sourceStage: 'fc-weighted-sum',
+      dims,
+      affine: atlasAffine
+    });
 
-    await this.displayNetworkMapOnYeoTemplate(atlas, flatAffine);
+    await this.displayNetworkMapOnAtlasTemplate(atlas, flatAffine);
     const dlBtn = document.getElementById('downloadNetworkMapButton');
     if (dlBtn) dlBtn.disabled = false;
 
@@ -1539,35 +1937,51 @@ export class LesionNetworkMappingApp {
     URL.revokeObjectURL(url);
   }
 
-  buildYeoBrainMaskBaseFile(atlas, flatAffine) {
+  buildAtlasBrainMaskBaseFile(atlas, flatAffine) {
     const base = new Float32Array(atlas.data.length);
     for (let i = 0; i < atlas.data.length; i++) {
       base[i] = atlas.data[i] > 0 ? 1 : 0;
     }
+    const atlasAffine = atlas.header ? affineFromHeader(atlas.header) : flatAffine;
     const niftiBuffer = writeNifti1(base, {
       dims: atlas.dims,
       spacing: this.networkMapSpacing,
       affine: flatAffine,
-      description: 'LNM Yeo7 atlas brain mask display base'
+      description: 'LNM atlas brain mask display base'
     });
-    return arrayBufferToFile(niftiBuffer, 'lnm-yeo-brain-mask.nii');
+    return arrayBufferToFile(niftiBuffer, 'lnm-atlas-brain-mask.nii', {
+      space: atlasVolumeSpace(atlas.manifestEntry?.id || this.getAtlasOption().affectedAtlasAssetId || this.getAtlasOption().overlapAtlasAssetId),
+      role: 'atlas-brain-mask',
+      sourceStage: 'network-map-display',
+      dims: atlas.dims,
+      affine: atlasAffine
+    });
   }
 
-  async displayNetworkMapOnYeoTemplate(atlas, flatAffine) {
+  buildYeoBrainMaskBaseFile(atlas, flatAffine) {
+    return this.buildAtlasBrainMaskBaseFile(atlas, flatAffine);
+  }
+
+  async displayNetworkMapOnAtlasTemplate(atlas, flatAffine) {
     if (!this.networkMapFile) return;
     try {
-      this.networkMapBaseFile = this.buildYeoBrainMaskBaseFile(atlas, flatAffine);
+      this.networkMapBaseFile = this.buildAtlasBrainMaskBaseFile(atlas, flatAffine);
       const entries = [
-        { file: this.networkMapBaseFile, stage: 'yeo-brain-mask' }
+        { file: this.networkMapBaseFile, stage: 'atlas-brain-mask' }
       ];
       if (this.lesionFile) {
-        entries.push({
-          file: this.lesionFile,
-          colormap: LESION_MASK_COLORMAP_ID,
-          opacity: 0.35,
-          stage: 'lesion',
-          visible: this.layerVisible('lesion')
-        });
+        try {
+          assertSameSpace(this.networkMapBaseFile, this.lesionFile, 'Network-map lesion overlay');
+          entries.push({
+            file: this.lesionFile,
+            colormap: LESION_MASK_COLORMAP_ID,
+            opacity: 0.35,
+            stage: 'lesion',
+            visible: this.layerVisible('lesion')
+          });
+        } catch (err) {
+          this.updateOutput(`Lesion overlay skipped on network map: ${err.message}`);
+        }
       }
       entries.push({
         file: this.networkMapFile,
@@ -1577,13 +1991,18 @@ export class LesionNetworkMappingApp {
         scalar: true,
         symmetricCal: true
       });
-      await this.viewerController.loadVolumeStack(entries);
+      this.assertViewerStackSpaces(entries, 'Network-map atlas-space stack');
+      await this.loadViewerVolumeStack(entries);
       this.applyViewerLayerVisibility();
       this.refreshViewerLayerControls();
-      this.updateOutput('Network map displayed on the Yeo atlas grid.');
+      this.updateOutput('Network map displayed on the selected atlas grid.');
     } catch (err) {
       this.updateOutput(`Network-map render error: ${err.message}`);
     }
+  }
+
+  async displayNetworkMapOnYeoTemplate(atlas, flatAffine) {
+    return this.displayNetworkMapOnAtlasTemplate(atlas, flatAffine);
   }
 
   configureTopPercentThresholdSlider({ resetValue = false } = {}) {
@@ -1641,7 +2060,14 @@ export class LesionNetworkMappingApp {
       affine: this.networkMapAffine,
       description: `LNM thresholded topPercent=${topPercent} q=${value} magnitude=${symmetric} cluster>=${minClusterVoxels}`
     });
-    this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii');
+    const networkMapMeta = getSpatialMetadata(this.networkMapFile);
+    this.thresholdedMaskFile = arrayBufferToFile(niftiBuffer, 'lnm-network-map-thresh.nii', {
+      space: networkMapMeta?.space || atlasOptionSpace(this.overlapResult?.atlasOption || this.getAtlasOption(), 'affected'),
+      role: 'threshold-map',
+      sourceStage: 'threshold',
+      dims: this.networkMapDims,
+      affine: this.networkMapAffine
+    });
     this.patientThresholdedMaskFile = null;
     const dlBtn = document.getElementById('downloadThresholdedNetworkMapButton');
     if (dlBtn) dlBtn.disabled = false;
@@ -1667,11 +2093,15 @@ export class LesionNetworkMappingApp {
     this.affectedNetworkResult = null;
     const resultEl = document.getElementById('affectedNetworkResults');
     const tableEl = document.getElementById('affectedNetworkTable');
-    const atlas = this.overlapResult?.atlas;
+    const atlasOption = this.overlapResult?.atlasOption || this.getAtlasOption();
+    const atlas = this.networkMapLabelAtlas || this.overlapResult?.atlas;
 
     if (!mask || !atlas) {
       this.clearAffectedNetworkTable();
       return null;
+    }
+    if (this.thresholdedMaskFile && atlas.manifestEntry?.id) {
+      assertSpace(this.thresholdedMaskFile, atlasVolumeSpace(atlas.manifestEntry.id), 'Affected-map labeling');
     }
     if (!dimsEqual(this.networkMapDims, atlas.dims)) {
       this.clearAffectedNetworkTable();
@@ -1688,12 +2118,12 @@ export class LesionNetworkMappingApp {
       atlas: atlas.data,
       dims: atlas.dims
     });
-    const summary = summarizeNetworkOverlap(parcelResult, atlas.networkLabels);
-    this.affectedNetworkResult = { parcelResult, summary, atlas };
+    const summary = summarizeAtlasOverlap(parcelResult, atlas, atlasOption);
+    this.affectedNetworkResult = { parcelResult, summary, atlas, atlasOption };
 
     if (tableEl) {
       renderOverlapTable(tableEl, summary, {
-        colormap: YEO7_COLORMAP,
+        colormap: this.getAtlasColormap(atlasOption),
         percentHeader: '% of map',
         emptyLabel: 'No affected voxels'
       });
@@ -1811,6 +2241,8 @@ export class LesionNetworkMappingApp {
     if (!this.structuralFile) {
       throw new Error('No structural T1 is available.');
     }
+    assertSpace(this.thresholdedMaskFile, getSpatialMetadata(this.networkMapFile)?.space || atlasOptionSpace(this.overlapResult?.atlasOption || this.getAtlasOption(), 'affected'), 'Patient threshold projection source');
+    assertSpace(this.structuralFile, VOLUME_SPACES.MNI160, 'Patient threshold projection structural reference');
     const [thresholdBuf, structuralBuf, mni160] = await Promise.all([
       this.thresholdedMaskFile.arrayBuffer(),
       this.structuralFile.arrayBuffer(),
@@ -1840,17 +2272,19 @@ export class LesionNetworkMappingApp {
     return { mask, dims: mni160.dims };
   }
 
-  async projectYeoAtlasToMni160Grid() {
+  async projectAtlasToMni160Grid() {
+    const atlasOption = this.getAtlasOption();
     const [atlas, mni160] = await Promise.all([
-      loadAtlasFromManifest('yeo7-2mm'),
+      loadAtlasFromManifest(atlasOption.overlapAtlasAssetId),
       loadAtlasFromManifest('lnm-mni160')
     ]);
     const atlasAffine = affineFromHeader(atlas.header);
     const mni160Affine = affineFromHeader(mni160.header);
-    const atlasLabels = new Uint8Array(atlas.data.length);
+    const OutputCtor = atlasOption.id === 'schaefer400' ? Uint16Array : Uint8Array;
+    const atlasLabels = new OutputCtor(atlas.data.length);
     for (let i = 0; i < atlas.data.length; i++) {
       const label = Math.round(Number(atlas.data[i]) || 0);
-      atlasLabels[i] = label > 0 ? Math.min(label, 255) : 0;
+      atlasLabels[i] = label > 0 ? label : 0;
     }
     const resampled = resampleAffine(
       atlasLabels,
@@ -1859,10 +2293,15 @@ export class LesionNetworkMappingApp {
       'nearest'
     );
     return {
-      labels: resampled instanceof Uint8Array ? resampled : new Uint8Array(resampled),
+      labels: resampled instanceof OutputCtor ? resampled : new OutputCtor(resampled),
       dims: mni160.dims,
-      affine: mni160Affine
+      affine: mni160Affine,
+      atlasOption
     };
+  }
+
+  async projectYeoAtlasToMni160Grid() {
+    return this.projectAtlasToMni160Grid();
   }
 
   async projectAtlasToPatientSpace() {
@@ -1872,21 +2311,22 @@ export class LesionNetworkMappingApp {
     if (!this.hasRegistrationDisplacement) {
       throw new Error('Run MNI registration first.');
     }
-    const { labels, dims } = await this.projectYeoAtlasToMni160Grid();
+    const { labels, dims, atlasOption } = await this.projectAtlasToMni160Grid();
     const maskBuffer = labels.buffer.slice(labels.byteOffset, labels.byteOffset + labels.byteLength);
     await this.runInverseWarpStage({
       maskBuffer,
       maskDims: dims,
       stage: 'atlas-patient',
-      description: 'Yeo atlas projected to patient T1 space',
-      labelMap: true
+      description: `${atlasSpaceName(atlasOption)} atlas projected to patient T1 space`,
+      labelMap: true,
+      labelDataType: labels instanceof Uint16Array ? 'uint16' : 'uint8'
     }, 'atlas-patient');
     return this.patientAtlasFile;
   }
 
   async showSubjectSpaceAtlas() {
     if (!this.patientAtlasFile) {
-      this.updateOutput('Projecting Yeo atlas to patient T1 space for visual alignment QC...');
+      this.updateOutput(`Projecting ${atlasSpaceName(this.getAtlasOption())} atlas to patient T1 space for visual alignment QC...`);
       await this.projectAtlasToPatientSpace();
     }
     this.viewerLayerVisibility.atlasQc = true;
@@ -1973,7 +2413,13 @@ export class LesionNetworkMappingApp {
       affine,
       description: 'LNM fixed MNI160 registration QC template'
     });
-    this.registrationTemplateFile = arrayBufferToFile(niftiBuffer, 'lnm-mni160-template.nii');
+    this.registrationTemplateFile = arrayBufferToFile(niftiBuffer, 'lnm-mni160-template.nii', {
+      space: VOLUME_SPACES.MNI160,
+      role: 'registration-template',
+      sourceStage: 'registration-template',
+      dims: mni160.dims,
+      affine: affineFromHeader(mni160.header)
+    });
     return this.registrationTemplateFile;
   }
 
@@ -1986,7 +2432,13 @@ export class LesionNetworkMappingApp {
       affine: flattenAffine3Rows(affine),
       description: 'LNM Yeo7 label atlas resampled to fixed MNI160 grid'
     });
-    this.yeoAtlasMni160File = arrayBufferToFile(niftiBuffer, 'lnm-yeo7-atlas-mni160.nii');
+    this.yeoAtlasMni160File = arrayBufferToFile(niftiBuffer, 'lnm-yeo7-atlas-mni160.nii', {
+      space: VOLUME_SPACES.MNI160,
+      role: 'atlas-qc',
+      sourceStage: 'atlas-mni160',
+      dims,
+      affine
+    });
     return this.yeoAtlasMni160File;
   }
 
@@ -2029,7 +2481,13 @@ export class LesionNetworkMappingApp {
       affine: flattenAffine3Rows(affineFromHeader(template.header)),
       description: 'LNM registration QC checkerboard: fixed MNI template and registered T1'
     });
-    this.registrationCheckerboardFile = arrayBufferToFile(niftiBuffer, 'lnm-registration-checkerboard.nii');
+    this.registrationCheckerboardFile = arrayBufferToFile(niftiBuffer, 'lnm-registration-checkerboard.nii', {
+      space: VOLUME_SPACES.MNI160,
+      role: 'registration-checkerboard',
+      sourceStage: 'registration-checkerboard',
+      dims: template.dims,
+      affine: affineFromHeader(template.header)
+    });
     return this.registrationCheckerboardFile;
   }
 
@@ -2051,7 +2509,8 @@ export class LesionNetworkMappingApp {
         stage: 'registered-t1-mni160'
       }
     ];
-    await this.viewerController.loadVolumeStack(entries);
+    this.assertViewerStackSpaces(entries, 'MNI registration QC stack');
+    await this.loadViewerVolumeStack(entries);
     this.applyViewerLayerVisibility();
     this.applyRegistrationBlend(blend);
     this.refreshViewerLayerControls();
@@ -2060,9 +2519,11 @@ export class LesionNetworkMappingApp {
 
   async renderCheckerboardRegistrationQc() {
     const checkerboardFile = await this.ensureRegistrationCheckerboardFile();
-    await this.viewerController.loadVolumeStack([
+    const entries = [
       { file: checkerboardFile, stage: 'registration-checkerboard' }
-    ]);
+    ];
+    this.assertViewerStackSpaces(entries, 'Registration checkerboard stack');
+    await this.loadViewerVolumeStack(entries);
     this.applyViewerLayerVisibility();
     this.refreshViewerLayerControls();
     this.updateOutput('Registration QC: checkerboard of fixed MNI template and registered T1 displayed.');
@@ -2094,7 +2555,8 @@ export class LesionNetworkMappingApp {
       scalar: true,
       stage: 'registration-displacement'
     });
-    await this.viewerController.loadVolumeStack(entries);
+    this.assertViewerStackSpaces(entries, 'Registration displacement QC stack');
+    await this.loadViewerVolumeStack(entries);
     this.applyRegistrationBlend(this.registrationBlendValue);
     this.refreshViewerLayerControls();
     this.updateOutput('Registration QC: SynthMorph displacement magnitude displayed on the fixed MNI template.');
@@ -2110,7 +2572,7 @@ export class LesionNetworkMappingApp {
     if (includeAtlas && this.patientAtlasFile) {
       entries.push({
         file: this.patientAtlasFile,
-        colormap: 'lnm-yeo7',
+        colormap: this.getAtlasOption().colormap,
         opacity: 0.45,
         stage: 'atlas-qc',
         visible: this.layerVisible('atlasQc')
@@ -2125,7 +2587,8 @@ export class LesionNetworkMappingApp {
         visible: this.layerVisible('threshold')
       });
     }
-    await this.viewerController.loadVolumeStack(entries);
+    this.assertViewerStackSpaces(entries, 'Patient-space viewer stack');
+    await this.loadViewerVolumeStack(entries);
     this.applyViewerLayerVisibility();
     this.refreshViewerLayerControls();
     this.updateOutput(includeAtlas
@@ -2172,13 +2635,13 @@ export class LesionNetworkMappingApp {
 
   downloadSubjectSpaceAtlas() {
     if (!this.patientAtlasFile) {
-      this.updateOutput('No patient-space Yeo atlas available yet.');
+      this.updateOutput('No patient-space atlas available yet.');
       return;
     }
     const url = URL.createObjectURL(this.patientAtlasFile);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'lnm-yeo7-atlas-patient.nii';
+    a.download = `lnm-${this.getAtlasOption().id}-atlas-patient.nii`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2215,10 +2678,12 @@ export class LesionNetworkMappingApp {
     this.refreshViewerLayerControls();
     const registrationReady = this._waitForStepComplete('register');
     const inputBuffer = await this.structuralFile.arrayBuffer();
+    assertSpace(this.structuralFile, VOLUME_SPACES.MNI160, 'MNI registration structural input');
     await this.executor.loadVolume(inputBuffer);
     let brainMaskBuffer = null;
     let brainMaskDims = null;
     if (this.brainmaskFile) {
+      assertSpace(this.brainmaskFile, VOLUME_SPACES.MNI160, 'MNI registration brain-mask input');
       const brainmask = await decodeNiftiBuffer(await this.brainmaskFile.arrayBuffer());
       const mask = binarise(brainmask.data);
       brainMaskBuffer = mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength);
@@ -2282,6 +2747,11 @@ export class LesionNetworkMappingApp {
       const isAligned = dimsEqual(probe.dims, mni160.dims) &&
         affineNearlyEqual(probeAffine, mni160Affine);
       if (isAligned) {
+        this.tagDecodedFileSpace(this.structuralFile, probe, {
+          space: VOLUME_SPACES.MNI160,
+          role: 'structural',
+          sourceStage: 'prealign-skip'
+        });
         if (!this.nativeStructuralFile) this.nativeStructuralFile = this.structuralFile;
         if (!this.nativeStructuralInfo) {
           this.nativeStructuralInfo = { dims: probe.dims, affine: probeAffine };
@@ -2305,6 +2775,11 @@ export class LesionNetworkMappingApp {
     const t1Buf = await this.structuralFile.arrayBuffer();
     const t1 = await decodeNiftiBuffer(t1Buf);
     const t1Affine = affineFromHeader(t1.header);
+    this.tagDecodedFileSpace(this.structuralFile, t1, {
+      space: this.structuralSpace() || VOLUME_SPACES.NATIVE_T1,
+      role: 'structural',
+      sourceStage: 'prealign-input'
+    });
     if (!this.nativeStructuralFile) this.nativeStructuralFile = this.structuralFile;
     if (!this.nativeStructuralInfo) {
       this.nativeStructuralInfo = { dims: t1.dims, affine: t1Affine };
@@ -2312,6 +2787,11 @@ export class LesionNetworkMappingApp {
 
     const maskBuf = await this.brainmaskFile.arrayBuffer();
     const mask = await decodeNiftiBuffer(maskBuf);
+    this.tagDecodedFileSpace(this.brainmaskFile, mask, {
+      space: this.structuralSpace() || VOLUME_SPACES.NATIVE_T1,
+      role: 'brainmask',
+      sourceStage: 'prealign-input'
+    });
     if (!dimsEqual(mask.dims, t1.dims)) {
       throw new Error(
         `prealign: brain mask dims ${mask.dims.join('x')} != T1 dims ${t1.dims.join('x')}`
@@ -2360,8 +2840,21 @@ export class LesionNetworkMappingApp {
       description: 'LNM prealign brainmask resampled to fixed lnm-mni160 1mm'
     });
 
-    this.structuralFile = arrayBufferToFile(t1Nifti, 'lnm-prealign-t1.nii');
-    this.brainmaskFile = arrayBufferToFile(maskNifti, 'lnm-prealign-brainmask.nii');
+    this.structuralFile = arrayBufferToFile(t1Nifti, 'lnm-prealign-t1.nii', {
+      space: VOLUME_SPACES.MNI160,
+      role: 'structural',
+      sourceStage: 'prealign',
+      dims: mniDims,
+      affine: mni160Affine
+    });
+    if (!this.nativeBrainmaskFile) this.nativeBrainmaskFile = this.brainmaskFile;
+    this.brainmaskFile = arrayBufferToFile(maskNifti, 'lnm-prealign-brainmask.nii', {
+      space: VOLUME_SPACES.MNI160,
+      role: 'brainmask',
+      sourceStage: 'prealign',
+      dims: mniDims,
+      affine: mni160Affine
+    });
     this.hasRegistrationDisplacement = false;
     this._thresholdProjectionWarningShown = false;
     // Stale results from the pre-prealign space.
@@ -2384,15 +2877,17 @@ export class LesionNetworkMappingApp {
     this.displacementMagnitudeFile = null;
     this.registrationCheckerboardFile = null;
     this.networkMapBaseFile = null;
+    this.networkMapLabelAtlas = null;
     this.cancelThresholdPreviewOverlay({ removeOverlay: true });
     this.clearAffectedNetworkTable();
 
     // Refresh viewer with the aligned T1 + brainmask overlay.
-    await this.viewerController.loadBaseVolume(this.structuralFile, {
+    await this.loadViewerBaseVolume(this.structuralFile, {
       stage: 'structural',
       visible: this.layerVisible('structural')
     });
     try {
+      this.assertViewerOverlaySpace(this.brainmaskFile, 'Prealign brain-mask overlay');
       await this.viewerController.loadOverlay(this.brainmaskFile, 'green', 0.4, {
         stage: 'brainmask',
         visible: this.layerVisible('brainmask')
@@ -2406,12 +2901,12 @@ export class LesionNetworkMappingApp {
     return this.structuralFile;
   }
 
-  // Phase 6.2: bridge Register -> Yeo overlap. Decodes the segmentation NIfTI
+  // Phase 6.2: bridge Register -> selected-atlas overlap. Decodes the segmentation NIfTI
   // produced by runLesionSegmentation, hands the F-order Uint8 voxels to the
   // worker (which applies the integrated displacement field stashed by
-  // runRegistration), then resamples the warped 1mm output onto the Yeo7
+  // runRegistration), then resamples the warped 1mm output onto the selected
   // atlas grid via affine resample. Sets `this.lesionFile` so a follow-up
-  // runYeoOverlap()/runFcNetworkMap()/applyNetworkThreshold() chain runs
+  // runAtlasOverlap()/runFcNetworkMap()/applyNetworkThreshold() chain runs
   // unmodified.
   async applyRegistrationToLesion() {
     if (!this.lesionMaskFile) {
@@ -2422,6 +2917,7 @@ export class LesionNetworkMappingApp {
       this.updateOutput('Review and confirm the lesion mask before warping it.');
       return null;
     }
+    assertSpace(this.lesionMaskFile, VOLUME_SPACES.MNI160, 'Warp lesion source');
     this.updateOutput('Decoding lesion mask for warp...');
     const lesionBuf = await this.lesionMaskFile.arrayBuffer();
     const decoded = await decodeNiftiBuffer(lesionBuf);
@@ -2446,34 +2942,52 @@ export class LesionNetworkMappingApp {
     });
     const mniLesionBuf = await mniLesionPromise;
 
-    // Resample the 1mm warped lesion onto the Yeo atlas grid.
-    this.updateOutput('Resampling warped lesion onto Yeo atlas grid...');
+    const atlasOption = this.getAtlasOption();
+    // Resample the 1mm warped lesion onto the selected atlas grid.
+    this.updateOutput(`Resampling warped lesion onto ${atlasSpaceName(atlasOption)} grid...`);
     const warped = await decodeNiftiBuffer(mniLesionBuf);
+    if (this.mniLesionFile) {
+      this.tagDecodedFileSpace(this.mniLesionFile, warped, {
+        space: VOLUME_SPACES.MNI160,
+        role: 'lesion',
+        sourceStage: 'mni-lesion'
+      });
+    }
     const warpedAffine = affineFromHeader(warped.header);
-    const atlas = await loadAtlasFromManifest('yeo7-2mm');
+    const atlas = await loadAtlasFromManifest(atlasOption.overlapAtlasAssetId);
     const atlasAffine = affineFromHeader(atlas.header);
     const warpedU8 = warped.data instanceof Uint8Array
       ? warped.data
       : binarise(warped.data);
-    const yeoMask = resampleAffine(
+    const atlasMask = resampleAffine(
       warpedU8,
       warped.dims, warpedAffine,
       atlas.dims, atlasAffine,
       'nearest'
     );
 
-    // Wrap the Yeo-grid mask as a NIfTI and adopt it as the lesion file.
+    // Wrap the atlas-grid mask as a NIfTI and adopt it as the lesion file.
     const flatAffine = flattenAffine3Rows(atlasAffine);
-    const yeoNifti = writeNifti1(yeoMask, {
+    const atlasNifti = writeNifti1(atlasMask, {
       dims: atlas.dims,
-      spacing: [2, 2, 2],
+      spacing: [atlas.manifestEntry?.resolutionMm || 2, atlas.manifestEntry?.resolutionMm || 2, atlas.manifestEntry?.resolutionMm || 2],
       affine: flatAffine,
-      description: 'LNM lesion warped + resampled to MNI Yeo grid'
+      description: `LNM lesion warped + resampled to ${atlasSpaceName(atlasOption)} grid`
     });
-    const yeoFile = arrayBufferToFile(yeoNifti, 'lnm-lesion-yeo.nii');
-    await this.setLesion(yeoFile);
-    this.updateOutput('Lesion ready on Yeo grid.');
-    return yeoFile;
+    const atlasFile = arrayBufferToFile(atlasNifti, `lnm-lesion-${atlasOption.id}.nii`, {
+      space: atlasOptionSpace(atlasOption, 'overlap'),
+      role: 'lesion',
+      sourceStage: 'atlas-lesion',
+      dims: atlas.dims,
+      affine: atlasAffine
+    });
+    this.lesionFile = atlasFile;
+    this.refreshViewerLayerControls();
+    this.updateOutput(
+      `Lesion ready on ${atlasSpaceName(atlasOption)} grid for overlap. ` +
+      'Patient-space lesion overlay left unchanged.'
+    );
+    return atlasFile;
   }
 
   // Phase 15: pipeline-driven runFullPipeline. Iterates the selected
@@ -2495,15 +3009,16 @@ export class LesionNetworkMappingApp {
     // Precondition gate based on the first stage's input expectation.
     const firstModule = pipeline.stages[0]?.module;
     if (firstModule === 'parcel-overlap') {
-      // Manual-mask path — needs a Yeo-grid lesion already loaded.
+      // Manual-mask path — needs a lesion already aligned to the selected atlas.
       if (!this.lesionFile) {
-        this.updateOutput('Drop a Yeo-grid lesion mask first.');
+        this.updateOutput('Drop an atlas-grid lesion mask first.');
         return;
       }
-      const onYeoGrid = await this._lesionFileMatchesYeoGrid();
-      if (!onYeoGrid) {
+      const onAtlasGrid = await this._lesionFileMatchesAtlasGrid();
+      if (!onAtlasGrid) {
+        const atlasOption = this.getAtlasOption();
         this.updateOutput(
-          'Lesion mask is not on the Yeo7 grid (99x117x95). Use a pipeline ' +
+          `Lesion mask is not on the ${atlasSpaceName(atlasOption)} grid. Use a pipeline ` +
           'that includes registration, or pre-register the mask externally.'
         );
         return;
@@ -2534,6 +3049,9 @@ export class LesionNetworkMappingApp {
           this._pendingMaskResume = { pipeline, nextStageIndex: stageIndex + 1 };
           this.updateOutput('Pipeline paused for manual lesion-mask review.');
           return 'paused';
+        }
+        if (result?.stopPipeline) {
+          return 'stopped';
         }
       } catch (err) {
         this.updateOutput(`Stage '${stage.id}' (${stage.module}) failed: ${err.message}`);
@@ -2603,14 +3121,14 @@ export class LesionNetworkMappingApp {
         await this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile });
         return { pausedForMaskReview: true };
       case 'registration':
-        // The bridge (apply-warp + Yeo-grid resample) is the natural
+        // The bridge (apply-warp + selected-atlas resample) is the natural
         // companion of the SynthMorph registration step. We chain them
         // here so a pipeline doesn't have to declare the bridge as a
         // separate stage.
         await this.runRegistration();
         return this.applyRegistrationToLesion();
       case 'parcel-overlap':
-        return this.runYeoOverlap();
+        return this.runAtlasOverlap();
       case 'fc-weighted-sum':
         return this.runFcNetworkMap();
       case 'threshold':
@@ -2655,6 +3173,7 @@ export class LesionNetworkMappingApp {
     this.overlapResult = null;
     this.affectedNetworkResult = null;
     this.brainmaskFile = null;
+    this.nativeBrainmaskFile = null;
     this.lesionMaskFile = null;
     this.lesionMaskConfirmed = false;
     this.autoLesionSeedFile = null;
@@ -2668,6 +3187,7 @@ export class LesionNetworkMappingApp {
     this.networkMapSpacing = null;
     this.networkMapAffine = null;
     this.networkMapBaseFile = null;
+    this.networkMapLabelAtlas = null;
     this.thresholdedMaskFile = null;
     this.patientThresholdedMaskFile = null;
     this.patientAtlasFile = null;
@@ -2680,6 +3200,7 @@ export class LesionNetworkMappingApp {
     this.mniLesionFile = null;
     if (full) {
       this.structuralFile = null;
+      this.viewerBaseFile = null;
       this.nativeStructuralFile = null;
       this.nativeStructuralInfo = null;
       this.fixedMni160Info = null;
@@ -2712,8 +3233,8 @@ export class LesionNetworkMappingApp {
     const summaryEl = document.getElementById('networkThresholdSummary');
     if (summaryEl) summaryEl.textContent = 'Compute a network map first to enable thresholding.';
     this.clearAffectedNetworkTable();
-    // Hide Yeo cortical-label coverage note.
-    this.showYeoLabelCoverageNote(0, 0);
+    // Hide atlas-label coverage note.
+    this.showAtlasCoverageNote(0, 0);
 
     if (this.executor && typeof this.executor.clearResults === 'function') {
       this.executor.clearResults();
@@ -2723,7 +3244,7 @@ export class LesionNetworkMappingApp {
     if (full || !this.structuralFile) {
       try { this.viewerController.clearAll?.(); } catch (e) { /* non-fatal */ }
     } else if (this.structuralFile) {
-      this.viewerController.loadBaseVolume(this.structuralFile, {
+      this.loadViewerBaseVolume(this.structuralFile, {
         stage: 'structural',
         visible: this.layerVisible('structural')
       })
@@ -2735,14 +3256,16 @@ export class LesionNetworkMappingApp {
   }
 
   async _lesionFileMatchesYeoGrid() {
+    return this._lesionFileMatchesAtlasGrid();
+  }
+
+  async _lesionFileMatchesAtlasGrid() {
     if (!this.lesionFile) return false;
     try {
       const buf = await this.lesionFile.arrayBuffer();
       const decoded = await decodeNiftiBuffer(buf);
-      // Yeo7 atlas is 99x117x95 (MNI152NLin2009cAsym 2mm). The overlap
-      // reducer enforces this dim-match anyway; this gate is just for
-      // routing.
-      return decoded.dims[0] === 99 && decoded.dims[1] === 117 && decoded.dims[2] === 95;
+      const atlas = await loadAtlasFromManifest(this.getAtlasOption().overlapAtlasAssetId);
+      return dimsEqual(decoded.dims, atlas.dims);
     } catch (err) {
       this.updateOutput(`Could not inspect lesion file: ${err.message}`);
       return false;
@@ -2750,11 +3273,15 @@ export class LesionNetworkMappingApp {
   }
 
   showYeoLabelCoverageNote(outside, total) {
+    return this.showAtlasCoverageNote(outside, total);
+  }
+
+  showAtlasCoverageNote(outside, total) {
     const el = document.getElementById('outsideAtlasWarning');
     if (!el) return;
     if (outside > 0 && total > 0) {
       const assigned = total - outside;
-      el.textContent = `${assigned} of ${total} lesion voxels are assigned to Yeo cortical network labels; ${outside} are unlabeled by this cortical atlas.`;
+      el.textContent = `${assigned} of ${total} lesion voxels are assigned to ${atlasSpaceName(this.getAtlasOption())} labels; ${outside} are unlabeled by this atlas.`;
       el.classList.remove('hidden');
     } else {
       el.textContent = '';
