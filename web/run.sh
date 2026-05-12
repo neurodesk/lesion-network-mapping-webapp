@@ -81,9 +81,102 @@ cd "$SCRIPT_DIR"
 
 # Serve with COOP/COEP headers for SharedArrayBuffer (multi-threaded WASM)
 python3 -c "
-import http.server, functools
+import http.server, json, os, threading, time, urllib.parse
+
+DOWNLOADS = {}
+DOWNLOAD_LOCK = threading.Lock()
+DOWNLOAD_TTL_SECONDS = 600
+MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
+DOWNLOAD_DIR = os.path.expanduser('~/Downloads')
+if not os.path.isdir(DOWNLOAD_DIR):
+    DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+def prune_downloads():
+    now = time.time()
+    for key, item in list(DOWNLOADS.items()):
+        if item['expires'] < now:
+            del DOWNLOADS[key]
+
+def safe_filename_from_path(path):
+    name = os.path.basename(urllib.parse.unquote(path.rstrip('/').split('/')[-1]))
+    if not name:
+        name = 'lnm-mask.nii'
+    return ''.join(ch if ch.isalnum() or ch in '._-' else '_' for ch in name)
 
 class CORSHandler(http.server.SimpleHTTPRequestHandler):
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if not parsed.path.startswith('/__lnm_downloads/'):
+            self.send_error(404, 'Not found')
+            return
+
+        try:
+            length = int(self.headers.get('Content-Length', '0') or '0')
+        except ValueError:
+            self.send_error(400, 'Invalid Content-Length')
+            return
+        if length <= 0:
+            self.send_error(400, 'Empty download payload')
+            return
+        if length > MAX_DOWNLOAD_BYTES:
+            self.send_error(413, 'Download payload too large')
+            return
+
+        data = self.rfile.read(length)
+        if len(data) != length:
+            self.send_error(400, 'Incomplete download payload')
+            return
+
+        filename = safe_filename_from_path(parsed.path)
+        with DOWNLOAD_LOCK:
+            prune_downloads()
+            DOWNLOADS[parsed.path] = {
+                'data': data,
+                'filename': filename,
+                'expires': time.time() + DOWNLOAD_TTL_SECONDS,
+            }
+        stage_only = self.headers.get('X-LNM-Stage-Only') == '1'
+        output_path = None
+        if not stage_only:
+            output_path = os.path.join(DOWNLOAD_DIR, filename)
+            tmp_path = '{}.tmp-{}-{}'.format(output_path, os.getpid(), threading.get_ident())
+            with open(tmp_path, 'wb') as f:
+                f.write(data)
+            os.replace(tmp_path, output_path)
+        payload = json.dumps({
+            'url': parsed.path,
+            'saved': not stage_only,
+            **({'savedPath': output_path} if output_path else {}),
+            'byteLength': len(data),
+        }).encode('utf-8')
+        self.send_response(201)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith('/__lnm_downloads/'):
+            with DOWNLOAD_LOCK:
+                prune_downloads()
+                item = DOWNLOADS.get(parsed.path)
+            if not item:
+                self.send_error(404, 'Download expired')
+                return
+            data = item['data']
+            filename = item['filename']
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Disposition', 'attachment; filename=\"{}\"'.format(filename))
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            self.close_connection = True
+            return
+        return super().do_GET()
+
     def send_head(self):
         for header in ('If-Modified-Since', 'If-None-Match'):
             if header in self.headers:
@@ -98,7 +191,7 @@ class CORSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Expires', '0')
         super().end_headers()
 
-http.server.HTTPServer(('', $PORT), CORSHandler).serve_forever()
+http.server.ThreadingHTTPServer(('', $PORT), CORSHandler).serve_forever()
 " &
 SERVER_PID="$!"
 echo "$SERVER_PID" > "$PID_FILE"

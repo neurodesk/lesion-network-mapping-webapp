@@ -29,6 +29,7 @@ import { LESION_MASK_COLORMAP_ID } from '../web/js/app/lnm-labels.js';
 import {
   VOLUME_SPACES,
   atlasVolumeSpace,
+  getSpatialMetadata,
   tagSpatialFile
 } from '../web/js/modules/spatial-file.js';
 
@@ -162,6 +163,47 @@ function assertAffineClose(actual, expected, message, tolerance = 1e-5) {
       );
     }
   }
+}
+
+function installMockDownloadCache() {
+  const originalCaches = globalThis.caches;
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const entries = new Map();
+  const deletes = [];
+  globalThis.caches = {
+    open: async (name) => {
+      assert.equal(name, 'lnm-mask-downloads-v1',
+        'mask downloads must use the dedicated Cache Storage bucket');
+      return {
+        put: async (url, response) => { entries.set(url, response); },
+        match: async (url) => entries.get(url),
+        delete: async (url) => {
+          deletes.push(url);
+          entries.delete(url);
+          return true;
+        }
+      };
+    }
+  };
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      ...(globalThis.navigator || {}),
+      serviceWorker: { controller: {} }
+    }
+  });
+  return {
+    entries,
+    deletes,
+    restore() {
+      globalThis.caches = originalCaches;
+      if (navigatorDescriptor) {
+        Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+      } else {
+        delete globalThis.navigator;
+      }
+    }
+  };
 }
 
 function makeClassList(initial = []) {
@@ -631,6 +673,289 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
+// ---- Test 10c.2: advanced Upload mask choice opens native-mask review ----
+{
+  const app = makeApp();
+  const listeners = {};
+  let clickCount = 0;
+  const manualMaskInput = {
+    files: [],
+    value: 'stale',
+    click: () => { clickCount += 1; },
+    addEventListener: (eventName, handler) => { listeners[`manualMaskFileInput:${eventName}`] = handler; }
+  };
+  const restoreDocument = useMockElements({
+    manualMaskFileInput: manualMaskInput,
+    uploadManualMaskButton: {
+      addEventListener: (eventName, handler) => { listeners[`uploadManualMaskButton:${eventName}`] = handler; }
+    },
+    uploadReviewMaskButton: {
+      addEventListener: (eventName, handler) => { listeners[`uploadReviewMaskButton:${eventName}`] = handler; }
+    }
+  });
+  const uploaded = { name: 'native-lesion-mask.nii' };
+  let requestedFile = null;
+  app.startUploadedLesionMaskReview = async (file) => { requestedFile = file; };
+
+  try {
+    app.bindEvents();
+    assert.equal(typeof listeners['uploadManualMaskButton:click'], 'function',
+      'advanced Upload mask button must bind a click handler');
+    listeners['uploadManualMaskButton:click']();
+    assert.equal(clickCount, 1,
+      'advanced Upload mask button must open the hidden file input');
+    assert.equal(typeof listeners['uploadReviewMaskButton:click'], 'function',
+      'review-toolbar Upload button must bind a click handler');
+    listeners['uploadReviewMaskButton:click']();
+    assert.equal(clickCount, 2,
+      'review-toolbar Upload button must open the same hidden file input');
+    assert.equal(typeof listeners['manualMaskFileInput:change'], 'function',
+      'manual mask file input must bind a change handler');
+    manualMaskInput.files = [uploaded];
+    listeners['manualMaskFileInput:change']({ target: manualMaskInput });
+    await waitForMicrotaskCondition(
+      () => requestedFile === uploaded,
+      'manual mask upload must call startUploadedLesionMaskReview with the chosen file'
+    );
+    await waitForMicrotaskCondition(
+      () => manualMaskInput.value === '',
+      'manual mask upload must reset the input so the same file can be selected again'
+    );
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 10c.2b: invalid manual mask upload names the rejected file ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const manualMaskInput = {
+    files: [],
+    value: 'bad',
+    click: () => {},
+    addEventListener: (eventName, handler) => { listeners[`manualMaskFileInput:${eventName}`] = handler; }
+  };
+  const restoreDocument = useMockElements({
+    manualMaskFileInput: manualMaskInput
+  });
+  const uploaded = { name: 'notes.txt' };
+  app.startUploadedLesionMaskReview = async () => {
+    throw new Error('Input is not a NIfTI file');
+  };
+
+  try {
+    app.bindEvents();
+    manualMaskInput.files = [uploaded];
+    listeners['manualMaskFileInput:change']({ target: manualMaskInput });
+    await waitForMicrotaskCondition(
+      () => /notes\.txt/.test(app._messages.at(-1) || ''),
+      'manual mask upload error must name the rejected file'
+    );
+    assert.match(app._messages.at(-1), /\.nii or \.nii\.gz/,
+      'manual mask upload error must tell users the expected NIfTI formats');
+    assert.equal(manualMaskInput.value, '',
+      'manual mask upload failure must still reset the input');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 10c.3: uploaded native masks are not shifted by prealign affine ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const nativeDims = [4, 4, 4];
+  const nativeAffine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const prealignSamplingAffine = [
+    [1, 0, 0, -1],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const flatten = (affine) => [
+    affine[0][0], affine[0][1], affine[0][2], affine[0][3],
+    affine[1][0], affine[1][1], affine[1][2], affine[1][3],
+    affine[2][0], affine[2][1], affine[2][2], affine[2][3]
+  ];
+  const mask = new Uint8Array(64);
+  mask[2 + 1 * 4 + 1 * 16] = 1;
+  const uploaded = tagSpatialFile(makeNiftiFile('native-lesion-mask.nii', writeNifti1(mask, {
+    dims: nativeDims,
+    spacing: [1, 1, 1],
+    affine: flatten(nativeAffine),
+    description: 'synthetic uploaded native lesion'
+  })), {
+    space: VOLUME_SPACES.NATIVE_T1,
+    role: 'lesion-seed',
+    sourceStage: 'mask-upload',
+    dims: nativeDims,
+    affine: nativeAffine
+  });
+  app.nativeStructuralInfo = {
+    dims: nativeDims,
+    affine: nativeAffine
+  };
+  app.prealignSamplingAffine = prealignSamplingAffine;
+  app.fixedMni160Info = {
+    dims: nativeDims,
+    affine: [
+      [1, 0, 0, -4],
+      [0, 1, 0, -4],
+      [0, 0, 1, -4],
+      [0, 0, 0, 1]
+    ],
+    spacing: [1, 1, 1]
+  };
+
+  const projected = await app.resampleSeedMaskToNative(uploaded);
+  const decoded = decodeNiftiForTest(await projected.arrayBuffer());
+
+  assert.equal(decoded.data[2 + 1 * 4 + 1 * 16], 1,
+    'native uploaded masks must keep their native voxel location during review');
+  assert.equal(decoded.data[1 + 1 * 4 + 1 * 16], 0,
+    'native uploaded masks must not be projected through the prealign sampling affine');
+}
+
+// ---- Test 10c.4: uploaded mask files are tagged as editable native seeds ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const mask = new Uint8Array(8);
+  mask[3] = 1;
+  const nativeAffine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const uploaded = makeNiftiFile('uploaded-native-mask.nii', writeNifti1(mask, {
+    dims: [2, 2, 2],
+    spacing: [1, 1, 1],
+    affine: [
+      nativeAffine[0][0], nativeAffine[0][1], nativeAffine[0][2], nativeAffine[0][3],
+      nativeAffine[1][0], nativeAffine[1][1], nativeAffine[1][2], nativeAffine[1][3],
+      nativeAffine[2][0], nativeAffine[2][1], nativeAffine[2][2], nativeAffine[2][3]
+    ],
+    description: 'synthetic uploaded mask'
+  }));
+  app.structuralFile = { name: 'native-t1.nii' };
+  let reviewOptions = null;
+  app.startLesionMaskReview = async (options) => {
+    reviewOptions = options;
+    return { name: 'projected-seed.nii' };
+  };
+
+  const result = await app.startUploadedLesionMaskReview(uploaded);
+  const meta = getSpatialMetadata(uploaded);
+
+  assert.equal(result.name, 'projected-seed.nii',
+    'uploaded mask review must return the projected editable seed');
+  assert.equal(reviewOptions.seedFile, uploaded,
+    'uploaded mask review must use the uploaded mask as the review seed');
+  assert.equal(meta.space, VOLUME_SPACES.NATIVE_T1,
+    'uploaded masks must be tagged as native T1 seeds');
+  assert.deepEqual(meta.dims, [2, 2, 2],
+    'uploaded mask metadata must carry decoded dimensions for viewer-space checks');
+  assert.equal(meta.sourceStage, 'mask-upload',
+    'uploaded mask metadata must record the mask-upload source stage');
+}
+
+// ---- Test 10c.5: mask-review banner is visible while toolbar owns actions ----
+{
+  const app = makeApp();
+  const bannerClassList = makeClassList(['hidden']);
+  const toolbarClassList = makeClassList(['hidden']);
+  const banner = { classList: bannerClassList };
+  const toolbar = { classList: toolbarClassList };
+  const confirmButton = { disabled: true };
+  const uploadReviewButton = { disabled: true };
+  const downloadEditedButton = { disabled: true };
+  const status = { textContent: '' };
+  const restoreDocument = useMockElements({
+    maskApprovalBanner: banner,
+    maskDrawingToolbar: toolbar,
+    confirmLesionMaskButton: confirmButton,
+    uploadReviewMaskButton: uploadReviewButton,
+    downloadEditedLesionMaskButton: downloadEditedButton,
+    maskReviewStatus: status
+  });
+  app.nativeStructuralFile = { name: 'native-t1.nii' };
+  app.maskReviewActive = true;
+  app.maskDrawingController = { hasDrawing: true };
+
+  try {
+    app.refreshMaskDrawingControls();
+    assert.equal(bannerClassList.contains('hidden'), false,
+      'mask approval banner must be visible while mask review is active');
+    assert.equal(toolbarClassList.contains('hidden'), false,
+      'drawing toolbar must remain visible while mask review is active');
+    assert.equal(confirmButton.disabled, false,
+      'toolbar confirm button must be enabled during mask review');
+    assert.equal(uploadReviewButton.disabled, false,
+      'toolbar upload button must be enabled during mask review');
+    assert.equal(downloadEditedButton.disabled, false,
+      'toolbar download button must be enabled when a drawing exists');
+    assert.equal(status.textContent, 'Review lesion mask',
+      'mask-review status must describe the active review state');
+
+    app.maskReviewActive = false;
+    app.lesionMaskConfirmed = true;
+    app.refreshMaskDrawingControls();
+    assert.equal(bannerClassList.contains('hidden'), true,
+      'mask approval banner must hide after approval');
+    assert.equal(uploadReviewButton.disabled, true,
+      'toolbar upload button must disable after review ends');
+    assert.equal(status.textContent, 'Mask confirmed',
+      'mask-review status must report confirmation after approval');
+  } finally {
+    restoreDocument();
+  }
+}
+
+// ---- Test 10c.6: mask-review toolbar buttons own confirm/download actions ----
+{
+  const app = makeApp();
+  const listeners = {};
+  const restoreDocument = useMockElements({
+    confirmLesionMaskButton: {
+      addEventListener: (eventName, handler) => { listeners[`confirmLesionMaskButton:${eventName}`] = handler; }
+    },
+    downloadEditedLesionMaskButton: {
+      addEventListener: (eventName, handler) => { listeners[`downloadEditedLesionMaskButton:${eventName}`] = handler; }
+    }
+  });
+  let confirmCalls = 0;
+  let downloadCalls = 0;
+  app.confirmLesionDrawing = async (options) => {
+    confirmCalls += 1;
+    assert.deepEqual(options, { resumePipeline: true },
+      'toolbar confirmation must resume the paused pipeline');
+  };
+  app.downloadEditedLesionMask = async () => { downloadCalls += 1; };
+
+  try {
+    app.bindMaskDrawingControls();
+    assert.equal(typeof listeners['confirmLesionMaskButton:click'], 'function',
+      'toolbar confirm button must bind a click handler');
+    assert.equal(typeof listeners['downloadEditedLesionMaskButton:click'], 'function',
+      'toolbar download button must bind a click handler');
+    listeners['confirmLesionMaskButton:click']();
+    listeners['downloadEditedLesionMaskButton:click']();
+    await waitForMicrotaskCondition(() => confirmCalls === 1,
+      'toolbar confirm button must call confirmLesionDrawing');
+    await waitForMicrotaskCondition(() => downloadCalls === 1,
+      'toolbar download button must call downloadEditedLesionMask');
+  } finally {
+    restoreDocument();
+  }
+}
+
 // ---- Test 10d: confirming a native drawing writes fixed-header MNI160 mask ----
 {
   globalThis.nifti = niftiModule.default || niftiModule;
@@ -654,20 +979,10 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     [0, 0, 1, -4],
     [0, 0, 0, 1]
   ];
-  const flatten = (affine) => [
-    affine[0][0], affine[0][1], affine[0][2], affine[0][3],
-    affine[1][0], affine[1][1], affine[1][2], affine[1][3],
-    affine[2][0], affine[2][1], affine[2][2], affine[2][3]
-  ];
   const nativeMask = new Uint8Array(64);
   nativeMask[2 + 1 * 4 + 1 * 16] = 1;
-  const nativeFile = makeNiftiFile('lnm-lesion-edited-native.nii', writeNifti1(nativeMask, {
-    dims: nativeDims,
-    spacing: [1, 1, 1],
-    affine: flatten(nativeAffine),
-    description: 'synthetic native drawing'
-  }));
   let closeOptions = null;
+  let asyncExportCalls = 0;
   let resumed = false;
   const toolbarClassList = makeClassList();
   const toolbar = { classList: toolbarClassList };
@@ -684,8 +999,14 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   });
   app.maskDrawingController = {
     hasDrawing: true,
-    exportDrawingFile: async () => nativeFile,
+    copyDrawingBitmap: () => new Uint8Array(nativeMask),
+    exportDrawingFile: async () => { asyncExportCalls += 1; },
     close: (options) => { closeOptions = options; }
+  };
+  app.nativeStructuralInfo = {
+    dims: nativeDims,
+    affine: nativeAffine,
+    spacing: [1, 1, 1]
   };
   app.prealignSamplingAffine = prealignSamplingAffine;
   app.fixedMni160Info = {
@@ -704,8 +1025,15 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     restoreDocument();
   }
 
-  assert.equal(app.confirmedNativeLesionFile, nativeFile,
+  assert.equal(asyncExportCalls, 0,
+    'confirming must use the active drawing bitmap, not NiiVue saveImage export');
+  assert.equal(app.confirmedNativeLesionFile.name, 'lnm-lesion-edited-native.nii',
     'confirmed native drawing must be kept for download/edit provenance');
+  const confirmedNative = decodeNiftiForTest(await app.confirmedNativeLesionFile.arrayBuffer());
+  assert.deepEqual(confirmedNative.dims, nativeDims,
+    'confirmed native drawing must be a non-empty native-space NIfTI');
+  assert.equal(confirmedNative.data[2 + 1 * 4 + 1 * 16], 1,
+    'confirmed native drawing file must contain the accepted drawing voxels');
   assert.equal(app.lesionMaskFile, confirmed,
     'confirmed MNI160 mask must become the downstream lesionMaskFile');
   assert.equal(app.lesionMaskConfirmed, true,
@@ -726,6 +1054,332 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'native drawing must be resampled through the saved prealign sampling affine');
   assert.equal(decoded.data[2 + 1 * 4 + 1 * 16], 0,
     'native drawing must not be copied directly onto the MNI160 grid');
+}
+
+// ---- Test 10d.1: confirming swaps drawing mode for native mask overlay ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const nativeDims = [4, 4, 4];
+  const nativeAffine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const fixedMniAffine = [
+    [1, 0, 0, -4],
+    [0, 1, 0, -4],
+    [0, 0, 1, -4],
+    [0, 0, 0, 1]
+  ];
+  const nativeMask = new Uint8Array(64);
+  nativeMask[2 + 1 * 4 + 1 * 16] = 1;
+  const nativeT1 = tagSpatialFile({ name: 'native-t1.nii' }, {
+    space: VOLUME_SPACES.NATIVE_T1,
+    role: 'structural',
+    dims: nativeDims,
+    affine: nativeAffine
+  });
+  const baseLoads = [];
+  const overlayLoads = [];
+  let closeOptions = null;
+  app.nativeStructuralFile = nativeT1;
+  app.structuralFile = tagSpatialFile({ name: 'lnm-prealign-t1.nii' }, {
+    space: VOLUME_SPACES.MNI160,
+    role: 'structural',
+    dims: nativeDims,
+    affine: fixedMniAffine
+  });
+  app.viewerBaseFile = app.structuralFile;
+  app.viewerController = {
+    loadBaseVolume: async (file, options) => { baseLoads.push({ file, options }); },
+    loadOverlay: async (file, colormap, opacity, options) => {
+      overlayLoads.push({ file, colormap, opacity, options });
+    }
+  };
+  app.maskDrawingController = {
+    hasDrawing: true,
+    copyDrawingBitmap: () => new Uint8Array(nativeMask),
+    close: (options) => { closeOptions = options; }
+  };
+  app.nativeStructuralInfo = {
+    dims: nativeDims,
+    affine: nativeAffine,
+    spacing: [1, 1, 1]
+  };
+  app.prealignSamplingAffine = nativeAffine;
+  app.fixedMni160Info = {
+    dims: nativeDims,
+    affine: fixedMniAffine,
+    spacing: [1, 1, 1]
+  };
+
+  await app.confirmLesionDrawing({ resumePipeline: false });
+
+  assert.deepEqual(closeOptions, { clearDrawing: true },
+    'confirming must clear the accepted editable drawing');
+  assert.equal(baseLoads.at(-1).file, nativeT1,
+    'confirming must restore the native anatomical scan as the viewer base');
+  assert.equal(overlayLoads.at(-1).file, app.confirmedNativeLesionFile,
+    'confirming must load the confirmed native lesion mask as the visible overlay');
+  assert.equal(overlayLoads.at(-1).colormap, LESION_MASK_COLORMAP_ID,
+    'confirmed native lesion overlay must use the lesion mask colormap');
+  assert.deepEqual(overlayLoads.at(-1).options, { stage: 'segmentation', visible: true },
+    'confirmed native lesion overlay must be tracked by the lesion layer toggle');
+  assert.equal(app.getLesionFileForActiveViewer(), app.confirmedNativeLesionFile,
+    'native viewer lesion layer must prefer the confirmed native mask over the MNI160 computation mask');
+}
+
+// ---- Test 10d.2: active mask-review download exports drawing bytes ----
+{
+  globalThis.nifti = niftiModule.default || niftiModule;
+  const app = makeApp();
+  const nativeDims = [2, 2, 2];
+  const nativeAffine = [
+    [1.5, 0, 0, 0],
+    [0, 2, 0, 0],
+    [0, 0, 2.5, 0],
+    [0, 0, 0, 1]
+  ];
+  const drawing = new Uint8Array(8);
+  drawing[3] = 1;
+  const anchor = {
+    href: '',
+    download: '',
+    clicked: 0,
+    removed: 0,
+    click() { this.clicked += 1; },
+    remove() { this.removed += 1; }
+  };
+  let copyDrawingCalls = 0;
+  let asyncExportCalls = 0;
+  let downloadDrawingCalls = 0;
+  const appended = [];
+  const originalCreateElement = globalThis.document.createElement;
+  const originalBody = globalThis.document.body;
+  const originalFetch = globalThis.fetch;
+  const originalShowSaveFilePicker = globalThis.showSaveFilePicker;
+  let postedUrl = '';
+  let postedOptions = null;
+  let anchorCreations = 0;
+  let pickerCalls = 0;
+  globalThis.document.createElement = (tagName) => {
+    anchorCreations += 1;
+    assert.equal(tagName, 'a',
+      'edited mask download must create an anchor element');
+    return anchor;
+  };
+  globalThis.document.body = {
+    appendChild: (child) => { appended.push(child); }
+  };
+  globalThis.fetch = async (url, options) => {
+    postedUrl = String(url);
+    postedOptions = options;
+    return {
+      ok: true,
+      status: 201,
+      async json() {
+        return {
+          url: '/__lnm_downloads/test-token/lnm-lesion-edited-native.nii',
+          byteLength: 360
+        };
+      }
+    };
+  };
+  globalThis.showSaveFilePicker = async () => {
+    pickerCalls += 1;
+    throw new Error('showSaveFilePicker must not be used for mask downloads');
+  };
+  app.nativeStructuralInfo = {
+    dims: nativeDims,
+    affine: nativeAffine,
+    spacing: [1.5, 2, 2.5]
+  };
+  app.maskDrawingController = {
+    hasDrawing: true,
+    copyDrawingBitmap: () => {
+      copyDrawingCalls += 1;
+      return new Uint8Array(drawing);
+    },
+    exportDrawingFile: async () => { asyncExportCalls += 1; },
+    downloadDrawing: async () => { downloadDrawingCalls += 1; }
+  };
+
+  try {
+    await app.downloadEditedLesionMask();
+  } finally {
+    globalThis.document.createElement = originalCreateElement;
+    globalThis.document.body = originalBody;
+    globalThis.fetch = originalFetch;
+    if (originalShowSaveFilePicker === undefined) delete globalThis.showSaveFilePicker;
+    else globalThis.showSaveFilePicker = originalShowSaveFilePicker;
+  }
+
+  assert.equal(copyDrawingCalls, 1,
+    'active review download must synchronously copy the current drawing bitmap');
+  assert.equal(asyncExportCalls, 0,
+    'active review download must not await NiiVue saveImage before creating the download');
+  assert.equal(postedOptions.method, 'POST',
+    'active review download must stage native mask bytes on the local dev server');
+  assert.equal(postedOptions.headers['Content-Type'], 'application/octet-stream',
+    'active review download must post raw mask bytes');
+  assert.equal(postedOptions.headers['X-LNM-Filename'], 'lnm-lesion-edited-native.nii',
+    'active review download must preserve the edited mask filename on the local route');
+  assert.equal(postedOptions.headers['X-LNM-Stage-Only'], '1',
+    'active review download must stage bytes for a normal browser download instead of writing to ~/Downloads');
+  assert.match(postedUrl, /^http:\/\/localhost:8080\/__lnm_downloads\/.+\/lnm-lesion-edited-native\.nii$/,
+    'active review download must use the localhost download route');
+  const postedBytes = postedOptions.body;
+  assert.equal(postedBytes.byteLength, 360,
+    'active review download must post the full native NIfTI byte length');
+  const postedBuffer = postedBytes.buffer.slice(
+    postedBytes.byteOffset,
+    postedBytes.byteOffset + postedBytes.byteLength
+  );
+  const downloaded = decodeNiftiForTest(postedBuffer);
+  assert.deepEqual(downloaded.dims, nativeDims,
+    'active review download must write the native T1 dimensions');
+  assertAffineClose(downloaded.header.affine, nativeAffine,
+    'active review download must write the native T1 affine');
+  assert.equal(downloaded.data[3], 1,
+    'active review download must contain the edited drawing voxels');
+  assert.equal(pickerCalls, 0,
+    'active review download must not use File System Access save picker APIs');
+  assert.equal(anchorCreations, 1,
+    'active review download must create one normal HTTP download anchor');
+  assert.deepEqual(appended, [anchor],
+    'active review download must attach the staged HTTP download anchor');
+  assert.equal(anchor.href, 'http://localhost:8080/__lnm_downloads/test-token/lnm-lesion-edited-native.nii',
+    'active review download must point the anchor at the staged HTTP response');
+  assert.equal(anchor.download, 'lnm-lesion-edited-native.nii',
+    'active review download must keep the edited mask filename');
+  assert.equal(anchor.clicked, 1,
+    'active review download must click the staged HTTP download anchor');
+  assert.equal(downloadDrawingCalls, 0,
+    'active review download must not rely on NiiVue filename-based saveImage download');
+}
+
+// ---- Test 10d.2a: localhost route without direct save still returns a download URL ----
+{
+  const app = makeApp();
+  const originalFetch = globalThis.fetch;
+  let posted = null;
+  globalThis.fetch = async (url, options) => {
+    posted = { url: String(url), options };
+    return {
+      ok: true,
+      status: 201,
+      async json() { return { url: '/__lnm_downloads/test/mask.nii' }; }
+    };
+  };
+
+  let result;
+  try {
+    result = await app.createServerDownload(new Uint8Array([1, 2, 3]), 'mask.nii');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(posted.options.method, 'POST',
+    'localhost fallback must post bytes to the dev server');
+  assert.equal(posted.options.headers['X-LNM-Stage-Only'], '1',
+    'localhost fallback must request staged download mode instead of direct-writing to ~/Downloads');
+  assert.deepEqual(Array.from(posted.options.body), [1, 2, 3],
+    'localhost fallback must post mask bytes unchanged');
+  assert.equal(result.url, 'http://localhost:8080/__lnm_downloads/test/mask.nii',
+    'localhost fallback must return an absolute download URL when the server does not direct-save');
+}
+
+// ---- Test 10d.2b: static-host fallback can stage mask bytes in Cache Storage ----
+{
+  const app = makeApp();
+  const cache = installMockDownloadCache();
+  const originalSetTimeout = globalThis.setTimeout;
+  const cacheDeleteDelays = [];
+  globalThis.setTimeout = (fn, delay) => {
+    cacheDeleteDelays.push(delay);
+    return 1;
+  };
+
+  let downloadUrl = '';
+  try {
+    downloadUrl = await app.createCachedDownloadUrl(new Uint8Array([1, 2, 3]), 'mask name.nii');
+  } finally {
+    cache.restore();
+    globalThis.setTimeout = originalSetTimeout;
+  }
+
+  assert.match(downloadUrl, /^http:\/\/localhost:8080\/__lnm_downloads\/.+\/mask_name\.nii$/,
+    'static fallback must use a same-origin service-worker download URL');
+  assert.equal(cache.entries.size, 1,
+    'static fallback must stage one Cache Storage response');
+  const [[storedUrl, response]] = cache.entries;
+  assert.equal(storedUrl, downloadUrl,
+    'static fallback must return the staged response URL');
+  assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), [1, 2, 3],
+    'static fallback must preserve mask bytes exactly');
+  assert.equal(response.headers.get('Content-Length'), '3',
+    'static fallback must store a non-zero content length');
+  assert.deepEqual(cacheDeleteDelays, [600000],
+    'static fallback must keep the staged response available long enough for browsers to start saving');
+  assert.deepEqual(cache.deletes, [],
+    'static fallback must not remove the staged response synchronously');
+}
+
+// ---- Test 10d.3: File System Access picker is ignored even when exposed ----
+{
+  const app = makeApp();
+  app.confirmedNativeLesionFile = new File([new Uint8Array([1, 2, 3])], 'confirmed-native-mask.nii');
+  const anchor = {
+    href: '',
+    download: '',
+    clicked: 0,
+    removed: 0,
+    click() { this.clicked += 1; },
+    remove() { this.removed += 1; }
+  };
+  let pickerCalls = 0;
+  let fetchCalls = 0;
+  const originalShowSaveFilePicker = globalThis.showSaveFilePicker;
+  const originalCreateElement = globalThis.document.createElement;
+  const originalBody = globalThis.document.body;
+  const originalFetch = globalThis.fetch;
+  globalThis.showSaveFilePicker = async () => {
+    pickerCalls += 1;
+    throw new Error('createWritable is blocked in this browser context');
+  };
+  globalThis.document.createElement = () => anchor;
+  globalThis.document.body = { appendChild: () => {} };
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return {
+      ok: true,
+      status: 201,
+      async json() {
+        return { url: '/__lnm_downloads/token/lnm-lesion-edited-native.nii', byteLength: 3 };
+      }
+    };
+  };
+
+  try {
+    await app.downloadEditedLesionMask();
+  } finally {
+    if (originalShowSaveFilePicker === undefined) delete globalThis.showSaveFilePicker;
+    else globalThis.showSaveFilePicker = originalShowSaveFilePicker;
+    globalThis.document.createElement = originalCreateElement;
+    globalThis.document.body = originalBody;
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(pickerCalls, 0,
+    'mask download must not call showSaveFilePicker because createWritable is blocked in the in-app browser');
+  assert.equal(fetchCalls, 1,
+    'mask download must stage bytes on the localhost HTTP route');
+  assert.equal(anchor.href, 'http://localhost:8080/__lnm_downloads/token/lnm-lesion-edited-native.nii',
+    'mask download must use the normal HTTP download URL');
+  assert.equal(anchor.clicked, 1,
+    'mask download must start the normal HTTP download');
 }
 
 // ---- Test 10e: confirming the mask resumes the remaining pipeline stages ----
@@ -2344,4 +2998,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/confirm/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/upload/approval-banner/download/confirm/native-overlay/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');

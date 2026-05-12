@@ -101,8 +101,10 @@
                 <button class="btn btn-secondary btn-sm" id="prealignToMniButton" title="Pre-align T1 to the MNI160 1 mm grid">2 Pre-align T1</button>
                 <div class="workflow-choice" aria-label="Lesion mask source choice">
                   <span class="param-label">3 Lesion mask</span>
+                  <input type="file" id="manualMaskFileInput" class="hidden" accept=".nii,.nii.gz" aria-hidden="true" tabindex="-1">
                   <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton" title="Run auto segmentation as an editable seed">Auto seed mask</button>
                   <button class="btn btn-secondary btn-sm" id="startManualMaskButton" title="Start a blank editable lesion mask">Manual mask</button>
+                  <button class="btn btn-secondary btn-sm" id="uploadManualMaskButton" title="Load a native-space lesion mask as an editable seed">Upload mask</button>
                 </div>
                 <button class="btn btn-secondary btn-sm" id="runRegistrationButton">4 MNI registration (SynthMorph)</button>
                 <div class="param-group workflow-control">
@@ -335,7 +337,10 @@
         </select>
         <button class="tool-button" id="maskInterpolateButton" type="button" title="Interpolate mask between boundary slices">Interp</button>
         <button class="tool-button tool-confirm" id="confirmLesionMaskButton" type="button" title="Confirm edited lesion mask and continue analysis">Confirm mask</button>
-        <button class="tool-button" id="downloadEditedLesionMaskButton" type="button" title="Download the edited native-space mask" disabled>Download</button>
+        <div class="mask-file-actions" role="group" aria-label="Mask file actions">
+          <button class="tool-button" id="uploadReviewMaskButton" type="button" title="Upload a native-space lesion mask into this review">Upload</button>
+          <button class="tool-button" id="downloadEditedLesionMaskButton" type="button" title="Download the edited native-space mask" disabled>Download</button>
+        </div>
       </div>
 
       <div class="viewer-actions">
@@ -395,6 +400,13 @@
           <option value="viridis">Viridis</option>
           <option value="plasma">Plasma</option>
         </select>
+      </div>
+    </div>
+
+    <div class="mask-approval-banner hidden" id="maskApprovalBanner" role="status" aria-live="polite">
+      <div class="mask-approval-copy">
+        <strong>Mask approval required</strong>
+        <span>Review the lesion mask before analysis continues.</span>
       </div>
     </div>
 

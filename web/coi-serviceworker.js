@@ -27,6 +27,35 @@ if (typeof window === 'undefined') {
             return;
         }
 
+        const requestUrl = new URL(r.url);
+        if (requestUrl.pathname.includes("/__lnm_downloads/")) {
+            if (r.method !== "GET") {
+                event.respondWith(fetch(r));
+                return;
+            }
+            event.respondWith(
+                caches.open("lnm-mask-downloads-v1")
+                    .then((cache) => cache.match(r.url))
+                    .then((response) => {
+                        if (!response) return fetch(r);
+                        const headers = new Headers(response.headers);
+                        headers.set("Cross-Origin-Embedder-Policy",
+                            coepCredentialless ? "credentialless" : "require-corp"
+                        );
+                        if (!coepCredentialless) {
+                            headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+                        }
+                        headers.set("Cross-Origin-Opener-Policy", "same-origin");
+                        return new Response(response.body, {
+                            status: response.status,
+                            statusText: response.statusText,
+                            headers,
+                        });
+                    })
+            );
+            return;
+        }
+
         const request = (coepCredentialless && r.mode === "no-cors")
             ? new Request(r, {
                 credentials: "omit",
@@ -106,9 +135,10 @@ if (typeof window === 'undefined') {
             }
         }
 
-        // If we're already coi: do nothing. Perhaps it's due to this script doing its job, or COOP/COEP are
-        // already set from the origin server. Also if the browser has no notion of crossOriginIsolated, just give up here.
-        if (window.crossOriginIsolated !== false || !coi.shouldRegister()) return;
+        // Even if COOP/COEP are already set by the dev server, keep the
+        // service worker registered so app-generated downloads can be served
+        // from the same-origin Cache Storage route above.
+        if (!coi.shouldRegister()) return;
 
         if (!window.isSecureContext) {
             !coi.quiet && console.log("COOP/COEP Service Worker not registered, a secure context is required.");

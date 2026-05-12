@@ -56,6 +56,8 @@ import * as Config from './app/config.js';
 
 const NETWORK_TOP_PERCENT_MAX = 10;
 const NETWORK_TOP_PERCENT_STEP = 0.1;
+const MASK_DOWNLOAD_CACHE = 'lnm-mask-downloads-v1';
+const MASK_DOWNLOAD_PATH = '__lnm_downloads';
 
 function splitModelUrl(url) {
   const i = url.lastIndexOf('/');
@@ -68,6 +70,20 @@ function arrayBufferToFile(buffer, name, spatial = null) {
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
   const file = new File([blob], name, { type: 'application/octet-stream' });
   return spatial ? tagSpatialFile(file, spatial) : file;
+}
+
+function downloadSafeFilename(filename) {
+  return String(filename || 'lnm-mask.nii').replace(/[^A-Za-z0-9._-]+/g, '_');
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return globalThis.btoa(binary);
 }
 
 function binarise(typedArray) {
@@ -123,6 +139,14 @@ function affineNearlyEqual(a, b, tolerance = 1e-3) {
     }
   }
   return true;
+}
+
+function spacingFromHeader(header) {
+  return [
+    Math.abs(Number(header?.pixDims?.[1])) || 1,
+    Math.abs(Number(header?.pixDims?.[2])) || 1,
+    Math.abs(Number(header?.pixDims?.[3])) || 1
+  ];
 }
 
 function flattenAffine3Rows(affine) {
@@ -377,10 +401,37 @@ export class LesionNetworkMappingApp {
           .catch(err => this.updateOutput(`Manual mask failed: ${err.message}`));
       });
     }
+    const manualMaskInput = document.getElementById('manualMaskFileInput');
+    const openManualMaskInput = () => {
+      if (!manualMaskInput) {
+        this.updateOutput('Manual mask upload input is unavailable.');
+        return;
+      }
+      manualMaskInput.click();
+    };
+    for (const id of ['uploadManualMaskButton', 'uploadReviewMaskButton']) {
+      const button = document.getElementById(id);
+      if (button) button.addEventListener('click', openManualMaskInput);
+    }
+    if (manualMaskInput) {
+      manualMaskInput.addEventListener('change', (event) => {
+        const file = event.target.files?.[0] || null;
+        if (!file) return;
+        this.startUploadedLesionMaskReview(file)
+          .catch(err => this.updateOutput(
+            `Manual mask input failed for ${file.name || 'selected file'}: ` +
+            `${err.message}. Choose a NIfTI mask file (.nii or .nii.gz).`
+          ))
+          .finally(() => { event.target.value = ''; });
+      });
+    }
     const downloadLesionBtn = document.getElementById('downloadLesionMaskButton');
     if (downloadLesionBtn) {
       downloadLesionBtn.disabled = true;
-      downloadLesionBtn.addEventListener('click', () => this.downloadLesionMask());
+      downloadLesionBtn.addEventListener('click', () => {
+        this.downloadLesionMask()
+          .catch(err => this.updateOutput(`Lesion mask download failed: ${err.message}`));
+      });
     }
 
     const runRegBtn = document.getElementById('runRegistrationButton');
@@ -732,10 +783,15 @@ export class LesionNetworkMappingApp {
       (this.nativeStructuralFile || this.structuralFile || this.autoLesionSeedFile || this.confirmedNativeLesionFile)
     );
     if (toolbar) toolbar.classList.toggle('hidden', !available);
+    const banner = document.getElementById('maskApprovalBanner');
+    if (banner) banner.classList.toggle('hidden', !available);
     const confirm = document.getElementById('confirmLesionMaskButton');
     if (confirm) confirm.disabled = !available;
+    const uploadReview = document.getElementById('uploadReviewMaskButton');
+    if (uploadReview) uploadReview.disabled = !available;
     const download = document.getElementById('downloadEditedLesionMaskButton');
-    if (download) download.disabled = !(this.confirmedNativeLesionFile || this.maskDrawingController?.hasDrawing);
+    const downloadAvailable = !!(this.confirmedNativeLesionFile || this.maskDrawingController?.hasDrawing);
+    if (download) download.disabled = !downloadAvailable;
     const status = document.getElementById('maskReviewStatus');
     if (status) {
       status.textContent = this.maskReviewActive
@@ -795,6 +851,7 @@ export class LesionNetworkMappingApp {
     if (layer === 'lesion') {
       return stageLoaded || !!(
         (this.maskReviewActive && this.maskDrawingController?.hasDrawing) ||
+        this.confirmedNativeLesionFile ||
         this.lesionMaskFile ||
         this.lesionFile
       );
@@ -865,11 +922,11 @@ export class LesionNetworkMappingApp {
     }
     if (layer === 'lesion') {
       if (this.maskReviewActive && this.maskDrawingController?.hasDrawing) return;
-      const lesionOverlay = this.lesionMaskFile || this.lesionFile;
+      const lesionOverlay = this.getLesionFileForActiveViewer();
       if (!lesionOverlay) throw new Error('No lesion mask is available.');
       this.assertViewerOverlaySpace(lesionOverlay, 'Lesion mask overlay');
       await this.viewerController.loadOverlay(lesionOverlay, LESION_MASK_COLORMAP_ID, 0.5, {
-        stage: this.lesionMaskFile ? 'segmentation' : 'lesion',
+        stage: this.getLesionViewerStage(lesionOverlay),
         visible: this.layerVisible('lesion')
       });
       return;
@@ -992,6 +1049,42 @@ export class LesionNetworkMappingApp {
       return this.structuralFile === this.nativeStructuralFile ? this.brainmaskFile : null;
     }
     return this.brainmaskFile;
+  }
+
+  getLesionFileForActiveViewer() {
+    if (this.maskReviewActive) return null;
+    const baseFile = this.getActiveViewerBaseFile();
+    const baseSpace = getSpatialMetadata(baseFile)?.space;
+    if (
+      this.confirmedNativeLesionFile &&
+      (baseFile === this.nativeStructuralFile || baseSpace === VOLUME_SPACES.NATIVE_T1)
+    ) {
+      return this.confirmedNativeLesionFile;
+    }
+    return this.lesionMaskFile || this.lesionFile || this.confirmedNativeLesionFile;
+  }
+
+  getLesionViewerStage(file) {
+    return (file === this.lesionMaskFile || file === this.confirmedNativeLesionFile)
+      ? 'segmentation'
+      : 'lesion';
+  }
+
+  async renderConfirmedNativeLesionOverlay() {
+    if (!this.confirmedNativeLesionFile || !this.viewerController?.loadOverlay) return;
+    const baseFile = this.nativeStructuralFile || this.structuralFile;
+    if (!baseFile) return;
+    if (this.getActiveViewerBaseFile() !== baseFile) {
+      await this.loadViewerBaseVolume(baseFile, {
+        stage: 'structural',
+        visible: this.layerVisible('structural')
+      });
+    }
+    this.assertViewerOverlaySpace(this.confirmedNativeLesionFile, 'Confirmed lesion mask overlay');
+    await this.viewerController.loadOverlay(this.confirmedNativeLesionFile, LESION_MASK_COLORMAP_ID, 0.5, {
+      stage: 'segmentation',
+      visible: this.layerVisible('lesion')
+    });
   }
 
   applyMaskDrawingVisibility() {
@@ -1292,7 +1385,8 @@ export class LesionNetworkMappingApp {
     });
     this.nativeStructuralInfo = {
       dims: decoded.dims,
-      affine: affineFromHeader(decoded.header)
+      affine: affineFromHeader(decoded.header),
+      spacing: spacingFromHeader(decoded.header)
     };
     return this.nativeStructuralInfo;
   }
@@ -1578,46 +1672,166 @@ export class LesionNetworkMappingApp {
     await Promise.all([segmentationReady, segmentationStepDone]);
   }
 
-  downloadLesionMask() {
+  async downloadLesionMask() {
     const file = this.confirmedNativeLesionFile || this.lesionMaskFile || this.autoLesionSeedFile;
     if (!file) {
       this.updateOutput('No lesion mask available yet.');
       return;
     }
-    const url = URL.createObjectURL(file);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = this.confirmedNativeLesionFile ? 'lnm-lesion-edited-native.nii' : 'lnm-lesion-seed.nii';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const filename = this.confirmedNativeLesionFile ? 'lnm-lesion-edited-native.nii' : 'lnm-lesion-seed.nii';
+    await this.triggerBrowserDownload(file, filename);
   }
 
   async downloadEditedLesionMask() {
-    if (this.confirmedNativeLesionFile) {
-      const url = URL.createObjectURL(this.confirmedNativeLesionFile);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'lnm-lesion-edited-native.nii';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      return;
+    const file = this.confirmedNativeLesionFile ||
+      this.exportActiveNativeDrawingFile('lnm-lesion-edited-native.nii');
+    if (!file) return;
+    const filename = 'lnm-lesion-edited-native.nii';
+    await this.triggerBrowserDownload(file, filename);
+  }
+
+  async fileBytesForDownload(file, filename) {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    if (!bytes.byteLength) {
+      throw new Error(`${filename} export is empty`);
     }
-    await this.maskDrawingController.downloadDrawing('lnm-lesion-edited-native.nii');
+    return bytes;
+  }
+
+  async triggerBrowserDownload(file, filename) {
+    const bytes = await this.fileBytesForDownload(file, filename);
+    this.updateOutput(`Prepared mask download: ${filename} (${bytes.byteLength} bytes).`);
+    const serverDownload = await this.createServerDownload(bytes, filename);
+    if (serverDownload?.saved) return;
+    const url = serverDownload?.url ||
+      await this.createCachedDownloadUrl(bytes, filename) ||
+      this.createDataDownloadUrl(bytes);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  async createServerDownload(bytes, filename) {
+    const fetchFn = globalThis.fetch;
+    if (typeof fetchFn !== 'function') return null;
+    let url;
+    try {
+      url = new URL(globalThis.location?.href || 'http://localhost/');
+    } catch (_) {
+      return null;
+    }
+    const localHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+    if (!localHosts.has(url.hostname)) return null;
+    try {
+      const safeName = downloadSafeFilename(filename);
+      const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const downloadUrl = new URL(`${MASK_DOWNLOAD_PATH}/${token}/${encodeURIComponent(safeName)}`, url.href);
+      const response = await fetchFn(downloadUrl.href, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-LNM-Filename': safeName,
+          'X-LNM-Stage-Only': '1'
+        },
+        body: bytes
+      });
+      if (!response?.ok) {
+        throw new Error(`HTTP ${response?.status || 'error'}`);
+      }
+      const payload = await response.json().catch(() => null);
+      return { url: payload?.url ? new URL(payload.url, url.href).href : downloadUrl.href };
+    } catch (err) {
+      this.updateOutput(`Local download route unavailable: ${err.message || err}. Trying browser download.`);
+      return null;
+    }
+  }
+
+  async createCachedDownloadUrl(bytes, filename) {
+    if (typeof caches === 'undefined' || !globalThis.navigator?.serviceWorker?.controller) {
+      return null;
+    }
+    try {
+      const safeName = downloadSafeFilename(filename);
+      const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const url = new URL(`${MASK_DOWNLOAD_PATH}/${token}/${encodeURIComponent(safeName)}`, globalThis.location?.href || 'http://localhost/');
+      const cache = await caches.open(MASK_DOWNLOAD_CACHE);
+      await cache.put(url.href, new Response(bytes, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${safeName}"`,
+          'Content-Length': String(bytes.byteLength),
+          'Cache-Control': 'no-store'
+        }
+      }));
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => { cache.delete(url.href).catch(() => {}); }, 10 * 60 * 1000);
+      }
+      return url.href;
+    } catch (err) {
+      this.updateOutput(`Cached download unavailable: ${err.message || err}. Trying inline download.`);
+      return null;
+    }
+  }
+
+  createDataDownloadUrl(bytes) {
+    return `data:application/octet-stream;base64,${bytesToBase64(bytes)}`;
+  }
+
+  exportActiveNativeDrawingFile(name = 'lnm-lesion-edited-native.nii') {
+    if (!this.maskDrawingController?.hasDrawing) {
+      this.updateOutput('No edited lesion mask available yet.');
+      return null;
+    }
+    const native = this.nativeStructuralInfo;
+    if (!native?.dims || !native?.affine) {
+      throw new Error('Native structural geometry is not available for mask download.');
+    }
+    const drawing = this.maskDrawingController.copyDrawingBitmap?.();
+    if (!(drawing instanceof Uint8Array)) {
+      throw new Error('No editable lesion drawing is available.');
+    }
+    const expected = native.dims[0] * native.dims[1] * native.dims[2];
+    if (drawing.length !== expected) {
+      throw new Error(
+        `Edited lesion mask dimensions do not match the native T1 ` +
+        `(${drawing.length} voxels vs ${native.dims.join('x')}).`
+      );
+    }
+    const nativeNifti = writeBinaryMaskNifti(drawing, {
+      dims: native.dims,
+      affine: native.affine,
+      spacing: native.spacing || [1, 1, 1],
+      description: 'LNM edited lesion mask on native T1 grid'
+    });
+    return arrayBufferToFile(nativeNifti, name, {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'lesion',
+      sourceStage: 'mask-download-native',
+      dims: native.dims,
+      affine: native.affine
+    });
   }
 
   async resampleSeedMaskToNative(seedFile) {
     if (!seedFile) return null;
-    const seedSpace = getSpatialMetadata(seedFile)?.space;
+    const seedMeta = getSpatialMetadata(seedFile);
+    const seedSpace = seedMeta?.space;
     if (seedSpace && ![VOLUME_SPACES.MNI160, VOLUME_SPACES.NATIVE_T1].includes(seedSpace)) {
       throw new Error(`Editable lesion seed source: expected ${VOLUME_SPACES.MNI160} or ${VOLUME_SPACES.NATIVE_T1}, got ${seedSpace}.`);
     }
     const native = await this.ensureNativeStructuralInfo();
     const seed = await decodeNiftiBuffer(await seedFile.arrayBuffer());
-    const seedAffine = this.prealignSamplingAffine || affineFromHeader(seed.header);
+    const headerAffine = affineFromHeader(seed.header);
+    let seedAffine = seedMeta?.affine || headerAffine;
+    if (seedSpace === VOLUME_SPACES.MNI160) {
+      seedAffine = this.prealignSamplingAffine || seedAffine;
+    } else if (!seedSpace && this.prealignSamplingAffine && this.fixedMni160Info && dimsEqual(seed.dims, this.fixedMni160Info.dims)) {
+      seedAffine = this.prealignSamplingAffine;
+    }
     const nativeMask = resampleBinaryMask({
       data: seed.data,
       srcDims: seed.dims,
@@ -1637,6 +1851,24 @@ export class LesionNetworkMappingApp {
       sourceStage: 'mask-review'
     });
     return this.nativeLesionSeedFile;
+  }
+
+  async startUploadedLesionMaskReview(file) {
+    if (!file) return null;
+    const baseFile = this.nativeStructuralFile || this.structuralFile;
+    if (!baseFile) {
+      this.updateOutput('Drop a structural T1 before loading a manual lesion mask.');
+      return null;
+    }
+    const decoded = await decodeNiftiBuffer(await file.arrayBuffer());
+    this.tagDecodedFileSpace(file, decoded, {
+      space: VOLUME_SPACES.NATIVE_T1,
+      role: 'lesion-seed',
+      sourceStage: 'mask-upload'
+    });
+    const seed = await this.startLesionMaskReview({ seedFile: file });
+    this.updateOutput(`Manual lesion mask ready for editing: ${file.name}`);
+    return seed;
   }
 
   async startLesionMaskReview({ seedFile = null, blank = false } = {}) {
@@ -1676,18 +1908,19 @@ export class LesionNetworkMappingApp {
     if (!this.maskDrawingController?.hasDrawing) {
       await this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile, blank: !this.autoLesionSeedFile });
     }
-    const nativeFile = await this.maskDrawingController.exportDrawingFile('lnm-lesion-edited-native.nii');
+    const nativeFile = this.exportActiveNativeDrawingFile('lnm-lesion-edited-native.nii');
+    if (!nativeFile) throw new Error('No editable lesion drawing is available.');
 
     if (!this.prealignSamplingAffine || !this.fixedMni160Info) {
       await this.prealignToMni160({ skipIfAligned: true });
     }
-    this.confirmedNativeLesionFile = this.tagFileSpace(nativeFile, {
+    const fixed = await this.ensureFixedMni160Info();
+    const native = await decodeNiftiBuffer(await nativeFile.arrayBuffer());
+    this.confirmedNativeLesionFile = this.tagDecodedFileSpace(nativeFile, native, {
       space: VOLUME_SPACES.NATIVE_T1,
       role: 'lesion',
       sourceStage: 'mask-confirm-native'
     });
-    const fixed = await this.ensureFixedMni160Info();
-    const native = await decodeNiftiBuffer(await nativeFile.arrayBuffer());
     const nativeAffine = affineFromHeader(native.header);
     const mniMask = resampleBinaryMask({
       data: native.data,
@@ -1713,6 +1946,7 @@ export class LesionNetworkMappingApp {
     this.lesionMaskConfirmed = true;
     this.maskReviewActive = false;
     this.maskDrawingController.close({ clearDrawing: true });
+    await this.renderConfirmedNativeLesionOverlay();
     const btn = document.getElementById('downloadLesionMaskButton');
     if (btn) btn.disabled = false;
     this.refreshViewerLayerControls();

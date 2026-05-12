@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const html = fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8');
+const serviceWorker = fs.readFileSync(path.join(ROOT, 'web/coi-serviceworker.js'), 'utf8');
+const runScript = fs.readFileSync(path.join(ROOT, 'web/run.sh'), 'utf8');
 
 // Title + h1 reflect the LNM identity, not SCT.
 assert.match(html, /<title>[^<]*Lesion Network Mapping[^<]*<\/title>/i,
@@ -85,6 +87,9 @@ const requiredIds = [
   // Manual lesion-mask refinement toolbar.
   '#maskDrawingToolbar',
   '#maskReviewStatus',
+  '#maskApprovalBanner',
+  '#manualMaskFileInput',
+  '#uploadManualMaskButton',
   '#maskPaintButton',
   '#maskEraseButton',
   '#maskEraseClusterButton',
@@ -94,6 +99,7 @@ const requiredIds = [
   '#maskFilledToggle',
   '#maskUndoButton',
   '#maskBlankButton',
+  '#uploadReviewMaskButton',
   '#maskSmoothButton',
   '#maskInterpolateAxis',
   '#maskInterpolateButton',
@@ -123,7 +129,7 @@ const advancedWorkflow = workflowStart >= 0 && workflowEnd > workflowStart
 assert.ok(advancedWorkflow, 'advanced controls must expose an ordered workflow container');
 assert.match(
   advancedWorkflow,
-  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*Manual mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → atlas grid[\s\S]*7 Compute atlas overlap[\s\S]*8 Compute network map/,
+  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*Manual mask[\s\S]*Upload mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → atlas grid[\s\S]*7 Compute atlas overlap[\s\S]*8 Compute network map/,
   'advanced controls must show the seed/manual mask review workflow in execution order'
 );
 assert.match(html, /<label\b[^>]*for=["']atlasSelect["'][^>]*>Atlas<\/label>/,
@@ -134,8 +140,13 @@ assert.match(html, /<option\s+value=["']yeo7["']>Yeo 7 networks<\/option>/,
   'atlas selector must keep Yeo 7 networks selectable for compatibility');
 assert.match(
   advancedWorkflow,
-  /aria-label=["']Lesion mask source choice["'][\s\S]*id=["']runLesionSegmentationButton["'][\s\S]*id=["']startManualMaskButton["']/,
-  'advanced controls must offer an explicit choice between auto seed and manual masking'
+  /aria-label=["']Lesion mask source choice["'][\s\S]*id=["']runLesionSegmentationButton["'][\s\S]*id=["']startManualMaskButton["'][\s\S]*id=["']uploadManualMaskButton["']/,
+  'advanced controls must offer auto seed, blank manual mask, and manual mask upload choices'
+);
+assert.match(
+  advancedWorkflow,
+  /<input\b[^>]*id=["']manualMaskFileInput["'][^>]*class=["']hidden["'][^>]*accept=["']\.nii,\.nii\.gz["'][^>]*>/i,
+  'manual mask upload must use a hidden NIfTI-only file input behind the compact buttons'
 );
 assert.match(
   advancedWorkflow,
@@ -178,10 +189,20 @@ assert.match(html, /Erase the connected lesion cluster under the cursor/,
   'mask drawing toolbar must describe what the cluster erase action does');
 assert.match(html, /Start a blank mask/,
   'mask drawing toolbar must allow blank manual lesion masks');
+assert.match(html, /id=["']uploadReviewMaskButton["'][\s\S]*Upload/,
+  'mask drawing toolbar must allow uploading a replacement mask during review');
 assert.match(html, /Smooth the 3D mask volume/,
   'mask drawing toolbar must expose a 3D mask smoothing tool');
 assert.match(html, /Interpolate mask between boundary slices/,
   'mask drawing toolbar must expose between-slice interpolation');
+assert.match(html, /id=["']downloadEditedLesionMaskButton["'][\s\S]*Download/,
+  'mask confirmation toolbar must expose a download option for the edited mask');
+assert.match(html, /class=["']mask-file-actions["'][\s\S]*id=["']uploadReviewMaskButton["'][\s\S]*id=["']downloadEditedLesionMaskButton["']/,
+  'mask confirmation toolbar must group Upload and Download as file actions');
+assert.match(html, /id=["']maskApprovalBanner["'][\s\S]*Mask approval required[\s\S]*Review the lesion mask before analysis continues\./,
+  'mask review must expose a persistent approval banner without duplicating action buttons');
+assert.doesNotMatch(html, /id=["']approveLesionMaskButton["']|id=["']downloadReviewMaskButton["']/,
+  'mask approval banner must not duplicate the toolbar confirm/download actions');
 
 assert.doesNotMatch(html, /id=["']pipelineSelect["']/,
   'Pipeline selector must not be visible; Run analysis is input-driven');
@@ -230,6 +251,26 @@ assert.match(html, /<script\s[^>]*src=["']js\/lnm-app\.js["'][^>]*type=["']modul
   '<script type=module src="js/lnm-app.js"> must be present');
 assert.doesNotMatch(html, /spinalcordtoolbox-app\.js/,
   'old spinalcordtoolbox-app.js script tag must be gone');
+assert.match(html, /<script\s[^>]*src=["']coi-serviceworker\.js["']/,
+  'COI service worker script must remain loaded for same-origin mask downloads');
+assert.match(serviceWorker, /__lnm_downloads/,
+  'service worker must serve staged mask downloads from the same-origin route');
+assert.match(serviceWorker, /lnm-mask-downloads-v1/,
+  'service worker must use the mask download Cache Storage bucket');
+assert.match(serviceWorker, /r\.method\s*!==\s*["']GET["'][\s\S]*event\.respondWith\(fetch\(r\)\)/,
+  'service worker must let localhost download POSTs reach the dev server');
+assert.match(serviceWorker, /if\s*\(!response\)\s*return\s+fetch\(r\)/,
+  'service worker must let uncached localhost download GETs reach the dev server');
+assert.doesNotMatch(serviceWorker, /window\.crossOriginIsolated\s*!==\s*false\s*\|\|\s*!coi\.shouldRegister\(\)/,
+  'service worker registration must not be skipped when server COOP/COEP already makes the page isolated');
+assert.match(runScript, /X-LNM-Stage-Only/,
+  'local dev server must support staged HTTP mask downloads without direct-writing to ~/Downloads');
+assert.match(runScript, /Content-Disposition/,
+  'local dev server must serve staged mask downloads as attachments');
+assert.match(runScript, /os\.replace\(tmp_path,\s*output_path\)/,
+  'local dev server must keep atomic direct-save support for non-staged local downloads');
+assert.match(runScript, /ThreadingHTTPServer/,
+  'local dev server must handle download route requests without blocking other app requests');
 
 // NiiVue canvas must remain (we reuse it for structural + lesion overlay).
 assert.match(html, /id=["']gl1["']/, '#gl1 NiiVue canvas must be retained');
