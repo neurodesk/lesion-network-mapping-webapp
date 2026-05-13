@@ -1,4 +1,4 @@
-// Pipeline + stage manifest for the Lesion Network Mapping webapp.
+// Pipeline + stage manifest for the CALMaR webapp.
 //
 // A pipeline is a named sequence of stages. Each stage names the JS module
 // that implements it plus the asset IDs it requires (model, atlas, or
@@ -156,7 +156,7 @@ export const LNM_PIPELINES = [
     // The visible Atlas selector is the public surface for Schaefer; keep this
     // legacy pipeline hidden so Run analysis stays input-driven.
     hidden: true,
-    displayName: 'Lesion Network Mapping (Schaefer400 / development fMRI)',
+    displayName: 'CALMaR (Schaefer400 / development fMRI)',
     description:
       'Full pipeline: ONNX lesion segmentation -> deep-learning MNI ' +
       'registration -> Schaefer400 parcel overlap -> per-parcel functional ' +

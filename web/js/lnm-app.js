@@ -638,9 +638,13 @@ export class LesionNetworkMappingApp {
     }
 
     this.bindMaskDrawingControls();
+    this.bindStartPageControls();
     this.bindModalButton('aboutButton', this.aboutModal);
     this.bindModalButton('privacyButton', this.privacyModal);
+    this.bindModalButton('startPrivacyButton', this.privacyModal);
+    this.bindModalButton('startPrivacyInlineButton', this.privacyModal);
     this.bindModalButton('citationsButton', this.citationsModal);
+    this.bindModalButton('startCitationsButton', this.citationsModal);
     this.bindCloseButton('closeAbout', this.aboutModal);
     this.bindCloseButton('closePrivacy', this.privacyModal);
     this.bindCloseButton('closeCitations', this.citationsModal);
@@ -698,6 +702,21 @@ export class LesionNetworkMappingApp {
   bindModalButton(buttonId, modal) {
     const button = document.getElementById(buttonId);
     if (button) button.addEventListener('click', () => modal.open());
+  }
+
+  bindStartPageControls() {
+    const startPage = document.getElementById('startPage');
+    const enterButton = document.getElementById('enterAppButton');
+    if (!startPage || !enterButton) return;
+
+    enterButton.addEventListener('click', () => {
+      startPage.classList.add('hidden');
+      document.getElementById('structuralFileInput')?.focus();
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+        this.nv.drawScene();
+      });
+    });
   }
 
   bindCloseButton(buttonId, modal) {

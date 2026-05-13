@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "_comment": "Lesion Network Mapping webapp asset registry. Asset IDs are globally unique across modelAssets/atlasAssets/connectomeAssets/annotationAssets so stages and result interpreters can reference them unambiguously. checksum/sizeBytes are placeholders until the assets are uploaded to the Hugging Face dataset repo.",
+  "_comment": "CALMaR webapp asset registry. Asset IDs are globally unique across modelAssets/atlasAssets/connectomeAssets/annotationAssets so stages and result interpreters can reference them unambiguously. checksum/sizeBytes are placeholders until the assets are uploaded to the Hugging Face dataset repo.",
   "pipelines": [
     {
       "id": "lnm-yeo-only",
@@ -83,7 +83,7 @@
     },
     {
       "id": "lnm-default",
-      "displayName": "Lesion Network Mapping (selected atlas)",
+      "displayName": "CALMaR (selected atlas)",
       "stages": [
         {
           "id": "segment",

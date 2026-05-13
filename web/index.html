@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
   <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
-  <title>Lesion Network Mapping</title>
+  <title>CALMaR | Co-designed Automated Lesion Mapping and Reporting</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/ort.min.js"></script>
   <script src="https://unpkg.com/@niivue/niivue@0.68.2/dist/niivue.umd.js"></script>
   <!-- nifti-reader-js UMD; populates window.nifti, used by atlas-loader.js for atlas + lesion decode. -->
@@ -14,12 +14,92 @@
 </head>
 <body>
 
+<section class="start-page" id="startPage" aria-label="CALMaR start page">
+  <header class="start-header">
+    <div class="start-brand">
+      <strong>CALMaR</strong>
+      <span>Co-designed Automated Lesion Mapping and Reporting</span>
+    </div>
+    <div class="start-links">
+      <button class="header-link" id="startPrivacyButton" type="button" title="Privacy">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Privacy</span>
+      </button>
+      <button class="header-link" id="startCitationsButton" type="button" title="Citations">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>Cite</span>
+      </button>
+      <a href="https://github.com/neurodesk/lesion-network-mapping-webapp" target="_blank" rel="noopener noreferrer" class="header-link" title="GitHub">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="white"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+  </header>
+
+  <main class="start-main">
+    <section class="start-hero">
+      <div class="start-hero-copy">
+        <p class="start-kicker">Lesion mapping and reporting in the browser</p>
+        <h2>Map lesion overlap, connectivity effects, and atlas labels without uploading patient data.</h2>
+        <p class="start-intro">
+          CALMaR guides a structural T1 through brain extraction, editable lesion-mask review,
+          MNI registration, atlas overlap, functional-connectivity mapping, and reportable tables.
+        </p>
+        <div class="start-actions">
+          <button class="btn btn-primary start-primary" id="enterAppButton" type="button">Start analysis</button>
+          <button class="btn btn-secondary start-secondary" id="startPrivacyInlineButton" type="button">How privacy works</button>
+        </div>
+        <p class="start-local-badge">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Patient images, masks, voxel values, screenshots, and generated outputs stay on this computer.
+        </p>
+      </div>
+
+      <div class="start-local-panel" aria-label="Local processing summary">
+        <h3>Local-first workflow</h3>
+        <ul>
+          <li>Files are read into browser memory for viewing and analysis.</li>
+          <li>Atlas and model assets may be downloaded when a workflow needs them.</li>
+          <li>Patient-derived files and generated results are not uploaded by the app.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="start-how" aria-labelledby="startHowHeading">
+      <h3 id="startHowHeading">How It Works</h3>
+      <div class="start-steps">
+        <article class="start-step">
+          <div class="start-step-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+          </div>
+          <h4>1. Load T1 data</h4>
+          <p>Choose a structural T1. Loading only displays the scan; processing starts when you run analysis.</p>
+        </article>
+        <article class="start-step">
+          <div class="start-step-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </div>
+          <h4>2. Review the mask</h4>
+          <p>Use an automatic seed, blank manual mask, or uploaded mask, then edit and confirm before downstream analysis continues.</p>
+        </article>
+        <article class="start-step">
+          <div class="start-step-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-7"/></svg>
+          </div>
+          <h4>3. Map and report</h4>
+          <p>Register to MNI, compute selected-atlas overlap, generate a connectivity map, and export CSV/NIfTI outputs locally.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+</section>
+
 <div class="app-container">
 
   <header class="app-header">
     <div class="logo">
-      <h1>Lesion Network Mapping</h1>
-      <span>Browser-based lesion atlas overlap</span>
+      <h1>CALMaR</h1>
+      <span class="tagline">Co-designed Automated Lesion Mapping and Reporting</span>
       <span class="version" id="appVersion"></span>
     </div>
     <div class="header-links">
@@ -308,38 +388,51 @@
 
       <div class="mask-drawing-toolbar hidden" id="maskDrawingToolbar" aria-label="Lesion mask drawing tools">
         <span class="mask-review-status" id="maskReviewStatus"></span>
-        <div class="segmented-control" role="group" aria-label="Mask drawing mode">
-          <button class="tool-button active" id="maskPaintButton" type="button" title="Paint lesion voxels">Paint</button>
-          <button class="tool-button" id="maskEraseButton" type="button" title="Erase lesion voxels">Erase</button>
-          <button class="tool-button" id="maskEraseClusterButton" type="button" title="Erase the connected lesion cluster under the cursor">Erase cluster</button>
+        <div class="mask-toolbar-group mask-draw-group" role="group" aria-label="Draw lesion mask">
+          <div class="segmented-control" role="group" aria-label="Mask drawing mode">
+            <button class="tool-button active" id="maskPaintButton" type="button" title="Paint lesion voxels">Paint</button>
+            <button class="tool-button" id="maskEraseButton" type="button" title="Erase lesion voxels">Erase</button>
+            <button class="tool-button" id="maskEraseClusterButton" type="button" title="Erase the connected lesion cluster under the cursor">Erase cluster</button>
+          </div>
+          <label class="compact-control" for="maskBrushSize">
+            <span>Brush</span>
+            <input type="range" id="maskBrushSize" min="1" max="15" step="1" value="3">
+            <span id="maskBrushSizeLabel">3 vox</span>
+          </label>
+          <select class="tool-select" id="maskShapeSelect" title="Drawing shape">
+            <option value="pen">Pen</option>
+            <option value="rectangle">Rectangle</option>
+            <option value="ellipse">Ellipse</option>
+          </select>
+          <label class="viewer-checkbox">
+            <input type="checkbox" id="maskFilledToggle">
+            <span>Fill</span>
+          </label>
         </div>
-        <label class="compact-control" for="maskBrushSize">
-          <span>Brush</span>
-          <input type="range" id="maskBrushSize" min="1" max="15" step="1" value="3">
-          <span id="maskBrushSizeLabel">3 vox</span>
-        </label>
-        <select class="tool-select" id="maskShapeSelect" title="Drawing shape">
-          <option value="pen">Pen</option>
-          <option value="rectangle">Rectangle</option>
-          <option value="ellipse">Ellipse</option>
-        </select>
-        <label class="viewer-checkbox">
-          <input type="checkbox" id="maskFilledToggle">
-          <span>Fill</span>
-        </label>
-        <button class="tool-button" id="maskUndoButton" type="button" title="Undo mask edit">Undo</button>
-        <button class="tool-button" id="maskBlankButton" type="button" title="Start a blank mask">Blank</button>
-        <button class="tool-button" id="maskSmoothButton" type="button" title="Smooth the 3D mask volume">Smooth</button>
-        <select class="tool-select" id="maskInterpolateAxis" title="Interpolate between drawn slices">
-          <option value="0">Axial</option>
-          <option value="1">Coronal</option>
-          <option value="2">Sagittal</option>
-        </select>
-        <button class="tool-button" id="maskInterpolateButton" type="button" title="Interpolate mask between boundary slices">Interp</button>
-        <button class="tool-button tool-confirm" id="confirmLesionMaskButton" type="button" title="Confirm edited lesion mask and continue analysis">Confirm mask</button>
-        <div class="mask-file-actions" role="group" aria-label="Mask file actions">
-          <button class="tool-button" id="uploadReviewMaskButton" type="button" title="Upload a native-space lesion mask into this review">Upload</button>
-          <button class="tool-button" id="downloadEditedLesionMaskButton" type="button" title="Download the edited native-space mask" disabled>Download</button>
+        <div class="mask-toolbar-group mask-edit-group" role="group" aria-label="Mask edit actions">
+          <button class="tool-button" id="maskUndoButton" type="button" title="Undo mask edit">Undo</button>
+          <button class="tool-button" id="maskBlankButton" type="button" title="Start a blank mask">Blank</button>
+          <button class="tool-button" id="maskSmoothButton" type="button" title="Smooth the 3D mask volume">Smooth</button>
+        </div>
+        <div class="mask-toolbar-group mask-interp-group" role="group" aria-label="Mask slice interpolation">
+          <select class="tool-select" id="maskInterpolateAxis" title="Interpolate between drawn slices">
+            <option value="0">Axial</option>
+            <option value="1">Coronal</option>
+            <option value="2">Sagittal</option>
+          </select>
+          <button class="tool-button" id="maskInterpolateButton" type="button" title="Interpolate mask between boundary slices">Interp</button>
+          <button type="button" class="help-icon mask-interp-help" id="maskInterpolateHelp" aria-label="Interpolate mask help">i
+            <span class="help-popover" role="tooltip">
+              Draw the lesion on at least two slices in the selected orientation. Interp finds the first and last non-empty slices, fills the slices between them with NiiVue mask interpolation, and thresholds the result back to lesion voxels.
+            </span>
+          </button>
+        </div>
+        <div class="mask-toolbar-group mask-review-actions" role="group" aria-label="Mask review actions">
+          <button class="tool-button tool-confirm" id="confirmLesionMaskButton" type="button" title="Confirm edited lesion mask and continue analysis">Confirm mask</button>
+          <div class="mask-file-actions" role="group" aria-label="Mask file actions">
+            <button class="tool-button" id="uploadReviewMaskButton" type="button" title="Upload a native-space lesion mask into this review">Upload</button>
+            <button class="tool-button" id="downloadEditedLesionMaskButton" type="button" title="Download the edited native-space mask" disabled>Download</button>
+          </div>
         </div>
       </div>
 
@@ -430,7 +523,7 @@
   </main>
 
   <footer class="app-footer">
-    <span>Lesion Network Mapping <span id="footerVersion"></span></span>
+    <span>CALMaR <span id="footerVersion"></span></span>
     <span>Patient image data stays local in the browser.</span>
     <a href="https://github.com/neurodesk/lesion-network-mapping-webapp" target="_blank" style="color: var(--color-text-dim);">GitHub</a>
   </footer>
@@ -440,17 +533,17 @@
 <div class="modal-overlay" id="aboutModal">
   <div class="modal about-modal">
     <div class="modal-header">
-      <h3>About Lesion Network Mapping</h3>
+      <h3>About CALMaR</h3>
       <button class="modal-close" id="closeAbout">&times;</button>
     </div>
     <div class="modal-body">
       <div class="about-highlight">
         <div>
-          <strong>Lesion Network Mapping</strong>
-          <p>Browser-based lesion atlas overlap for neuroimaging workflows.</p>
+          <strong>CALMaR</strong>
+          <p>Co-designed Automated Lesion Mapping and Reporting.</p>
         </div>
       </div>
-      <p>This app loads a structural T1 (or a manual MNI-aligned lesion mask) locally, runs the full lesion-network-mapping chain in the browser, and never uploads patient data.</p>
+      <p>This app loads a structural T1 (or a manual MNI-aligned lesion mask) locally, runs the CALMaR lesion mapping chain in the browser, and never uploads patient data.</p>
       <p>The pipeline: SynthStrip brain extraction &rarr; SynthStroke baseline lesion segmentation &rarr; SynthMorph deformable registration to MNI152 (160<sup>3</sup> 1mm) &rarr; affine-aware resample to the selected atlas grid &rarr; atlas overlap &rarr; group-FC weighted-sum &rarr; threshold + cluster cleanup. All stages are exposed as individual buttons; "Run full pipeline" chains them in one click.</p>
       <h4>Version</h4>
       <div class="about-version-table">

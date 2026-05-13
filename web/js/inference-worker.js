@@ -1,7 +1,7 @@
 /**
  * LNM Inference Worker (module worker).
  *
- * Runs ONNX model inference for the Lesion Network Mapping pipeline:
+ * Runs ONNX model inference for the CALMaR pipeline:
  *   1. Load            — NIfTI parse + orient to RAS
  *   2. SynthStrip      — brain extraction (Phase 2a.1; ported from
  *                        neurodesk/vesselboost-webapp). Single-pass full-volume

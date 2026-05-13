@@ -11,7 +11,7 @@ stop_pid() {
     return 0
   fi
 
-  echo "Stopping existing SCT dev server on port $PORT (pid $pid)"
+  echo "Stopping existing CALMaR dev server on port $PORT (pid $pid)"
   kill "$pid" 2>/dev/null || true
   for _ in {1..20}; do
     if ! kill -0 "$pid" 2>/dev/null; then
@@ -74,7 +74,7 @@ if git -C "$REPO_ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
 EOF
 fi
 
-echo "=== SCT Browser Segmentation Development Server ==="
+echo "=== CALMaR Development Server ==="
 echo "Serving at: http://localhost:$PORT"
 echo "Press Ctrl+C to stop"
 cd "$SCRIPT_DIR"

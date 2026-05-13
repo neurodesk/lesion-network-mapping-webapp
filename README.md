@@ -1,7 +1,7 @@
-# Lesion Network Mapping Webapp
+# CALMaR
 
-A fully client-side webapp for **Lesion Network Mapping (LNM)** of stroke
-lesions, running entirely in the browser:
+**Co-designed Automated Lesion Mapping and Reporting** for stroke lesions,
+running entirely in the browser:
 
 1. Auto-segment a stroke lesion from a structural MRI (ONNX model in a Web Worker).
 2. Normalize the patient brain to MNI152 with a deep-learning registration model.
@@ -14,6 +14,12 @@ lesions, running entirely in the browser:
 5. Threshold and visualize on top of MNI.
 
 No backend. No data upload. Hosted on GitHub Pages.
+
+The app opens on a short start page that explains the local-first workflow:
+load a structural T1, review the lesion mask, then map and export results.
+Patient images, masks, voxel values, screenshots, and generated outputs stay
+on the user's computer; public atlas and model assets may be fetched by the
+browser when needed.
 
 ## Status
 

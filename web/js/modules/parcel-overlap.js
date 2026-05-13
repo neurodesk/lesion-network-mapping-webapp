@@ -1,4 +1,4 @@
-// Pure-JS parcel-overlap reducer for Lesion Network Mapping.
+// Pure-JS parcel-overlap reducer for CALMaR.
 //
 // Inputs are typed arrays already on a common MNI grid:
 //   lesion: Uint8Array | Uint8ClampedArray, nonzero -> "in lesion"

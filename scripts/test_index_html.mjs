@@ -1,5 +1,5 @@
 #!/usr/bin/env node --no-warnings
-// Contract test for web/index.html under the LNM rewrite. Pins the sidebar
+// Contract test for web/index.html under the CALMaR rewrite. Pins the sidebar
 // structure the orchestrator binds to, plus that no SCT branding survives.
 
 import assert from 'node:assert/strict';
@@ -12,9 +12,15 @@ const html = fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8');
 const serviceWorker = fs.readFileSync(path.join(ROOT, 'web/coi-serviceworker.js'), 'utf8');
 const runScript = fs.readFileSync(path.join(ROOT, 'web/run.sh'), 'utf8');
 
-// Title + h1 reflect the LNM identity, not SCT.
-assert.match(html, /<title>[^<]*Lesion Network Mapping[^<]*<\/title>/i,
-  'page title must include "Lesion Network Mapping"');
+// Title + h1 reflect the CALMaR identity, not SCT.
+assert.match(html, /<title>[^<]*CALMaR\s*\|\s*Co-designed Automated Lesion Mapping and Reporting[^<]*<\/title>/,
+  'page title must include the CALMaR project name');
+assert.match(html, /<h1>CALMaR<\/h1>/,
+  'main heading must use CALMaR as the app name');
+assert.match(html, /class=["']tagline["']>Co-designed Automated Lesion Mapping and Reporting<\/span>/,
+  'header tagline must be the expanded CALMaR name');
+assert.doesNotMatch(html, /Browser-based lesion atlas overlap and reporting/,
+  'old browser-based tagline copy should not remain');
 assert.doesNotMatch(html, /SpinalCordToolbox/i,
   'no surviving "SpinalCordToolbox" branding allowed');
 assert.doesNotMatch(html, /\bSCT\b(?!\.com)/,   // allow URL fragments like spinalcordtoolbox.com
@@ -26,6 +32,12 @@ const requiredIds = [
   // Phase 32 — sidebar redesign: three primary sections (Input → Run → Results).
   // Per-stage controls live inside <details> disclosures inside Run/Results so
   // the orchestrator's bindings keep working without dominating the UI.
+  '#startPage',
+  '#enterAppButton',
+  '#startPrivacyButton',
+  '#startPrivacyInlineButton',
+  '#startCitationsButton',
+  '#startHowHeading',
   '#stepLoadSection',
   '#stepLesionSection',
   // (#stepNetworkSection removed; computeOverlapButton moved under the Run
@@ -103,6 +115,7 @@ const requiredIds = [
   '#maskSmoothButton',
   '#maskInterpolateAxis',
   '#maskInterpolateButton',
+  '#maskInterpolateHelp',
   '#confirmLesionMaskButton',
   '#downloadEditedLesionMaskButton'
 ];
@@ -111,6 +124,17 @@ for (const id of requiredIds) {
   const re = new RegExp(`id=["']${escaped}["']`);
   assert.match(html, re, `index.html must contain element with ${id}`);
 }
+
+assert.match(html, /aria-label=["']CALMaR start page["']/,
+  'index.html must expose a start page before the analysis workspace');
+assert.match(html, /Map lesion overlap, connectivity effects, and atlas labels without uploading patient data\./,
+  'start page must explain the primary CALMaR workflow');
+assert.match(html, /Patient images, masks, voxel values, screenshots, and generated outputs stay on this computer\./,
+  'start page must state that patient-derived data stays local');
+assert.match(html, /How It Works[\s\S]*1\. Load T1 data[\s\S]*2\. Review the mask[\s\S]*3\. Map and report/,
+  'start page must include a three-step How It Works explanation');
+assert.match(html, /Atlas and model assets may be downloaded when a workflow needs them/,
+  'start page privacy copy must distinguish public assets from patient-derived files');
 
 const prealignButton = html.match(/<button\b[^>]*id=["']prealignToMniButton["'][^>]*>([\s\S]*?)<\/button>/i);
 assert.ok(prealignButton, '#prealignToMniButton must be a button element');
@@ -195,10 +219,20 @@ assert.match(html, /Smooth the 3D mask volume/,
   'mask drawing toolbar must expose a 3D mask smoothing tool');
 assert.match(html, /Interpolate mask between boundary slices/,
   'mask drawing toolbar must expose between-slice interpolation');
+assert.match(html, /id=["']maskInterpolateHelp["'][\s\S]*Interpolate mask help[\s\S]*first and last non-empty slices[\s\S]*NiiVue mask interpolation/,
+  'mask interpolation help must explain the boundary-slice interpolation behavior');
+assert.match(html, /aria-label=["']Draw lesion mask["'][\s\S]*id=["']maskPaintButton["'][\s\S]*id=["']maskBrushSize["'][\s\S]*id=["']maskShapeSelect["'][\s\S]*id=["']maskFilledToggle["']/,
+  'mask review toolbar must group drawing mode, brush, shape, and fill controls together');
+assert.match(html, /aria-label=["']Mask edit actions["'][\s\S]*id=["']maskUndoButton["'][\s\S]*id=["']maskBlankButton["'][\s\S]*id=["']maskSmoothButton["']/,
+  'mask review toolbar must group undo, blank, and smooth edit actions together');
+assert.match(html, /aria-label=["']Mask slice interpolation["'][\s\S]*id=["']maskInterpolateAxis["'][\s\S]*id=["']maskInterpolateButton["'][\s\S]*id=["']maskInterpolateHelp["']/,
+  'mask review toolbar must group interpolation axis, action, and help together');
 assert.match(html, /id=["']downloadEditedLesionMaskButton["'][\s\S]*Download/,
   'mask confirmation toolbar must expose a download option for the edited mask');
 assert.match(html, /class=["']mask-file-actions["'][\s\S]*id=["']uploadReviewMaskButton["'][\s\S]*id=["']downloadEditedLesionMaskButton["']/,
   'mask confirmation toolbar must group Upload and Download as file actions');
+assert.match(html, /aria-label=["']Mask review actions["'][\s\S]*id=["']confirmLesionMaskButton["'][\s\S]*class=["']mask-file-actions["']/,
+  'mask review toolbar must group confirm and file actions after editing tools');
 assert.match(html, /id=["']maskApprovalBanner["'][\s\S]*Mask approval required[\s\S]*Review the lesion mask before analysis continues\./,
   'mask review must expose a persistent approval banner without duplicating action buttons');
 assert.doesNotMatch(html, /id=["']approveLesionMaskButton["']|id=["']downloadReviewMaskButton["']/,
