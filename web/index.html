@@ -515,13 +515,34 @@
       <span class="viewer-info-label" id="viewerInfoLabel"></span>
     </div>
 
-    <div class="console-container">
-      <div class="console-header">
-        <span class="console-title">Console</span>
-        <button class="console-clear" id="copyConsole" title="Copy to clipboard">Copy</button>
-        <button class="console-clear" id="clearConsole">Clear</button>
-      </div>
-      <div class="console-output" id="consoleOutput"></div>
+    <div class="console-stack">
+      <section class="console-container console-primary-log" aria-label="Analysis log">
+        <div class="console-header">
+          <span class="console-title">Analysis log</span>
+          <div class="console-actions">
+            <button class="console-clear" id="copyConsole" title="Copy to clipboard">Copy</button>
+            <button class="console-clear" id="clearConsole">Clear</button>
+          </div>
+        </div>
+        <div class="console-output" id="consoleOutput"></div>
+      </section>
+
+      <details class="technical-log" id="technicalLogDetails">
+        <summary class="technical-log-summary">
+          <span>Technical log</span>
+          <span>Copy this when reporting a problem.</span>
+        </summary>
+        <section class="console-container console-technical-log" aria-label="Technical debug log">
+          <div class="console-header">
+            <span class="console-title">Model and processing details</span>
+            <div class="console-actions">
+              <button class="console-clear" id="copyTechnicalConsole" title="Copy technical log to clipboard">Copy</button>
+              <button class="console-clear" id="clearTechnicalConsole">Clear</button>
+            </div>
+          </div>
+          <div class="console-output" id="technicalConsoleOutput"></div>
+        </section>
+      </details>
     </div>
   </main>
 

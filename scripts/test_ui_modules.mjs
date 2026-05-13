@@ -146,6 +146,32 @@ function setupDom(elementsById = {}) {
   assert.equal(document._lastCommand, 'copy',
     'fallback path must invoke document.execCommand("copy")');
 
+  // Custom log viewers can carry source/level metadata and copy via their own button.
+  const techEl = makeFakeElement('technicalConsoleOutput');
+  const techCopyBtn = makeFakeElement('copyTechnicalConsole');
+  let techClipboardText = null;
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { writeText: async (text) => { techClipboardText = text; } } }
+  });
+  setupDom({ technicalConsoleOutput: techEl, copyTechnicalConsole: techCopyBtn });
+  const techConsole = new ConsoleOutput({
+    outputElementId: 'technicalConsoleOutput',
+    copyButtonId: 'copyTechnicalConsole'
+  });
+  techConsole.log('worker detail', { source: 'worker', level: 'error' });
+  assert.equal(techEl.children.length, 1,
+    'custom log viewer must append lines to its configured output element');
+  assert.match(techEl.children[0]._cls, /console-line-error/,
+    'log level must be reflected in the line class');
+  assert.match(techEl.children[0]._innerHtml, /console-source[^>]*>\[worker\]/,
+    'log source must be rendered for diagnostic logs');
+  assert.equal(await techConsole.copyToClipboard(), true,
+    'custom log viewer must copy through its configured copy button');
+  assert.match(techClipboardText, /worker detail/,
+    'custom log copy must use that viewer text');
+  assert.equal(techCopyBtn.textContent, 'Copied!');
+
   // No-op when the DOM element doesn't exist (use a fresh ID).
   setupDom({});
   const co2 = new ConsoleOutput('missingId');
@@ -215,4 +241,4 @@ function setupDom(elementsById = {}) {
     'isOpen() must return false when modal does not exist');
 }
 
-console.log('ui-modules OK: ConsoleOutput (log/clear/copy fallback/missing), ProgressManager (setProgress/reset/missing), ModalManager (open/close/toggle/overlay-click/missing).');
+console.log('ui-modules OK: ConsoleOutput (log/level/source/clear/copy fallback/custom/missing), ProgressManager (setProgress/reset/missing), ModalManager (open/close/toggle/overlay-click/missing).');

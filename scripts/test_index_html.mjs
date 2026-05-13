@@ -96,6 +96,15 @@ const requiredIds = [
   '#layerToggleLesionMask',
   '#layerToggleThresholdMap',
   '#layerToggleAtlasQc',
+  // Split logging: default clinician-facing analysis log plus collapsed
+  // technical support log.
+  '#consoleOutput',
+  '#copyConsole',
+  '#clearConsole',
+  '#technicalLogDetails',
+  '#technicalConsoleOutput',
+  '#copyTechnicalConsole',
+  '#clearTechnicalConsole',
   // Manual lesion-mask refinement toolbar.
   '#maskDrawingToolbar',
   '#maskReviewStatus',
@@ -207,6 +216,16 @@ assert.match(html, /Top voxels/,
   'connectivity-map threshold UI must present a top-percent voxel slider');
 assert.match(html, /Use \|t\| magnitude/,
   'connectivity-map threshold UI may only offer top-percent ranking by magnitude, not a t-stat threshold mode');
+assert.match(html, /Analysis log/,
+  'default log viewer must be clinician-facing analysis log');
+assert.match(html, /<details\b[^>]*id=["']technicalLogDetails["'][^>]*>/i,
+  'technical support log must be a collapsed details viewer by default');
+assert.doesNotMatch(html, /<details\b[^>]*id=["']technicalLogDetails["'][^>]*\bopen\b/i,
+  'technical support log must not be open by default');
+assert.match(html, /Copy this when reporting a problem\./,
+  'technical log summary must tell users which log to send for support');
+assert.match(html, /Model and processing details/,
+  'technical log viewer must be labelled as model and processing details');
 assert.match(html, /aria-label=["']Lesion mask drawing tools["']/,
   'viewer toolbar must expose compact lesion-mask drawing controls');
 assert.match(html, /Paint[\s\S]*Erase[\s\S]*Erase cluster[\s\S]*Confirm mask/,

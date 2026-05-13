@@ -10,6 +10,7 @@ import { VERSION } from '../app/config.js';
 export class InferenceExecutor {
   constructor(options) {
     this.updateOutput = options.updateOutput || (() => {});
+    this.updateDebugOutput = options.updateDebugOutput || this.updateOutput;
     this.setProgress = options.setProgress || (() => {});
     this.onStageData = options.onStageData || (() => {});
     this.onComplete = options.onComplete || (() => {});
@@ -167,7 +168,7 @@ export class InferenceExecutor {
           this.setProgress(data.value, data.text);
           break;
         case 'log':
-          this.updateOutput(data.message);
+          this.updateDebugOutput(data.message, { source: 'worker', audience: 'technical' });
           break;
         case 'error':
           this._handleError(data.message);
@@ -176,7 +177,7 @@ export class InferenceExecutor {
           this.workerReady = true;
           this.workerInitializing = false;
           this.webgpuAvailable = !!data.webgpuAvailable;
-          this.updateOutput('ONNX Runtime ready');
+          this.updateDebugOutput('ONNX Runtime ready', { source: 'worker', audience: 'technical' });
           this.onInitialized();
           break;
         case 'complete':
@@ -294,7 +295,7 @@ export class InferenceExecutor {
     }
 
     this.workerInitializing = true;
-    this.updateOutput('Initializing ONNX Runtime...');
+    this.updateDebugOutput('Initializing ONNX Runtime...', { source: 'worker', audience: 'technical' });
 
     this.worker.postMessage({ type: 'init', version: VERSION });
 

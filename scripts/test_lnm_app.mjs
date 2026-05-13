@@ -229,6 +229,12 @@ assert.match(src, /this\._perfStats\s*=\s*\[\s*\]/,
   'runFullPipeline must reset _perfStats at start');
 assert.match(src, /\[perf\]/,
   'each stage must emit a [perf] line into the console');
+assert.match(src, /technicalConsole\s*=\s*new ConsoleOutput/,
+  'lnm-app.js must keep a separate technical log viewer');
+assert.match(src, /updateDebugOutput\s*\(/,
+  'lnm-app.js must route model and processing details to the technical log');
+assert.match(src, /shouldShowClinicalLog\s*\(/,
+  'lnm-app.js must filter clinician-facing log messages separately from diagnostic output');
 assert.match(src, /performance\.now/,
   '_now must call performance.now() when available');
 

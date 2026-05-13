@@ -119,6 +119,44 @@ function waitMs(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ---- Split-log routing: analysis log is condensed, technical log keeps details ----
+{
+  const app = new LesionNetworkMappingApp();
+  const clinical = [];
+  const technical = [];
+  app.console = { log: (message, options) => clinical.push({ message, options }) };
+  app.technicalConsole = { log: (message, options) => technical.push({ message, options }) };
+
+  app.updateOutput('Loaded: sub-M2001_ses-1076_acq-tfl3_run-4_T1w.nii.gz');
+  app.updateOutput('Loading sub-M2001_ses-1076_acq-tfl3_run-4_T1w.nii.gz...');
+  app.updateOutput('sub-M2001_ses-1076_acq-tfl3_run-4_T1w.nii.gz loaded');
+  app.updateOutput(
+    'Prealign (PCA): centroid src voxel (77.7, 124.7, 129.1) -> world ' +
+    '(3.5, 15.4, -10.2) mm; eigenvalues=[1561.1, 911.7, 833.4].'
+  );
+  app.updateOutput('Structural image ready: sub-M2001_ses-1076_acq-tfl3_run-4_T1w.nii.gz');
+  app.updateOutput('Starting MNI registration (SynthMorph deformable)...');
+  app.updateOutput('Starting MNI registration (SynthMorph deformable)...');
+  app.updateOutput("Stage 'register' (registration) failed: synthetic failure");
+
+  assert.deepEqual(
+    clinical.map(entry => entry.message),
+    [
+      'Structural image ready.',
+      'MNI registration started.',
+      "Stage 'register' (registration) failed: synthetic failure"
+    ],
+    'analysis log must suppress file/viewer/PCA details, condense stage messages, and de-dupe repeats'
+  );
+  assert.ok(
+    technical.some(entry => entry.message.startsWith('Loaded: sub-M2001')) &&
+    technical.some(entry => entry.message.startsWith('Loading sub-M2001')) &&
+    technical.some(entry => entry.message.startsWith('sub-M2001')) &&
+    technical.some(entry => entry.message.startsWith('Prealign (PCA): centroid')),
+    'technical log must retain full file/viewer/PCA diagnostic details'
+  );
+}
+
 function makeNiftiFile(name, buffer) {
   return {
     name,
@@ -3171,4 +3209,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/upload/approval-banner/download/confirm/native-overlay/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster input/table-filter + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + split-log routing + worker-wait + manual mask review/upload/approval-banner/download/confirm/native-overlay/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster input/table-filter + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
