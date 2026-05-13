@@ -274,6 +274,7 @@ export class LesionNetworkMappingApp {
     this._perfRunStart = null;       // Phase 19: total runFullPipeline start
     this._stageDataResolvers = new Map();
     this._stepCompleteResolvers = new Map();
+    this._preMaskReviewMultiplanarShowRender = null;
     this.manifest = null;          // populated lazily by ensureManifest()
     this.atlasOptions = ATLAS_OPTIONS;
     this.selectedAtlasOptionId = DEFAULT_ATLAS_OPTION_ID;
@@ -586,9 +587,13 @@ export class LesionNetworkMappingApp {
 
     document.querySelectorAll('.view-tab[data-view]').forEach(button => {
       button.addEventListener('click', () => {
-        document.querySelectorAll('.view-tab[data-view]').forEach(tab => tab.classList.remove('active'));
-        button.classList.add('active');
-        this.viewerController.setViewType(button.dataset.view);
+        const view = button.dataset.view;
+        if (this.maskReviewActive && view === 'render') {
+          this.setViewerView('multiplanar');
+          this.updateOutput('3D render view is hidden while reviewing the editable lesion mask.');
+          return;
+        }
+        this.setViewerView(view);
       });
     });
 
@@ -1017,6 +1022,36 @@ export class LesionNetworkMappingApp {
     return this.viewerLayerVisibility[layer] !== false;
   }
 
+  setViewerView(view) {
+    if (!view) return;
+    document.querySelectorAll('.view-tab[data-view]').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.view === view);
+    });
+    this.viewerController?.setViewType?.(view);
+  }
+
+  setMaskReview3DRenderEnabled(enabled) {
+    if (!this.nv?.opts) return;
+    const showRenderNever = globalThis.niivue?.SHOW_RENDER?.NEVER ?? 0;
+    if (!enabled) {
+      if (this._preMaskReviewMultiplanarShowRender === null) {
+        this._preMaskReviewMultiplanarShowRender = this.nv.opts.multiplanarShowRender;
+      }
+      this.nv.opts.multiplanarShowRender = showRenderNever;
+      if (this.nv.opts.sliceType === this.nv.sliceTypeRender) {
+        this.setViewerView('multiplanar');
+      } else {
+        this.nv.drawScene?.();
+      }
+      return;
+    }
+    if (this._preMaskReviewMultiplanarShowRender !== null) {
+      this.nv.opts.multiplanarShowRender = this._preMaskReviewMultiplanarShowRender;
+      this._preMaskReviewMultiplanarShowRender = null;
+      this.nv.drawScene?.();
+    }
+  }
+
   tagFileSpace(file, { space, role, sourceStage, dims, affine } = {}) {
     return tagSpatialFile(file, {
       space,
@@ -1158,6 +1193,7 @@ export class LesionNetworkMappingApp {
     this.lesionMaskFile = null;
     this.lesionMaskConfirmed = false;
     this.maskReviewActive = false;
+    this.setMaskReview3DRenderEnabled(true);
     this._pendingMaskResume = null;
     this.hasRegistrationDisplacement = false;
     this.patientThresholdedMaskFile = null;
@@ -1903,18 +1939,37 @@ export class LesionNetworkMappingApp {
       sourceStage: 'mask-review'
     });
     await this.ensureNativeStructuralInfo();
+    this.maskReviewActive = true;
+    this.lesionMaskConfirmed = false;
+    this.lesionMaskFile = null;
+    this.viewerLayerVisibility.brainmask = false;
+    if (this.viewerController?.clearVolumes) {
+      this.viewerController.clearVolumes();
+    } else {
+      this.viewerController?.removeVolumeForStage?.('brainmask');
+    }
+    this.setMaskReview3DRenderEnabled(false);
     await this.loadViewerBaseVolume(baseFile, {
       stage: 'structural',
       visible: this.layerVisible('structural')
     });
+    const brainmaskFile = this.getBrainmaskFileForActiveViewer();
+    if (brainmaskFile && this.layerVisible('brainmask')) {
+      try {
+        this.assertViewerOverlaySpace(brainmaskFile, 'Mask-review brain-mask overlay');
+        await this.viewerController.loadOverlay(brainmaskFile, 'green', 0.4, {
+          stage: 'brainmask',
+          visible: true
+        });
+      } catch (err) {
+        this.updateOutput(`Mask-review brain mask render warning: ${err.message}`);
+      }
+    }
 
     const seed = blank ? null : await this.resampleSeedMaskToNative(seedFile || this.autoLesionSeedFile);
     if (seed) await this.maskDrawingController.loadSeedFile(seed);
     else this.maskDrawingController.startBlank();
 
-    this.maskReviewActive = true;
-    this.lesionMaskConfirmed = false;
-    this.lesionMaskFile = null;
     this.setMaskDrawingTool('paint');
     this.applyMaskDrawingVisibility();
     this.refreshViewerLayerControls();
@@ -1964,6 +2019,7 @@ export class LesionNetworkMappingApp {
     });
     this.lesionMaskConfirmed = true;
     this.maskReviewActive = false;
+    this.setMaskReview3DRenderEnabled(true);
     this.maskDrawingController.close({ clearDrawing: true });
     await this.renderConfirmedNativeLesionOverlay();
     const btn = document.getElementById('downloadLesionMaskButton');
@@ -3117,6 +3173,7 @@ export class LesionNetworkMappingApp {
     this.nativeLesionSeedFile = null;
     this.confirmedNativeLesionFile = null;
     this.maskReviewActive = false;
+    this.setMaskReview3DRenderEnabled(true);
     this.lesionFile = null;
     this.mniLesionFile = null;
     this.overlapResult = null;
@@ -3433,6 +3490,7 @@ export class LesionNetworkMappingApp {
     this.nativeLesionSeedFile = null;
     this.confirmedNativeLesionFile = null;
     this.maskReviewActive = false;
+    this.setMaskReview3DRenderEnabled(true);
     this._pendingMaskResume = null;
     this.networkMapFile = null;
     this.networkMapData = null;

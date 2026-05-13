@@ -39,6 +39,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Niivue constructor is called in LesionNetworkMappingApp's constructor.
 // We never touch the resulting nv instance in these tests.
 globalThis.niivue = {
+  SHOW_RENDER: { NEVER: 0, AUTO: 2 },
   Niivue: class {
     constructor() {}
     async attachTo() {}
@@ -866,7 +867,90 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     'uploaded mask metadata must record the mask-upload source stage');
 }
 
-// ---- Test 10c.5: mask-review banner is visible while toolbar owns actions ----
+// ---- Test 10c.5: mask-review starts with the brain mask off ----
+{
+  const affine = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ];
+  const makeTagged = (name, space) => tagSpatialFile({ name }, {
+    space,
+    dims: [2, 2, 2],
+    affine
+  });
+  const runReview = async () => {
+    const app = makeApp();
+    const calls = [];
+    const nativeT1 = makeTagged('native-t1.nii', VOLUME_SPACES.NATIVE_T1);
+    const nativeMask = makeTagged('native-brainmask.nii', VOLUME_SPACES.NATIVE_T1);
+    const prealignT1 = makeTagged('lnm-prealign-t1.nii', VOLUME_SPACES.MNI160);
+    const prealignMask = makeTagged('lnm-prealign-brainmask.nii', VOLUME_SPACES.MNI160);
+    app.nativeStructuralFile = nativeT1;
+    app.structuralFile = prealignT1;
+    app.nativeBrainmaskFile = nativeMask;
+    app.brainmaskFile = prealignMask;
+    app.viewerLayerVisibility.brainmask = true;
+    app.nv.opts = {
+      multiplanarShowRender: globalThis.niivue.SHOW_RENDER.AUTO,
+      sliceType: app.nv.sliceTypeMultiplanar
+    };
+    app.nv.sliceTypeRender = 7;
+    app.nv.drawScene = () => calls.push({ type: 'drawScene' });
+    app.ensureNativeStructuralInfo = async () => {};
+    app.loadViewerBaseVolume = async (file, options) => {
+      calls.push({ type: 'base', file, options });
+      app.viewerBaseFile = file;
+    };
+    app.resampleSeedMaskToNative = async () => null;
+    app.refreshViewerLayerControls = () => {};
+    app.refreshMaskDrawingControls = () => {};
+    app.viewerController = {
+      clearVolumes: () => calls.push({ type: 'clearVolumes' }),
+      getVolumeIndexForStage: () => null,
+      loadOverlay: async (file, colormap, opacity, options) => {
+        calls.push({ type: 'overlay', file, colormap, opacity, options });
+      }
+    };
+    app.maskDrawingController = {
+      hasDrawing: true,
+      startBlank: () => calls.push({ type: 'blank' }),
+      ensureDrawing: () => calls.push({ type: 'ensureDrawing' }),
+      setTool: tool => calls.push({ type: 'tool', tool }),
+      setVisible: visible => calls.push({ type: 'drawingVisible', visible })
+    };
+
+    await app.startLesionMaskReview({ blank: true });
+    return { app, calls, nativeT1, nativeMask, prealignMask };
+  };
+
+  const reviewRun = await runReview();
+  assert.equal(reviewRun.calls[0].type, 'clearVolumes',
+    'mask review must clear the previous viewer stack before loading the native review base');
+  const baseCall = reviewRun.calls.find(call => call.type === 'base');
+  assert.equal(baseCall.file, reviewRun.nativeT1,
+    'mask review must display the native T1 as the viewer base');
+  assert.equal(reviewRun.app.viewerLayerVisibility.brainmask, false,
+    'mask review must force the Brain mask layer off by default');
+  assert.equal(reviewRun.app.nv.opts.multiplanarShowRender, globalThis.niivue.SHOW_RENDER.NEVER,
+    'mask review must hide NiiVue 3D render tile even in multiplanar mode');
+  assert.equal(reviewRun.app._preMaskReviewMultiplanarShowRender, globalThis.niivue.SHOW_RENDER.AUTO,
+    'mask review must remember the prior 3D render-tile setting');
+  assert.equal(reviewRun.calls.some(call => call.type === 'overlay'), false,
+    'mask review must not display a brain-mask overlay by default');
+  assert.equal(reviewRun.app.getBrainmaskFileForActiveViewer(), reviewRun.nativeMask,
+    'manual re-enable in review mode must still use the native brain mask, not the prealigned mask');
+  assert.notEqual(reviewRun.app.getBrainmaskFileForActiveViewer(), reviewRun.prealignMask,
+    'manual re-enable in review mode must not select the prealigned MNI brain mask');
+  reviewRun.app.setMaskReview3DRenderEnabled(true);
+  assert.equal(reviewRun.app.nv.opts.multiplanarShowRender, globalThis.niivue.SHOW_RENDER.AUTO,
+    'leaving mask review must restore the previous 3D render-tile setting');
+  assert.equal(reviewRun.app._preMaskReviewMultiplanarShowRender, null,
+    'leaving mask review must clear the saved render-tile setting');
+}
+
+// ---- Test 10c.6: mask-review banner is visible while toolbar owns actions ----
 {
   const app = makeApp();
   const bannerClassList = makeClassList(['hidden']);
@@ -918,7 +1002,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-// ---- Test 10c.6: mask-review toolbar buttons own confirm/download actions ----
+// ---- Test 10c.7: mask-review toolbar buttons own confirm/download actions ----
 {
   const app = makeApp();
   const listeners = {};

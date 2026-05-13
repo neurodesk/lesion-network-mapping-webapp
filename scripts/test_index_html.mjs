@@ -135,6 +135,8 @@ assert.match(html, /How It Works[\s\S]*1\. Load T1 data[\s\S]*2\. Review the mas
   'start page must include a three-step How It Works explanation');
 assert.match(html, /Atlas and model assets may be downloaded when a workflow needs them/,
   'start page privacy copy must distinguish public assets from patient-derived files');
+assert.match(html, /Background execution is possible if this site is added under "Always keep these sites active" in your browser settings\./,
+  'start page must explain how to allow background execution');
 
 const prealignButton = html.match(/<button\b[^>]*id=["']prealignToMniButton["'][^>]*>([\s\S]*?)<\/button>/i);
 assert.ok(prealignButton, '#prealignToMniButton must be a button element');
