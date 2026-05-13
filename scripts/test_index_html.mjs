@@ -127,8 +127,8 @@ for (const id of requiredIds) {
 
 assert.match(html, /aria-label=["']CALMaR start page["']/,
   'index.html must expose a start page before the analysis workspace');
-assert.match(html, /Map lesion overlap, connectivity effects, and atlas labels without uploading patient data\./,
-  'start page must explain the primary CALMaR workflow');
+assert.match(html, /Process stroke lesion maps locally in your browser\./,
+  'start page must explain that CALMaR processes stroke lesion maps locally');
 assert.match(html, /Patient images, masks, voxel values, screenshots, and generated outputs stay on this computer\./,
   'start page must state that patient-derived data stays local');
 assert.match(html, /How It Works[\s\S]*1\. Load T1 data[\s\S]*2\. Review the mask[\s\S]*3\. Map and report/,
