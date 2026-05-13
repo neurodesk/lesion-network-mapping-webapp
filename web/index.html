@@ -232,6 +232,12 @@
           3. Results
         </h2>
         <div class="section-content">
+          <div class="results-filter-controls">
+            <div class="param-row">
+              <label for="networkThresholdMinCluster">Min cluster size (voxels)</label>
+              <input type="number" id="networkThresholdMinCluster" class="param-input" min="0" step="1" value="30">
+            </div>
+          </div>
           <div class="panel-title-row">
             <h3>Direct lesion overlap</h3>
             <button type="button" class="help-icon" aria-label="Direct lesion overlap help">i
@@ -290,10 +296,6 @@
             </div>
             <div class="param-row">
               <label><input type="checkbox" id="networkThresholdSymmetric" checked> Use |t| magnitude</label>
-            </div>
-            <div class="param-row">
-              <label for="networkThresholdMinCluster">Min cluster size (voxels)</label>
-              <input type="number" id="networkThresholdMinCluster" class="param-input" min="0" step="1" value="0">
             </div>
             <p class="threshold-summary" id="networkThresholdSummary">Run analysis first to enable thresholding.</p>
             <div id="affectedNetworkResults" class="affected-network-results hidden">

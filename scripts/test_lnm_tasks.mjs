@@ -84,6 +84,8 @@ assert.equal(netMapThreshold?.defaults?.mode, undefined,
   'lnm-network-map threshold defaults must not expose a threshold mode; connectivity-map UI is top-percent only');
 assert.ok(netMapThreshold.defaults.value > 0 && netMapThreshold.defaults.value <= 10,
   `lnm-network-map threshold default uses top-percent semantics; expected a small top %, got ${netMapThreshold.defaults.value}`);
+assert.equal(netMapThreshold.defaults.minClusterVoxels, 30,
+  'lnm-network-map threshold default must use a 30-voxel min cluster filter');
 
 // Phase 3: lnm-yeo-auto pipeline (T1 -> SynthStrip -> seg -> register ->
 // warp lesion to MNI -> Yeo 7-network overlap). Declaring the structure;
@@ -108,6 +110,8 @@ assert.equal(autoThreshold?.defaults?.mode, undefined,
   'lnm-yeo-auto threshold defaults must not expose a threshold mode; connectivity-map UI is top-percent only');
 assert.ok(autoThreshold.defaults.value > 0 && autoThreshold.defaults.value <= 10,
   `lnm-yeo-auto threshold default uses top-percent semantics; expected a small top %, got ${autoThreshold.defaults.value}`);
+assert.equal(autoThreshold.defaults.minClusterVoxels, 30,
+  'lnm-yeo-auto threshold default must use a 30-voxel min cluster filter');
 
 // Phase 2a.2: lnm-segment-only pipeline (T1 -> SynthStrip -> lesion seg ->
 // display + download). No registration / no atlas overlap until Phase 3.

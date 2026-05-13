@@ -200,6 +200,23 @@ function summarizeAtlasOverlap(parcelResult, atlas, atlasOption) {
   return summarizeNetworkOverlap(parcelResult, labelMap);
 }
 
+function normalizeMinClusterVoxels(value) {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function filterSummaryByMinCluster(summary, minClusterVoxels = 0) {
+  if (!summary || !Array.isArray(summary.networks)) return summary || null;
+  const minVoxels = normalizeMinClusterVoxels(minClusterVoxels);
+  if (minVoxels <= 1) return summary;
+  return {
+    ...summary,
+    networks: summary.networks.filter(
+      row => (Number(row?.voxelsInLesion) || 0) >= minVoxels
+    )
+  };
+}
+
 function atlasSpaceName(atlasOption) {
   return atlasOption?.displayName || 'selected atlas';
 }
@@ -541,18 +558,32 @@ export class LesionNetworkMappingApp {
     const thresholdValue = document.getElementById('networkThresholdValue');
     const thresholdSym = document.getElementById('networkThresholdSymmetric');
     const thresholdMinCluster = document.getElementById('networkThresholdMinCluster');
-    const triggerRecompute = () => {
+    const triggerThresholdRecompute = () => {
       this.updateThresholdValueLabel();
       if (this.networkMapData) {
         try { this.applyNetworkThreshold(); }
         catch (err) { this.updateOutput(`Threshold failed: ${err.message}`); }
       }
     };
-    if (thresholdValue) thresholdValue.addEventListener('input', triggerRecompute);
-    if (thresholdSym) thresholdSym.addEventListener('change', triggerRecompute);
+    const triggerResultsFilterRecompute = () => {
+      this.updateThresholdValueLabel();
+      if (this.overlapResult) {
+        this.renderDirectOverlapTable();
+        this.updateDirectFunctionProfile();
+      }
+      if (this.networkMapData) {
+        try { this.applyNetworkThreshold(); }
+        catch (err) { this.updateOutput(`Threshold failed: ${err.message}`); }
+      } else if (this.affectedNetworkResult) {
+        this.renderAffectedNetworkTable();
+        this.updateAffectedFunctionProfile();
+      }
+    };
+    if (thresholdValue) thresholdValue.addEventListener('input', triggerThresholdRecompute);
+    if (thresholdSym) thresholdSym.addEventListener('change', triggerThresholdRecompute);
     if (thresholdMinCluster) {
-      thresholdMinCluster.addEventListener('input', triggerRecompute);
-      thresholdMinCluster.addEventListener('change', triggerRecompute);
+      thresholdMinCluster.addEventListener('input', triggerResultsFilterRecompute);
+      thresholdMinCluster.addEventListener('change', triggerResultsFilterRecompute);
     }
     this.configureTopPercentThresholdSlider();
     this.updateThresholdValueLabel();
@@ -1296,13 +1327,7 @@ export class LesionNetworkMappingApp {
     this.overlapResult = { parcelResult, summary, atlas, networkSizes, atlasOption };
     this.showAtlasCoverageNote(parcelResult.voxelsOutsideAtlas, parcelResult.totalLesionVoxels);
 
-    const tableEl = document.getElementById('networkOverlapTable');
-    if (tableEl) {
-      renderOverlapTable(tableEl, summary, {
-        colormap: this.getAtlasColormap(atlasOption),
-        percentHeader: 'Lesion %'
-      });
-    }
+    this.renderDirectOverlapTable();
     this.clearAffectedNetworkTable();
     const csvButton = document.getElementById('downloadOverlapCsv');
     if (csvButton) csvButton.disabled = false;
@@ -1336,6 +1361,69 @@ export class LesionNetworkMappingApp {
     if (resultEl) resultEl.classList.add('hidden');
     const tableEl = document.getElementById(tableId);
     if (tableEl) tableEl.innerHTML = '';
+  }
+
+  getResultsMinClusterVoxels() {
+    const minClEl = document.getElementById('networkThresholdMinCluster');
+    if (minClEl) return normalizeMinClusterVoxels(minClEl.value);
+    return 0;
+  }
+
+  filterSummaryForResults(summary) {
+    return filterSummaryByMinCluster(summary, this.getResultsMinClusterVoxels());
+  }
+
+  minClusterEmptyLabel(fallback) {
+    const minClusterVoxels = this.getResultsMinClusterVoxels();
+    return minClusterVoxels > 1
+      ? `No atlas labels with >= ${minClusterVoxels} voxels`
+      : fallback;
+  }
+
+  getDisplayOverlapSummary() {
+    if (!this.overlapResult?.summary) return null;
+    const displaySummary = this.filterSummaryForResults(this.overlapResult.summary);
+    this.overlapResult.displaySummary = displaySummary;
+    return displaySummary;
+  }
+
+  getDisplayAffectedSummary() {
+    if (!this.affectedNetworkResult?.summary) return null;
+    const displaySummary = this.filterSummaryForResults(this.affectedNetworkResult.summary);
+    this.affectedNetworkResult.displaySummary = displaySummary;
+    return displaySummary;
+  }
+
+  renderDirectOverlapTable() {
+    if (!this.overlapResult) return null;
+    const tableEl = document.getElementById('networkOverlapTable');
+    const atlasOption = this.overlapResult.atlasOption || this.getAtlasOption();
+    const displaySummary = this.getDisplayOverlapSummary();
+    if (tableEl) {
+      renderOverlapTable(tableEl, displaySummary, {
+        colormap: this.getAtlasColormap(atlasOption),
+        percentHeader: 'Lesion %',
+        emptyLabel: this.minClusterEmptyLabel('No overlap')
+      });
+    }
+    return displaySummary;
+  }
+
+  renderAffectedNetworkTable() {
+    if (!this.affectedNetworkResult) return null;
+    const tableEl = document.getElementById('affectedNetworkTable');
+    const resultEl = document.getElementById('affectedNetworkResults');
+    const atlasOption = this.affectedNetworkResult.atlasOption || this.getAtlasOption();
+    const displaySummary = this.getDisplayAffectedSummary();
+    if (tableEl) {
+      renderOverlapTable(tableEl, displaySummary, {
+        colormap: this.getAtlasColormap(atlasOption),
+        percentHeader: '% of map',
+        emptyLabel: this.minClusterEmptyLabel('No affected voxels')
+      });
+    }
+    if (resultEl) resultEl.classList.remove('hidden');
+    return displaySummary;
   }
 
   async renderFunctionProfileForSummary(summary, {
@@ -1374,7 +1462,7 @@ export class LesionNetworkMappingApp {
       return Promise.resolve(null);
     }
     this._functionalProfileRenderPromise = this._functionalProfileRenderPromise
-      .then(() => this.renderFunctionProfileForSummary(this.overlapResult?.summary, {
+      .then(() => this.renderFunctionProfileForSummary(this.getDisplayOverlapSummary(), {
         resultId: 'directFunctionProfileResults',
         tableId: 'directFunctionProfileTable',
         emptyLabel: 'No direct-overlap functional associations'
@@ -1393,7 +1481,7 @@ export class LesionNetworkMappingApp {
       return Promise.resolve(null);
     }
     this._functionalProfileRenderPromise = this._functionalProfileRenderPromise
-      .then(() => this.renderFunctionProfileForSummary(this.affectedNetworkResult?.summary, {
+      .then(() => this.renderFunctionProfileForSummary(this.getDisplayAffectedSummary(), {
         resultId: 'mapFunctionProfileResults',
         tableId: 'mapFunctionProfileTable',
         emptyLabel: 'No connectivity-map functional associations'
@@ -2348,10 +2436,9 @@ export class LesionNetworkMappingApp {
     }
     const valueEl = document.getElementById('networkThresholdValue');
     const symEl = document.getElementById('networkThresholdSymmetric');
-    const minClEl = document.getElementById('networkThresholdMinCluster');
     const rawValue = valueEl ? Number(valueEl.value) : 5;
     const symmetric = symEl ? !!symEl.checked : true;
-    const minClusterVoxels = minClEl ? Number(minClEl.value) || 0 : 0;
+    const minClusterVoxels = this.getResultsMinClusterVoxels();
     // The UI label is "Top voxels": 5 means keep the strongest 5%.
     // The pure threshold engine takes a percentile cutoff q where q=0.95
     // keeps roughly the top 5%, so invert the UI value here.
@@ -2400,8 +2487,6 @@ export class LesionNetworkMappingApp {
 
   updateAffectedNetworkTable(mask) {
     this.affectedNetworkResult = null;
-    const resultEl = document.getElementById('affectedNetworkResults');
-    const tableEl = document.getElementById('affectedNetworkTable');
     const atlasOption = this.overlapResult?.atlasOption || this.getAtlasOption();
     const atlas = this.networkMapLabelAtlas || this.overlapResult?.atlas;
 
@@ -2429,15 +2514,7 @@ export class LesionNetworkMappingApp {
     });
     const summary = summarizeAtlasOverlap(parcelResult, atlas, atlasOption);
     this.affectedNetworkResult = { parcelResult, summary, atlas, atlasOption };
-
-    if (tableEl) {
-      renderOverlapTable(tableEl, summary, {
-        colormap: this.getAtlasColormap(atlasOption),
-        percentHeader: '% of map',
-        emptyLabel: 'No affected voxels'
-      });
-    }
-    if (resultEl) resultEl.classList.remove('hidden');
+    this.renderAffectedNetworkTable();
     this.updateAffectedFunctionProfile();
     return this.affectedNetworkResult;
   }
@@ -3469,7 +3546,7 @@ export class LesionNetworkMappingApp {
     }
     if (symEl && typeof defaults.symmetric === 'boolean') symEl.checked = defaults.symmetric;
     if (minClEl && typeof defaults.minClusterVoxels === 'number') {
-      minClEl.value = String(defaults.minClusterVoxels);
+      minClEl.value = String(normalizeMinClusterVoxels(defaults.minClusterVoxels));
     }
     this.updateThresholdValueLabel();
   }
@@ -3602,7 +3679,7 @@ export class LesionNetworkMappingApp {
 
   exportCsv() {
     if (!this.overlapResult) return;
-    const csv = serializeOverlapCsv(this.overlapResult.summary, {
+    const csv = serializeOverlapCsv(this.getDisplayOverlapSummary(), {
       networkSizes: this.overlapResult.networkSizes
     });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });

@@ -259,6 +259,10 @@ assert.doesNotMatch(html, /auto-promoted on file drop|auto-fires/i,
   'UI copy must not imply processing starts on file load');
 assert.match(html, /Direct lesion overlap/,
   'direct lesion result section must clearly label the lesion-overlap table');
+assert.match(html, /id=["']resultsSection["'][\s\S]*id=["']networkThresholdMinCluster["'][\s\S]*Direct lesion overlap/,
+  'min-cluster control must appear at the beginning of Results before following result tables');
+assert.match(html, /id=["']networkThresholdMinCluster["'][^>]*value=["']30["']/,
+  'min-cluster control must default to 30 voxels');
 assert.match(html, /Atlas labels listed here contain lesion voxels directly/,
   'direct lesion help must explain that the first table is direct lesion overlap');
 assert.match(html, /Threshold connectivity map/,

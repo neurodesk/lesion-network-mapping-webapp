@@ -1678,6 +1678,95 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
+// ---- Test 12b: min-cluster filters following result tables ----
+{
+  const app = makeApp();
+  const directResultsEl = { classList: makeClassList(['hidden']) };
+  const directTableEl = { innerHTML: '', children: [], appendChild(child) { this.children.push(child); } };
+  const affectedResultsEl = { classList: makeClassList(['hidden']) };
+  const affectedTableEl = { innerHTML: '', children: [], appendChild(child) { this.children.push(child); } };
+  const restoreDocument = useMockElements({
+    networkThresholdMinCluster: { value: '30' },
+    networkOverlapTable: directTableEl,
+    directFunctionProfileResults: directResultsEl,
+    directFunctionProfileTable: { innerHTML: '', children: [], appendChild(child) { this.children.push(child); } },
+    affectedNetworkResults: affectedResultsEl,
+    affectedNetworkTable: affectedTableEl
+  });
+  const originalCreateElement = globalThis.document.createElement;
+  const renderedText = [];
+  globalThis.document.createElement = (tagName) => {
+    let text = '';
+    return {
+      tagName,
+      children: [],
+      style: {},
+      classList: makeClassList(),
+      colSpan: 1,
+      appendChild(child) { this.children.push(child); },
+      setAttribute: () => {},
+      set textContent(value) {
+        text = value;
+        renderedText.push(value);
+      },
+      get textContent() { return text; }
+    };
+  };
+  const atlasOption = app.atlasOptions.find(option => option.id === 'yeo7');
+  app.selectedAtlasOptionId = 'yeo7';
+  app.overlapResult = {
+    atlasOption,
+    summary: {
+      totalLesionVoxels: 40,
+      networks: [
+        { network: 'Somatomotor', voxelsInLesion: 31, fractionOfLesion: 31 / 40, parcels: [2] },
+        { network: 'Default', voxelsInLesion: 9, fractionOfLesion: 9 / 40, parcels: [7] }
+      ]
+    },
+    networkSizes: {}
+  };
+  app.affectedNetworkResult = {
+    atlasOption,
+    summary: {
+      totalLesionVoxels: 35,
+      networks: [
+        { network: 'Visual', voxelsInLesion: 32, fractionOfLesion: 32 / 35, parcels: [1] },
+        { network: 'Default', voxelsInLesion: 3, fractionOfLesion: 3 / 35, parcels: [7] }
+      ]
+    }
+  };
+  app.functionProfiles = {
+    sourceLabel: 'Neurosynth v7 via NiMARE',
+    networkProfiles: {
+      Somatomotor: [{ term: 'motor', score: 0.9 }],
+      Default: [{ term: 'memory', score: 0.9 }]
+    }
+  };
+
+  try {
+    app.renderDirectOverlapTable();
+    assert.ok(renderedText.includes('Somatomotor'),
+      'direct overlap table must keep rows meeting the min-cluster filter');
+    assert.equal(renderedText.includes('Default'), false,
+      'direct overlap table must hide rows below the min-cluster filter');
+
+    await app.updateDirectFunctionProfile();
+    assert.ok(renderedText.includes('motor'),
+      'direct functional profile must use the filtered direct-overlap summary');
+    assert.equal(renderedText.includes('memory'), false,
+      'direct functional profile must not include terms from hidden rows');
+
+    app.renderAffectedNetworkTable();
+    assert.ok(renderedText.includes('Visual'),
+      'affected-network table must keep rows meeting the min-cluster filter');
+    assert.equal(renderedText.includes('Default'), false,
+      'affected-network table must hide rows below the min-cluster filter');
+  } finally {
+    globalThis.document.createElement = originalCreateElement;
+    restoreDocument();
+  }
+}
+
 // ---- Test 13: percentile UI uses top-percent semantics ----
 {
   const app = makeApp();
@@ -3082,4 +3171,4 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   }
 }
 
-console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/upload/approval-banner/download/confirm/native-overlay/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster-input + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
+console.log('lnm-app behavior OK: dispatch + precondition + explicit-start + worker-wait + manual mask review/upload/approval-banner/download/confirm/native-overlay/resume + threshold-preview/projection + selectable atlas + subject-atlas QC + advanced atlas-QC button + registration QC modes/blend + affected-network labels + functional profiles + layer-toggle + min-cluster input/table-filter + top-percent + auto-promote + coverage-note + version-label + MNI160 threshold-resample/header cases.');
