@@ -119,6 +119,7 @@ Common issues it catches:
 | `npm run test:real-data-pca` | Phase 26 PCA on the ds004884 T1: positive eigenvalues, det(R)=+1, resampled centroid within 1.5 voxels of MNI center |
 | `npm run test:deploy-budget` | Static deploy < 60 MB; runtime cold-load < 300 MB (currently 38 + 209) |
 | `npm run test:manifest-checksums` | sha256 of every cached/committed asset matches its manifest entry; catches manifest/fixture drift |
+| `npm run test:lesion-model-benchmark` | Static contract check for the opt-in `benchmark:lesion-models` harness: SOOP subject/contrast coverage, combined-mask target, SynthStroke/SynthPlus channel semantics, upstream-like patch/TTA settings, and prediction-to-mask-grid resampling |
 | `npm run test:worker` | inference-worker module-worker invariants + ~25 source-grep guards on the message protocol; pins SynthMorph EP introspection and binary/label-map inverse-warp-mask wiring |
 | `npm run test:app` | LesionNetworkMappingApp class shape + import surface + per-phase wiring assertions (Yeo, atlas, threshold, resample/bridge, FC, PCA prealign, perf instrumentation, patient-space viewer behavior) |
 | `npm run test:app-behavior` | Runtime-stubbed LesionNetworkMappingApp behavior checks for pipeline dispatch, worker-stage waits, manual seed-review/blank/upload/approval-banner/download/confirm/native-overlay/resume, threshold-preview/projection scheduling, selected-atlas overlap/bridge behavior, subject-space atlas QC, affected-network labeling, layer toggles, top-percent threshold semantics, min-cluster input recompute/table filtering, preconditions, explicit-start structural loading, auto-promote, and version-label SHA de-duplication |
@@ -129,6 +130,7 @@ Common issues it catches:
 | `npm run test:smoke` | Browser smoke (Playwright + headless Chromium): manual-mask Yeo overlap (Phase 1c.4), SynthStrip (2a.1.5), SynthStroke editable seed + Confirm mask (2a.2.5), SynthMorph completion (3.7), full-pipeline manual branch (Phase 8), full-pipeline auto branch with editable-seed confirmation (Phase 10). Opt-in; requires `npx playwright install chromium`. ~5 min cold for Phase 10 |
 | `npm run test:synthstrip-parity` | SynthStrip ONNX parity vs FreeSurfer reference plus ds004884 1mm clinical fast-mode overgrowth regression (Node, slow; opt-in) |
 | `npm run test:lesion-seg-parity` | SynthStroke ONNX parity (Node, slow; opt-in) |
+| `npm run benchmark:lesion-models` | Opt-in local benchmark comparing current CALMaR SynthStroke baseline, upstream-like baseline, and SynthPlus on ds004884 plus SOOP T1w/FLAIR/ADC/TRACE contrasts; writes ignored CSV/Markdown artifacts and optional best/worst prediction NIfTIs under `.tmp_weights/lesion_model_benchmark/` |
 | `npm run test:registration-parity` | SynthMorph ONNX parity (Node, slow; opt-in) |
 | `npm run test:fc-weighted-sum-parity` | FC weighted-sum parity vs reference (Node, slow; opt-in) |
 
