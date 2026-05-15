@@ -1145,6 +1145,12 @@ export class LesionNetworkMappingApp {
   }
 
   getBrainmaskFileForActiveViewer() {
+    const baseFile = this.getActiveViewerBaseFile();
+    const baseSpace = getSpatialMetadata(baseFile)?.space;
+    if (baseFile === this.nativeStructuralFile || baseSpace === VOLUME_SPACES.NATIVE_T1) {
+      if (this.nativeBrainmaskFile) return this.nativeBrainmaskFile;
+      return this.structuralFile === this.nativeStructuralFile ? this.brainmaskFile : null;
+    }
     if (this.maskReviewActive) {
       if (this.nativeBrainmaskFile) return this.nativeBrainmaskFile;
       return this.structuralFile === this.nativeStructuralFile ? this.brainmaskFile : null;
@@ -1807,6 +1813,7 @@ export class LesionNetworkMappingApp {
     const { base, name } = splitModelUrl(entry.sourceUrl);
 
     this.updateOutput('Starting lesion segmentation...');
+    await this.prepareViewerForLesionSegmentation();
     const segmentationReady = this._waitForStageData('segmentation');
     const segmentationStepDone = this._waitForStepComplete('inference');
     const inputBuffer = await this.structuralFile.arrayBuffer();
@@ -1829,6 +1836,23 @@ export class LesionNetworkMappingApp {
       testTimeAugmentation: false
     });
     await Promise.all([segmentationReady, segmentationStepDone]);
+  }
+
+  async prepareViewerForLesionSegmentation() {
+    this.viewerLayerVisibility.brainmask = false;
+    this.setMaskReview3DRenderEnabled(false);
+
+    const displayFile = this.nativeStructuralFile || this.structuralFile;
+    if (displayFile && displayFile !== this.getActiveViewerBaseFile()) {
+      this.viewerController?.clearVolumes?.();
+      await this.loadViewerBaseVolume(displayFile, {
+        stage: 'structural',
+        visible: this.layerVisible('structural')
+      });
+    } else {
+      this.applyViewerLayerVisibility('brainmask');
+    }
+    this.refreshViewerLayerControls();
   }
 
   async downloadLesionMask() {
@@ -3211,7 +3235,7 @@ export class LesionNetworkMappingApp {
     const mniCenterVox = centroidOfMask(mniForegroundMask, mni160.dims);
     const { dstAffine, mniDims, eigenvalues } = principalAxisAlign(
       mask.data, t1.dims, t1Affine,
-      { mniDims: mni160.dims, mniCenterVox }
+      { mniDims: mni160.dims, mniCenterVox, mniAffine: mni160Affine }
     );
     this.prealignSamplingAffine = dstAffine;
     const cVox = centroidOfMask(mask.data, t1.dims);

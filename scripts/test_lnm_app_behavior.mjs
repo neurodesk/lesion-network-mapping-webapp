@@ -565,9 +565,29 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
       preprocessing: {}
     }]
   };
-  app.structuralFile = { name: 'lnm-prealign-t1.nii', arrayBuffer: async () => new ArrayBuffer(8) };
-  app.viewerController = { loadOverlay: async () => {} };
   const calls = [];
+  const nativeStructural = { name: 'native-t1.nii' };
+  const prealignedStructural = { name: 'lnm-prealign-t1.nii', arrayBuffer: async () => new ArrayBuffer(8) };
+  app.structuralFile = prealignedStructural;
+  app.nativeStructuralFile = nativeStructural;
+  app.viewerBaseFile = prealignedStructural;
+  app.viewerLayerVisibility.brainmask = true;
+  app.nv.opts = {
+    multiplanarShowRender: globalThis.niivue.SHOW_RENDER.AUTO,
+    sliceType: app.nv.sliceTypeMultiplanar
+  };
+  app.nv.sliceTypeRender = 7;
+  app.nv.drawScene = () => { calls.push('draw-scene'); };
+  app.viewerController = {
+    clearVolumes: () => { calls.push('clear-volumes'); },
+    loadOverlay: async () => {},
+    setStageVisible: (stage, visible) => { calls.push(`visible:${stage}:${visible}`); }
+  };
+  app.loadViewerBaseVolume = async (file, options) => {
+    calls.push(`base:${file.name}`);
+    app.viewerBaseFile = file;
+    app._lastBaseOptions = options;
+  };
   app.executor = {
     loadVolume: async () => { calls.push('load'); },
     runInference: async () => { calls.push('run-inference'); }
@@ -581,6 +601,14 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
   );
   assert.equal(settled, false,
     'runLesionSegmentation must not resolve before segmentation output arrives');
+  assert.equal(app.viewerLayerVisibility.brainmask, false,
+    'runLesionSegmentation must hide the prealign brain-mask overlay while inference runs');
+  assert.equal(app.nv.opts.multiplanarShowRender, globalThis.niivue.SHOW_RENDER.NEVER,
+    'runLesionSegmentation must hide the 3D render tile while inference runs');
+  assert.equal(app.viewerBaseFile, nativeStructural,
+    'runLesionSegmentation must switch the display back to the native T1 while inference runs');
+  assert.ok(calls.indexOf('base:native-t1.nii') > -1 && calls.indexOf('base:native-t1.nii') < calls.indexOf('load'),
+    'native T1 display must be prepared before the worker loads the prealigned inference input');
   app.handleStageData({
     stage: 'segmentation',
     niftiData: new ArrayBuffer(8),
@@ -2290,7 +2318,7 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     affine
   });
   app.viewerBaseFile = app.structuralFile;
-  app.brainmaskFile = tagSpatialFile({ name: 'mni-brainmask.nii' }, {
+  app.lesionMaskFile = tagSpatialFile({ name: 'mni-lesion.nii' }, {
     space: VOLUME_SPACES.MNI160,
     dims: [2, 2, 2],
     affine
@@ -2301,9 +2329,9 @@ async function waitForMicrotaskCondition(predicate, message, attempts = 20) {
     loadOverlay: async () => { overlayCalls += 1; }
   };
   await assert.rejects(
-    () => app.ensureViewerLayerLoaded('brainmask'),
-    /Brain mask overlay: base is in native-t1, overlay is in mni160/,
-    'brain-mask toggle must reject a wrong-space mask before loading the overlay'
+    () => app.ensureViewerLayerLoaded('lesion'),
+    /Lesion mask overlay: base is in native-t1, overlay is in mni160/,
+    'lesion-mask toggle must reject a wrong-space mask before loading the overlay'
   );
   assert.equal(overlayCalls, 0,
     'wrong-space overlays must not be passed to NiiVue');

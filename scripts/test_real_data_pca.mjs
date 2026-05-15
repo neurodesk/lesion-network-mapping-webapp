@@ -12,8 +12,8 @@
 //      real anatomy.
 //   3. Run principalAxisAlign.
 //   4. Assert: principal-axis eigenvalue is the largest and corresponds
-//      to the head's longest extent (typically inferior-superior in
-//      ACPC-aligned T1s). Rotation matrix is right-handed (det = +1).
+//      to the head's longest physical extent. Rotation matrix is
+//      right-handed (det = +1).
 //   5. Resample the brain mask onto MNI160 1mm via the result. Verify
 //      the resampled mask centroid lands at MNI voxel (80, 80, 96)
 //      within 1 voxel.
@@ -105,7 +105,7 @@ const det =
 console.log(`det(R) = ${det.toFixed(6)}`);
 assert.ok(Math.abs(det - 1) < 1e-3, `det(R) must be +1; got ${det}`);
 
-// Rotation columns must be orthonormal.
+// R is a source-world rotation; columns must be orthonormal.
 for (let i = 0; i < 3; i++) {
   const col = [R[0][i], R[1][i], R[2][i]];
   const norm = Math.sqrt(col[0] ** 2 + col[1] ** 2 + col[2] ** 2);
@@ -115,25 +115,13 @@ for (let i = 0; i < 3; i++) {
 // R columns are canonical destination axes, not descending PCA rank.
 // The ds004884 brain's strongest PCs are AP/SI/LR by eigenvalue order; this
 // regression catches the old behavior that mapped those ranks onto x/y/z.
-const srcA3 = [
-  [t1.affine[0][0], t1.affine[0][1], t1.affine[0][2]],
-  [t1.affine[1][0], t1.affine[1][1], t1.affine[1][2]],
-  [t1.affine[2][0], t1.affine[2][1], t1.affine[2][2]]
-];
 for (let c = 0; c < 3; c++) {
   const col = [R[0][c], R[1][c], R[2][c]];
-  const world = [
-    srcA3[0][0] * col[0] + srcA3[0][1] * col[1] + srcA3[0][2] * col[2],
-    srcA3[1][0] * col[0] + srcA3[1][1] * col[1] + srcA3[1][2] * col[2],
-    srcA3[2][0] * col[0] + srcA3[2][1] * col[1] + srcA3[2][2] * col[2]
-  ];
-  const n = Math.sqrt(world[0] ** 2 + world[1] ** 2 + world[2] ** 2);
-  const unit = world.map(v => v / n);
-  const offAxisMax = Math.max(...unit.map((v, i) => i === c ? 0 : Math.abs(v)));
-  assert.ok(unit[c] > 0.7,
-    `R col${c} must point mostly along positive canonical world axis ${c}; got ${unit.join(', ')}`);
-  assert.ok(Math.abs(unit[c]) > offAxisMax,
-    `R col${c} canonical component must dominate; got ${unit.join(', ')}`);
+  const offAxisMax = Math.max(...col.map((v, i) => i === c ? 0 : Math.abs(v)));
+  assert.ok(col[c] > 0.7,
+    `R col${c} must point mostly along positive canonical world axis ${c}; got ${col.join(', ')}`);
+  assert.ok(Math.abs(col[c]) > offAxisMax,
+    `R col${c} canonical component must dominate; got ${col.join(', ')}`);
 }
 
 // ---- Step 5: resample mask + verify centroid lands at MNI center ----

@@ -3,22 +3,16 @@
 // roughly MNI-aligned. Real clinical T1s come in arbitrary dims, voxel
 // sizes, and orientations.
 //
-// This module provides a minimal "centroid match" prealigner: given a
-// source T1 and a brain mask, compute the source brain centroid in
-// world-mm coordinates, then build a destination affine for the
-// 160x160x192 1mm MNI grid that places that centroid at MNI voxel
-// (80, 80, 96). The orchestrator pairs this with `resampleAffine(...)`
-// from resample.js to produce the prealigned T1 and brainmask.
+// This module provides a physical-space principal-axis prealigner: given a
+// source T1 and a brain mask, compute the source brain centroid and PCA axes
+// in world-mm coordinates, then build a sampling affine for the 160x160x192
+// 1mm MNI grid. The orchestrator pairs this with `resampleAffine(...)` from
+// resample.js to produce the prealigned T1 and brainmask.
 //
 // Limitations (documented for future improvement):
-//   - No rotation alignment. Assumes the source affine encodes the
-//     scanner-to-anatomy transform correctly (i.e. the T1 is at least
-//     ACPC-aligned). Pure axial/coronal/sagittal acquisitions usually
-//     are; rotated clinical scans may need a follow-up rigid step.
-//   - No scale correction. Adult brain dimensions are similar enough
-//     (~17x14x16 cm) that 1mm isotropic resampling at the centroid
-//     suffices for the deformable refinement stage to take it the
-//     rest of the way.
+//   - PCA is a moment-based rigid initialization, not an intensity-based
+//     affine registration. Clinical scans with strong crop/pathology bias
+//     may still need a follow-up masked rigid or affine optimizer.
 //   - Pathology may bias the centroid (large lesions shift centre of
 //     mass toward the unaffected hemisphere). For severe stroke a
 //     follow-up affine pass (Phase 16 v2) is the right fix.
@@ -186,18 +180,16 @@ export function jacobiEigen3x3(M) {
   return { eigenvalues, eigenvectors };
 }
 
-// Phase 26: full principal-axis prealign. Combines centroid match
-// (Phase 16 v1) with PCA rotation:
+// Phase 26+: full principal-axis prealign. Combines centroid match
+// (Phase 16 v1) with physical-space PCA rotation:
 //
 //   1. centroidOfMask + applyAffineToVoxel -> source centroid world coord.
-//   2. covarianceOfMask + jacobiEigen3x3   -> principal axes in source voxel space.
-//   3. Sort eigenvectors by descending eigenvalue. Largest = head's longest extent.
-//   4. Build a source-voxel rotation R whose columns are the sorted PCs.
-//      R @ e_x = PC1_voxel, R @ e_y = PC2_voxel, R @ e_z = PC3_voxel.
-//      Force right-handed (det = +1) by flipping the third column if needed.
-//   5. Construct an MNI160 destination affine D such that resampleAffine
-//      walking the dst grid samples the source as if rotated by R^-1
-//      around the centroid. dst voxel (80, 80, 96) -> source centroid.
+//   2. covarianceOfMask transformed by srcAffine -> source-world covariance.
+//   3. jacobiEigen3x3 -> principal axes in source world-mm space.
+//   4. Assign the axes to canonical world X/Y/Z using the source affine prior.
+//   5. Construct a source-world-from-MNI-world rigid transform around the
+//      centroids, then compose it with the fixed MNI affine. This keeps the
+//      output sampling grid in 1mm physical units even for submillimetre T1s.
 //
 // Returns:
 //   {
@@ -205,7 +197,7 @@ export function jacobiEigen3x3(M) {
 //     mniDims,      // [160, 160, 192]
 //     mniCenterVox, // [80, 80, 96]
 //     eigenvalues,  // sorted descending, by principal axis order
-//     R             // 3x3 source-voxel rotation; column k = principal axis k
+//     R             // 3x3 source-world rotation; column k = canonical axis k
 //   }
 //
 // Limitations:
@@ -220,10 +212,17 @@ export function jacobiEigen3x3(M) {
 //     We accept whatever Jacobi converges to.
 export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
   const { mniDims = [160, 160, 192], mniCenterVox = [80, 80, 96] } = options;
+  const mniAffine = options.mniAffine || canonicalCenteredAffine(mniCenterVox);
 
   const centroidVox = centroidOfMask(mask, dims);
   const cov = covarianceOfMask(mask, dims, centroidVox);
-  const { eigenvalues, eigenvectors } = jacobiEigen3x3(cov);
+  const srcA3 = [
+    [srcAffine[0][0], srcAffine[0][1], srcAffine[0][2]],
+    [srcAffine[1][0], srcAffine[1][1], srcAffine[1][2]],
+    [srcAffine[2][0], srcAffine[2][1], srcAffine[2][2]]
+  ];
+  const worldCov = matmul3x3(matmul3x3(srcA3, cov), transpose3x3(srcA3));
+  const { eigenvalues, eigenvectors } = jacobiEigen3x3(worldCov);
 
   const sortedEigs = [0, 1, 2]
     .sort((a, b) => eigenvalues[b] - eigenvalues[a])
@@ -234,34 +233,14 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
   // principal axis — so without disambiguation a flipped acquisition
   // produces a mirror-image prealigned brain.
   //
-  // Fix: trust the source NIfTI affine. Map each PCA eigenvector from
-  // source voxel space to source world space, then assign the three
-  // eigenvectors to canonical destination x/y/z by whichever world axis
-  // each vector is most aligned with. This is deliberately NOT sorted by
-  // eigenvalue: on real brains the longest principal component is often
-  // not left-right, so eigenvalue order can rotate anatomy into the
-  // wrong canonical axis before SynthMorph.
+  // Fix: trust the source NIfTI affine. Compute PCA in source world space,
+  // then assign the three eigenvectors to canonical destination x/y/z by
+  // whichever world axis each vector is most aligned with. This is
+  // deliberately not sorted by eigenvalue: on real brains the longest
+  // principal component is often not left-right, so eigenvalue order can
+  // rotate anatomy into the wrong canonical axis before SynthMorph.
   //
-  const srcA3 = [
-    [srcAffine[0][0], srcAffine[0][1], srcAffine[0][2]],
-    [srcAffine[1][0], srcAffine[1][1], srcAffine[1][2]],
-    [srcAffine[2][0], srcAffine[2][1], srcAffine[2][2]]
-  ];
-
-  function worldDirection(voxelVec) {
-    const w = [
-      srcA3[0][0] * voxelVec[0] + srcA3[0][1] * voxelVec[1] + srcA3[0][2] * voxelVec[2],
-      srcA3[1][0] * voxelVec[0] + srcA3[1][1] * voxelVec[1] + srcA3[1][2] * voxelVec[2],
-      srcA3[2][0] * voxelVec[0] + srcA3[2][1] * voxelVec[1] + srcA3[2][2] * voxelVec[2]
-    ];
-    const n = Math.sqrt(w[0] ** 2 + w[1] ** 2 + w[2] ** 2);
-    if (n < 1e-12) {
-      throw new Error('principalAxisAlign: source affine has a degenerate axis');
-    }
-    return [w[0] / n, w[1] / n, w[2] / n];
-  }
-
-  const worldDirs = eigenvectors.map(worldDirection);
+  const worldDirs = eigenvectors.map(normalizeVec3);
   const perms = [
     [0, 1, 2], [0, 2, 1], [1, 0, 2],
     [1, 2, 0], [2, 0, 1], [2, 1, 0]
@@ -283,31 +262,19 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
   for (let c = 0; c < 3; c++) {
     const evIdx = bestPerm[c];
     const sign = worldDirs[evIdx][c] < 0 ? -1 : 1;
-    R[0][c] = sign * eigenvectors[evIdx][0];
-    R[1][c] = sign * eigenvectors[evIdx][1];
-    R[2][c] = sign * eigenvectors[evIdx][2];
+    R[0][c] = sign * worldDirs[evIdx][0];
+    R[1][c] = sign * worldDirs[evIdx][1];
+    R[2][c] = sign * worldDirs[evIdx][2];
   }
 
-  // R_world[r][c] = sum_k srcA3[r][k] * R[k][c].
-  // We only need the diagonal R_world[c][c] for the sign decision.
-  function worldDiag(R3) {
-    return [0, 1, 2].map(c =>
-      srcA3[c][0] * R3[0][c] +
-      srcA3[c][1] * R3[1][c] +
-      srcA3[c][2] * R3[2][c]
-    );
-  }
   // Re-enforce det(R) = +1 by flipping the most-ambiguous column if
-  // the affine-prior signs above made the voxel-space rotation left-handed.
-  let worldD = worldDiag(R);
-  const det =
-    R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) -
-    R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +
-    R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]);
+  // the affine-prior signs above made the world-space rotation left-handed.
+  const det = det3x3(R);
   if (det < 0) {
     // Find the column with the smallest |worldD[k]| — that PCA axis
     // is the most ambiguously oriented in world space, so flipping it
     // costs the least anatomically.
+    const worldD = [R[0][0], R[1][1], R[2][2]];
     let flipIdx = 0, minMag = Math.abs(worldD[0]);
     for (let k = 1; k < 3; k++) {
       if (Math.abs(worldD[k]) < minMag) { minMag = Math.abs(worldD[k]); flipIdx = k; }
@@ -317,31 +284,25 @@ export function principalAxisAlign(mask, dims, srcAffine, options = {}) {
     R[2][flipIdx] = -R[2][flipIdx];
   }
 
-  // Build the source-voxel-to-source-voxel transform M such that for a
-  // destination voxel v (in the MNI160 grid):
-  //   src_voxel = R @ (v - mni_center) + src_centroid
-  //            = R @ v + (src_centroid - R @ mni_center)
-  const Rmc = [
-    R[0][0] * mniCenterVox[0] + R[0][1] * mniCenterVox[1] + R[0][2] * mniCenterVox[2],
-    R[1][0] * mniCenterVox[0] + R[1][1] * mniCenterVox[1] + R[1][2] * mniCenterVox[2],
-    R[2][0] * mniCenterVox[0] + R[2][1] * mniCenterVox[1] + R[2][2] * mniCenterVox[2]
-  ];
+  const srcCenterWorld = applyAffineToVoxel(srcAffine, centroidVox);
+  const mniCenterWorld = applyAffineToVoxel(mniAffine, mniCenterVox);
+  const Rmc = mat3Vec(R, mniCenterWorld);
   const t = [
-    centroidVox[0] - Rmc[0],
-    centroidVox[1] - Rmc[1],
-    centroidVox[2] - Rmc[2]
+    srcCenterWorld[0] - Rmc[0],
+    srcCenterWorld[1] - Rmc[1],
+    srcCenterWorld[2] - Rmc[2]
   ];
-  const M = [
+  const sourceFromMniWorld = [
     [R[0][0], R[0][1], R[0][2], t[0]],
     [R[1][0], R[1][1], R[1][2], t[1]],
     [R[2][0], R[2][1], R[2][2], t[2]],
     [0,       0,       0,       1]
   ];
 
-  // dstAffine = srcAffine @ M (4x4 multiply). resampleAffine internally
-  // does inv(srcAffine) @ dstAffine to compose dst_voxel -> src_voxel; that
-  // recovers M.
-  const dstAffine = matmul4x4(srcAffine, M);
+  // dstAffine maps destination voxel -> source world. resampleAffine
+  // internally composes inv(srcAffine) @ dstAffine, so source voxel spacing
+  // is handled by the source affine instead of leaking into the MNI grid.
+  const dstAffine = matmul4x4(sourceFromMniWorld, mniAffine);
 
   return {
     dstAffine, mniDims, mniCenterVox,
@@ -359,6 +320,57 @@ function matmul4x4(A, B) {
     }
   }
   return out;
+}
+
+function matmul3x3(A, B) {
+  const out = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      out[r][c] = A[r][0] * B[0][c] + A[r][1] * B[1][c] + A[r][2] * B[2][c];
+    }
+  }
+  return out;
+}
+
+function transpose3x3(M) {
+  return [
+    [M[0][0], M[1][0], M[2][0]],
+    [M[0][1], M[1][1], M[2][1]],
+    [M[0][2], M[1][2], M[2][2]]
+  ];
+}
+
+function mat3Vec(M, v) {
+  return [
+    M[0][0] * v[0] + M[0][1] * v[1] + M[0][2] * v[2],
+    M[1][0] * v[0] + M[1][1] * v[1] + M[1][2] * v[2],
+    M[2][0] * v[0] + M[2][1] * v[1] + M[2][2] * v[2]
+  ];
+}
+
+function normalizeVec3(v) {
+  const n = Math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2);
+  if (n < 1e-12) {
+    throw new Error('principalAxisAlign: source affine has a degenerate axis');
+  }
+  return [v[0] / n, v[1] / n, v[2] / n];
+}
+
+function det3x3(M) {
+  return (
+    M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) -
+    M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) +
+    M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0])
+  );
+}
+
+function canonicalCenteredAffine(centerVox) {
+  return [
+    [1, 0, 0, -centerVox[0]],
+    [0, 1, 0, -centerVox[1]],
+    [0, 0, 1, -centerVox[2]],
+    [0, 0, 0, 1]
+  ];
 }
 
 // Build the destination affine for the MNI160 1mm grid, parameterised

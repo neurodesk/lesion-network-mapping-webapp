@@ -4,8 +4,8 @@
 //   - covarianceOfMask: 3x3 mass-weighted voxel covariance.
 //   - jacobiEigen3x3: eigenvalues + eigenvectors of a symmetric 3x3.
 //   - principalAxisAlign: end-to-end affine that places the brain's
-//     principal axes along the canonical MNI axes + brain centroid at
-//     MNI voxel (80, 80, 96).
+//     world-mm principal axes along the canonical MNI axes + brain centroid
+//     at MNI voxel (80, 80, 96).
 
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -19,6 +19,13 @@ const { pathToFileURL } = require('node:url');
     centroidOfMask, applyAffineToVoxel,
     covarianceOfMask, jacobiEigen3x3, principalAxisAlign
   } = await import(moduleUrl);
+  const { resampleAffine } = await import(pathToFileURL(
+    path.resolve(__dirname, '..', 'web/js/modules/resample.js')
+  ));
+
+  function affineColumnNorms(A) {
+    return [0, 1, 2].map(c => Math.hypot(A[0][c], A[1][c], A[2][c]));
+  }
 
   // ---- covarianceOfMask: axis-aligned 4x2x2 box centered at the dim center ----
   // Box voxel coords: x in [1,2], y in [1,2], z in [1,2] of a 4x4x4 volume.
@@ -169,7 +176,7 @@ const { pathToFileURL } = require('node:url');
     const { eigenvalues, R } = principalAxisAlign(mask, dims, srcAffine);
     assert.ok(eigenvalues[0] > eigenvalues[1] && eigenvalues[0] > eigenvalues[2],
       `rotated phantom: top eigenvalue dominates; got ${eigenvalues.join(', ')}`);
-    // R is the source-voxel rotation: R @ e_c_dst = source direction
+    // R is the source-world rotation: R @ e_c_dst = source direction
     // for canonical axis c. Since the source affine is identity, column 1
     // should be ±source-y even though y is the largest-variance PCA axis.
     const col0 = [R[0][0], R[1][0], R[2][0]];
@@ -180,6 +187,58 @@ const { pathToFileURL } = require('node:url');
       `R col1 should map the canonical y-axis to source y; got ${col1.join(', ')}`);
     assert.ok(Math.abs(col1[0]) < 0.01 && Math.abs(col1[2]) < 0.01,
       `R col1 should be along ±y only; got ${col1.join(', ')}`);
+  }
+
+  // ---- principalAxisAlign: submillimetre anisotropic source preserves 1mm destination scale ----
+  // Regression for a real failure mode: when the source T1 is 0.5 x 0.4 x
+  // 0.4mm, the sampling affine must still advance by ~1mm for each MNI output
+  // voxel. The old voxel-space PCA transform inherited source voxel spacing,
+  // making the brain appear ~2x too large and causing grid clipping.
+  {
+    const dims = [96, 140, 140];
+    const srcAffine = [
+      [0.5, 0, 0, -24],
+      [0, 0.4, 0, -28],
+      [0, 0, 0.4, -28],
+      [0, 0, 0, 1]
+    ];
+    const mask = new Uint8Array(dims[0] * dims[1] * dims[2]);
+    for (let z = 0; z < dims[2]; z++)
+      for (let y = 0; y < dims[1]; y++)
+        for (let x = 0; x < dims[0]; x++) {
+          const wx = srcAffine[0][0] * x + srcAffine[0][3];
+          const wy = srcAffine[1][1] * y + srcAffine[1][3];
+          const wz = srcAffine[2][2] * z + srcAffine[2][3];
+          const ellipsoid =
+            (wx * wx) / (14 * 14) +
+            (wy * wy) / (18 * 18) +
+            (wz * wz) / (21 * 21);
+          if (ellipsoid <= 1) mask[x + y * dims[0] + z * dims[0] * dims[1]] = 1;
+        }
+
+    const mniDims = [80, 80, 80];
+    const mniCenterVox = [40, 40, 40];
+    const mniAffine = [
+      [1, 0, 0, -40],
+      [0, 1, 0, -40],
+      [0, 0, 1, -40],
+      [0, 0, 0, 1]
+    ];
+    const { dstAffine } = principalAxisAlign(mask, dims, srcAffine, {
+      mniDims, mniCenterVox, mniAffine
+    });
+    const norms = affineColumnNorms(dstAffine);
+    for (const [axis, norm] of norms.entries()) {
+      assert.ok(Math.abs(norm - 1) < 1e-6,
+        `submillimetre source must sample destination axis ${axis} at 1mm, got ${norm}`);
+    }
+
+    const aligned = resampleAffine(mask, dims, srcAffine, mniDims, dstAffine, 'nearest');
+    const centroid = centroidOfMask(aligned, mniDims);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(centroid[i] - mniCenterVox[i]) < 0.75,
+        `submillimetre aligned centroid axis ${i}: got ${centroid[i]}, want ${mniCenterVox[i]}`);
+    }
   }
 
   // ---- principalAxisAlign: rotation matrix is right-handed (det > 0) ----
