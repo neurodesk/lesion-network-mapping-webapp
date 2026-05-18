@@ -334,6 +334,21 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'run-inference', data: settings });
   }
 
+  async runDeepIslesInference(settings) {
+    await this.initialize();
+    if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'inference') {
+      this.captureCheckpoint('inference');
+    }
+    this.running = true;
+    this.currentRunningStep = 'inference';
+    this.currentTaskId = settings?.taskId || null;
+    this.stepStatus.inference = 'running';
+    const transferables = [];
+    if (settings?.dwiBuffer instanceof ArrayBuffer) transferables.push(settings.dwiBuffer);
+    if (settings?.adcBuffer instanceof ArrayBuffer) transferables.push(settings.adcBuffer);
+    this.worker.postMessage({ type: 'run-deepisles-inference', data: settings }, transferables);
+  }
+
   // Phase 2a.1.4b: SynthStrip brain-extraction stage. Posts to the worker's
   // 'run-synthstrip' op (see web/js/inference-worker.js stepSynthStrip).
   // Settings shape:

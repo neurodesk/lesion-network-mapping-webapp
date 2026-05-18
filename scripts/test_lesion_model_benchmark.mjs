@@ -37,6 +37,12 @@ assert.match(src, /"synthplus-app-like"[\s\S]*?out_channels=6[\s\S]*?stroke_chan
   'SynthPlus app-like mode must validate six output channels and stroke channel 5');
 assert.match(src, /"baseline-upstream-like"[\s\S]*?patch_size=\(192,\s*192,\s*192\)[\s\S]*?overlap=0\.5[\s\S]*?tta=True/,
   'upstream-like baseline must use 192^3 patches, 0.5 overlap, and TTA');
+assert.match(src, /"deepisles-nvauto-single-fold"[\s\S]*?input_contrasts=\("ADC",\s*"TRACE"\)[\s\S]*?channel_order=\("ADC",\s*"TRACE"\)/,
+  'DeepISLES single-fold mode must be multi-input ADC + TRACE in the validated channel order');
+assert.match(src, /"deepisles-nvauto-best3"[\s\S]*?probability_globs=\([\s\S]*model7[\s\S]*model9[\s\S]*model11/,
+  'DeepISLES best-3 benchmark mode must combine the prior strongest NVAUTO folds');
+assert.match(src, /"deepisles-nvauto-15fold"[\s\S]*?patch_size=\(192,\s*192,\s*128\)[\s\S]*?overlap=0\.625/,
+  'DeepISLES 15-fold mode must pin upstream NVAUTO patch geometry');
 assert.match(src, /resample_binary_to_mask_grid/,
   'benchmark must resample predictions onto the mask grid before metrics');
 assert.match(src, /best-worst/,
@@ -45,5 +51,7 @@ assert.match(src, /torch-device/,
   'benchmark must expose a torch-device option so upstream-like modes can use MPS/CUDA when available');
 assert.match(src, /torch-batch-size/,
   'benchmark must batch PyTorch patch inference so TTA modes are practical on MPS/CUDA');
+assert.match(src, /deepisles-pred-root/,
+  'benchmark must expose a DeepISLES prediction root so candidate outputs can be scored on SOOP');
 
-console.log('lesion model benchmark contract OK: SOOP subjects/contrasts, class channels, mask target, and resampling are pinned.');
+console.log('lesion model benchmark contract OK: SOOP subjects/contrasts, SynthStroke/SynthPlus channels, DeepISLES ADC+TRACE modes, mask target, and resampling are pinned.');

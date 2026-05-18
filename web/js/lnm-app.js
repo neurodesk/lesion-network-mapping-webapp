@@ -249,6 +249,10 @@ export class LesionNetworkMappingApp {
     this.structuralFile = null;
     this.viewerBaseFile = null;
     this.nativeStructuralFile = null;
+    this.deepIslesDwiFile = null;
+    this.deepIslesAdcFile = null;
+    this.deepIslesSeedFile = null;
+    this.deepIslesSeedCompatibleWithNativeT1 = false;
     this.nativeStructuralInfo = null;
     this.fixedMni160Info = null;
     this.prealignSamplingAffine = null;
@@ -374,6 +378,23 @@ export class LesionNetworkMappingApp {
       });
     }
 
+    const deepIslesDwiInput = document.getElementById('deepIslesDwiFileInput');
+    if (deepIslesDwiInput) {
+      deepIslesDwiInput.addEventListener('change', (event) => {
+        const file = event.target.files?.[0] || null;
+        this.setDeepIslesInput('dwi', file)
+          .catch(err => this.updateOutput(`DeepISLES DWI/TRACE input failed: ${err.message}`));
+      });
+    }
+    const deepIslesAdcInput = document.getElementById('deepIslesAdcFileInput');
+    if (deepIslesAdcInput) {
+      deepIslesAdcInput.addEventListener('change', (event) => {
+        const file = event.target.files?.[0] || null;
+        this.setDeepIslesInput('adc', file)
+          .catch(err => this.updateOutput(`DeepISLES ADC input failed: ${err.message}`));
+      });
+    }
+
     const lesionInput = document.getElementById('lesionFileInput');
     if (lesionInput) {
       lesionInput.addEventListener('change', (event) => {
@@ -416,6 +437,19 @@ export class LesionNetworkMappingApp {
         this.runLesionSegmentation()
           .then(() => this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile }))
           .catch(err => this.updateOutput(`Lesion segmentation failed: ${err.message}`));
+      });
+    }
+    const runDeepIslesBtn = document.getElementById('runDeepIslesSegmentationButton');
+    if (runDeepIslesBtn) {
+      runDeepIslesBtn.addEventListener('click', () => {
+        this.runDeepIslesSegmentation()
+          .then(() => {
+            if (this.deepIslesSeedCompatibleWithNativeT1) {
+              return this.startLesionMaskReview({ seedFile: this.autoLesionSeedFile });
+            }
+            return null;
+          })
+          .catch(err => this.updateOutput(`DeepISLES lesion seed failed: ${err.message}`));
       });
     }
     const manualMaskBtn = document.getElementById('startManualMaskButton');
@@ -1240,6 +1274,8 @@ export class LesionNetworkMappingApp {
     this.nativeStructuralInfo = null;
     this.fixedMni160Info = null;
     this.prealignSamplingAffine = null;
+    this.deepIslesSeedFile = null;
+    this.deepIslesSeedCompatibleWithNativeT1 = false;
     this.autoLesionSeedFile = null;
     this.nativeLesionSeedFile = null;
     this.confirmedNativeLesionFile = null;
@@ -1265,6 +1301,33 @@ export class LesionNetworkMappingApp {
     // Phase 31: auto-promote the pipeline selection. A structural T1
     // means the explicit Run analysis action should use the full auto chain.
     this._autoPromotePipeline('lnm-yeo-auto');
+  }
+
+  async setDeepIslesInput(kind, file) {
+    if (!file) return null;
+    if (kind !== 'dwi' && kind !== 'adc') {
+      throw new Error(`Unknown DeepISLES input kind '${kind}'.`);
+    }
+    const decoded = await decodeNiftiBuffer(await file.arrayBuffer());
+    this.tagDecodedFileSpace(file, decoded, {
+      space: VOLUME_SPACES.NATIVE_DWI,
+      role: kind === 'dwi' ? 'deepisles-dwi' : 'deepisles-adc',
+      sourceStage: 'deepisles-input'
+    });
+    if (kind === 'dwi') this.deepIslesDwiFile = file;
+    else this.deepIslesAdcFile = file;
+    this.deepIslesSeedFile = null;
+    this.deepIslesSeedCompatibleWithNativeT1 = false;
+    this.updateOutput(`DeepISLES ${kind === 'dwi' ? 'DWI/TRACE' : 'ADC'} input ready: ${file.name}`);
+    return file;
+  }
+
+  async deepIslesSeedCanReviewOnNativeT1() {
+    if (!this.deepIslesDwiFile || !this.nativeStructuralFile) return false;
+    const native = await this.ensureNativeStructuralInfo();
+    const dwiMeta = getSpatialMetadata(this.deepIslesDwiFile);
+    if (!dwiMeta?.dims || !dwiMeta?.affine) return false;
+    return dimsEqual(dwiMeta.dims, native.dims) && affineNearlyEqual(dwiMeta.affine, native.affine, 1e-3);
   }
 
   async setLesion(file) {
@@ -1699,12 +1762,16 @@ export class LesionNetworkMappingApp {
       return;
     }
     if (data.stage === 'segmentation' && data.niftiData) {
-      const file = arrayBufferToFile(data.niftiData, 'lesion.nii');
+      const isDeepIslesSeed = data.taskId === 'lnm-deepisles-seed';
+      const file = arrayBufferToFile(data.niftiData, isDeepIslesSeed ? 'deepisles-lesion-seed.nii' : 'lesion.nii');
       this.tagFileSpace(file, {
-        space: this.structuralSpace() || VOLUME_SPACES.MNI160,
+        space: isDeepIslesSeed && !this.deepIslesSeedCompatibleWithNativeT1
+          ? VOLUME_SPACES.NATIVE_DWI
+          : (isDeepIslesSeed ? VOLUME_SPACES.NATIVE_T1 : (this.structuralSpace() || VOLUME_SPACES.MNI160)),
         role: 'lesion-seed',
-        sourceStage: 'segmentation'
+        sourceStage: isDeepIslesSeed ? 'deepisles-segmentation' : 'segmentation'
       });
+      if (isDeepIslesSeed) this.deepIslesSeedFile = file;
       this.autoLesionSeedFile = file;
       this.lesionMaskFile = null;
       this.lesionMaskConfirmed = false;
@@ -1712,7 +1779,9 @@ export class LesionNetworkMappingApp {
       if (btn) btn.disabled = false;
       this.refreshViewerLayerControls();
       this.refreshMaskDrawingControls();
-      this.updateOutput('Automatic lesion seed ready for manual review.');
+      this.updateOutput(isDeepIslesSeed
+        ? 'DeepISLES lesion seed ready.'
+        : 'Automatic lesion seed ready for manual review.');
       this._resolveStageData(data.stage, data);
       return;
     }
@@ -1836,6 +1905,55 @@ export class LesionNetworkMappingApp {
       testTimeAugmentation: false
     });
     await Promise.all([segmentationReady, segmentationStepDone]);
+  }
+
+  async runDeepIslesSegmentation() {
+    if (!this.structuralFile && !this.nativeStructuralFile) {
+      this.updateOutput('Drop a structural T1 before running a DeepISLES seed.');
+      return;
+    }
+    if (!this.deepIslesDwiFile || !this.deepIslesAdcFile) {
+      throw new Error('DeepISLES requires DWI/TRACE and ADC inputs.');
+    }
+    const manifest = await this.ensureManifest();
+    const entry = manifest.modelAssets?.find(a => a.id === 'lnm-deepisles-nvauto-browser-seed');
+    if (!entry) throw new Error("Manifest is missing the 'lnm-deepisles-nvauto-browser-seed' model asset.");
+    if (entry.supportStatus !== 'supported') {
+      throw new Error(
+        `'lnm-deepisles-nvauto-browser-seed' is ${entry.supportStatus || 'unvalidated'}; ` +
+        'benchmark-only DeepISLES assets must pass the Dice gap analysis and browser budget before app inference is enabled.'
+      );
+    }
+    const { base, name } = splitModelUrl(entry.sourceUrl);
+    this.deepIslesSeedCompatibleWithNativeT1 = await this.deepIslesSeedCanReviewOnNativeT1();
+
+    this.updateOutput('Starting DeepISLES DWI/ADC lesion seed...');
+    await this.prepareViewerForLesionSegmentation();
+    const segmentationReady = this._waitForStageData('segmentation');
+    const segmentationStepDone = this._waitForStepComplete('inference');
+    await this.executor.runDeepIslesInference({
+      taskId: 'lnm-deepisles-seed',
+      modelAssetId: entry.id,
+      modelName: name || 'lnm-deepisles-nvauto-browser-seed.onnx',
+      modelBaseUrl: base,
+      cacheKey: entry.cacheKey,
+      supportStatus: entry.supportStatus,
+      patchSize: entry.patchSize || [192, 192, 128],
+      threshold: entry.probabilityThreshold ?? 0.5,
+      minComponentSize: entry.minComponentSize ?? 30,
+      overlap: entry.overlap ?? 0.625,
+      channelOrder: entry.preprocessing?.channelOrder || ['ADC', 'TRACE'],
+      preprocessing: entry.preprocessing || {},
+      dwiBuffer: await this.deepIslesDwiFile.arrayBuffer(),
+      adcBuffer: await this.deepIslesAdcFile.arrayBuffer()
+    });
+    await Promise.all([segmentationReady, segmentationStepDone]);
+    if (!this.deepIslesSeedCompatibleWithNativeT1) {
+      this.updateOutput(
+        'DeepISLES seed is in DWI space and does not match the native T1 grid; ' +
+        'not starting T1 mask review or downstream CALMaR mapping automatically.'
+      );
+    }
   }
 
   async prepareViewerForLesionSegmentation() {

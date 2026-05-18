@@ -144,6 +144,14 @@
             </div>
             <input type="file" id="structuralFileInput" accept=".nii,.gz">
           </div>
+          <div class="param-group">
+            <label class="param-label" for="deepIslesDwiFileInput">DWI/TRACE (.nii / .nii.gz)</label>
+            <input type="file" id="deepIslesDwiFileInput" accept=".nii,.gz">
+          </div>
+          <div class="param-group">
+            <label class="param-label" for="deepIslesAdcFileInput">ADC (.nii / .nii.gz)</label>
+            <input type="file" id="deepIslesAdcFileInput" accept=".nii,.gz">
+          </div>
         </div>
       </section>
 
@@ -184,6 +192,7 @@
                   <span class="param-label">3 Lesion mask</span>
                   <input type="file" id="manualMaskFileInput" class="hidden" accept=".nii,.nii.gz" aria-hidden="true" tabindex="-1">
                   <button class="btn btn-secondary btn-sm" id="runLesionSegmentationButton" title="Run auto segmentation as an editable seed">Auto seed mask</button>
+                  <button class="btn btn-secondary btn-sm" id="runDeepIslesSegmentationButton" title="Run DeepISLES on DWI/TRACE and ADC as an editable seed">DeepISLES DWI/ADC seed</button>
                   <button class="btn btn-secondary btn-sm" id="startManualMaskButton" title="Start a blank editable lesion mask">Manual mask</button>
                   <button class="btn btn-secondary btn-sm" id="uploadManualMaskButton" title="Load a native-space lesion mask as an editable seed">Upload mask</button>
                 </div>

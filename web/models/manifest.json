@@ -160,6 +160,45 @@
       "_comment": "Phase 2a.2 lesion-segmentation model. Exported from liamchalcroft/synthstroke-baseline (MELBA 2025; MIT) — a 3D MONAI UNet trained on synthetic + ATLAS-2 stroke data, T1 input, binary lesion output. Forward output is 2-channel logits (background, stroke); the worker should sigmoid-on-channel-1 (or argmax) before thresholding. Conversion: scripts/convert_lesion_seg_model.py traces the safetensors weights into a static-128^3 patch ONNX, opset 17, max-abs-diff vs PyTorch ~1.6e-3."
     },
     {
+      "id": "lnm-deepisles-nvauto-browser-seed",
+      "filename": "models/lnm-deepisles-nvauto-browser-seed.onnx",
+      "sizeBytes": 357826417,
+      "checksum": "sha256:fb30aa600986ca53c953f514e09eb2f96b19d6ae14c7bf70c44206ca0a21716a",
+      "cacheKey": "lnm-deepisles-nvauto-browser-seed-model0-192x192x128-v1",
+      "sourceUrl": "https://huggingface.co/datasets/sbollmann/lnm-webapp-models/resolve/main/models/lnm-deepisles-nvauto-browser-seed.onnx",
+      "sourceVersion": "DeepISLES-NVAUTO-model0-explicit-traced-local-candidate",
+      "browserFormat": "onnx-fp32",
+      "supportStatus": "benchmark-only",
+      "inputModality": "DWI_ADC",
+      "inputContrasts": [
+        "ADC",
+        "TRACE"
+      ],
+      "patchSize": [
+        192,
+        192,
+        128
+      ],
+      "targetSpacing": [
+        1,
+        1,
+        1
+      ],
+      "overlap": 0.625,
+      "probabilityThreshold": 0.5,
+      "minComponentSize": 30,
+      "preprocessing": {
+        "normalize": "nonzero-zscore-channel-wise",
+        "channelOrder": [
+          "ADC",
+          "TRACE"
+        ],
+        "resampleAdcToDwi": "affine-trilinear",
+        "tensorLayout": "NCDHW"
+      },
+      "_comment": "DeepISLES browser-seed candidate only. This NVAUTO single-fold ONNX is too large for the current cold-load budget and remains supportStatus=benchmark-only until the Dice 0.5 gap analysis identifies a browser-feasible candidate. The app exposes an opt-in DWI/ADC seed hook but refuses to run this asset while it is not marked supported."
+    },
+    {
       "id": "lnm-synthmorph-mni",
       "filename": "models/lnm-synthmorph-mni-48x64x80.onnx",
       "sizeBytes": 85119961,

@@ -23,6 +23,7 @@ import {
   warpVolume,
   inverseWarpVolume
 } from './modules/registration.js';
+import { resampleAffine } from './modules/resample.js';
 
 // nifti-reader-js is a UMD bundle that installs `self.nifti` as a side-
 // effect. We do NOT await its import at module top level: Chromium drops
@@ -184,6 +185,11 @@ function parseNiftiInput(arrayBuffer) {
   const dims = [];
   for (let i = 0; i < 8; i++) dims.push(view.getInt16(40 + i * 2, true));
   const nx = dims[1], ny = dims[2], nz = dims[3];
+  const dimCount = dims[0];
+  const nt = dims[4] || 1;
+  if (dimCount > 4 || (dimCount === 4 && nt !== 1)) {
+    throw new Error(`Unsupported NIfTI shape ${dims.slice(1, dimCount + 1).join('x')}; only 3D or singleton 4D volumes are supported.`);
+  }
 
   const pixDims = [];
   for (let i = 0; i < 8; i++) pixDims.push(view.getFloat32(76 + i * 4, true));
@@ -1042,12 +1048,25 @@ function loadStateFromInput(inputData, { emitUpdates = false } = {}) {
   workerState.segLabelsRAS = null;
   workerState.segMinComponentSize = 10;
 
-  // Post volume info for UI
-  postVolumeInfo({
+  if (emitUpdates) {
+    postVolumeInfo({
+      rasDims: [...workerState.rasDims],
+      rasSpacing: [...workerState.rasSpacing],
+      totalSlices: workerState.rasDims[2]
+    });
+  }
+  return {
+    origDims: [...workerState.origDims],
+    headerBytes: workerState.headerBytes.slice(0),
+    origHeaderBytes: workerState.origHeaderBytes.slice(0),
+    affine: workerState.affine.map(row => Array.from(row)),
+    perm: [...workerState.perm],
+    flip: [...workerState.flip],
+    isIdentity: workerState.isIdentity,
+    rasData: new Float32Array(workerState.rasData),
     rasDims: [...workerState.rasDims],
-    rasSpacing: [...workerState.rasSpacing],
-    totalSlices: workerState.rasDims[2]
-  });
+    rasSpacing: [...workerState.rasSpacing]
+  };
 }
 
 function stepLoad(inputData) {
@@ -1323,6 +1342,139 @@ async function stepInference(params) {
   postComplete();
 }
 
+async function stepDeepIslesInference(params) {
+  const {
+    overlap = 0.625,
+    threshold = 0.5,
+    minComponentSize = 30,
+    taskId,
+    modelAssetId,
+    modelName,
+    patchSize = [192, 192, 128],
+    modelBaseUrl,
+    supportStatus = 'unvalidated',
+    cacheKey,
+    channelOrder = ['ADC', 'TRACE'],
+    dwiBuffer,
+    adcBuffer
+  } = params;
+
+  if (!taskId || !modelAssetId || !modelName) {
+    throw new Error('run-deepisles-inference requires taskId, modelAssetId, and modelName.');
+  }
+  if (!dwiBuffer || !adcBuffer) {
+    throw new Error('DeepISLES requires DWI/TRACE and ADC input buffers.');
+  }
+  if (supportStatus !== 'supported') {
+    throw new Error(
+      `Task "${taskId}" is ${supportStatus}. DeepISLES browser seed remains benchmark-only until a validated ONNX asset is selected.`
+    );
+  }
+  if (!Array.isArray(channelOrder) || channelOrder.join(',') !== 'ADC,TRACE') {
+    throw new Error('DeepISLES channelOrder must be [ADC, TRACE].');
+  }
+  self._currentTaskId = taskId;
+
+  postProgress(0.02, 'Reading DeepISLES inputs...');
+  postLog('Loading DWI/TRACE input for DeepISLES...');
+  const dwiState = loadStateFromInput(dwiBuffer, { emitUpdates: true });
+  const dwiRasAffine = affineFromHeaderBytes(dwiState.headerBytes);
+  postLog('Loading ADC input for DeepISLES...');
+  const adcState = loadStateFromInput(adcBuffer, { emitUpdates: false });
+  const adcRasAffine = affineFromHeaderBytes(adcState.headerBytes);
+
+  let adcOnDwi = adcState.rasData;
+  if (!dimsEqual(adcState.rasDims, dwiState.rasDims) || !affinesClose(adcRasAffine, dwiRasAffine, 1e-3)) {
+    postLog('Resampling ADC onto DWI/TRACE grid for DeepISLES.');
+    adcOnDwi = resampleAffine(
+      adcState.rasData,
+      adcState.rasDims,
+      adcRasAffine,
+      dwiState.rasDims,
+      dwiRasAffine,
+      'trilinear'
+    );
+  }
+
+  // Keep the worker state anchored to the DWI/TRACE source so the output
+  // NIfTI is written on that grid after inference.
+  workerState.origDims = [...dwiState.origDims];
+  workerState.affine = dwiState.affine;
+  workerState.headerBytes = dwiState.headerBytes.slice(0);
+  workerState.origHeaderBytes = dwiState.origHeaderBytes.slice(0);
+  workerState.perm = [...dwiState.perm];
+  workerState.flip = [...dwiState.flip];
+  workerState.isIdentity = dwiState.isIdentity;
+  workerState.rasData = new Float32Array(dwiState.rasData);
+  workerState.rasDims = [...dwiState.rasDims];
+  workerState.rasSpacing = [...dwiState.rasSpacing];
+
+  self._modelCacheKey = cacheKey || `${taskId}:${modelAssetId}:${self._appVersion || ''}`;
+  const modelUrl = `${modelBaseUrl}/${modelName}`;
+  const modelData = await fetchModel(modelUrl, modelName, 0.05, 0.15);
+  self._modelCacheKey = null;
+
+  postProgress(0.20, 'Loading DeepISLES ONNX model...');
+  const session = await ort.InferenceSession.create(modelData, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all'
+  });
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+
+  const inferenceStartTime = performance.now();
+  const result = await runDeepIslesMultiChannelPipeline(
+    {
+      channels: [adcOnDwi, dwiState.rasData],
+      dims: dwiState.rasDims,
+      patchSize,
+      channelOrder
+    },
+    async (patch, patchDims) => {
+      const [p0, p1, p2] = patchDims;
+      const voxels = p0 * p1 * p2;
+      const inputTensor = new ort.Tensor('float32', patch, [1, 2, p0, p1, p2]);
+      const out = await session.run({ [inputName]: inputTensor });
+      const raw = out[outputName].data;
+      inputTensor.dispose();
+      return softmaxStrokeChannel(raw, voxels, 2, 1);
+    },
+    {
+      overlap,
+      threshold,
+      minComponentSize,
+      onLog: (msg) => postLog(msg),
+      onProgress: (stepsDone, totalSteps, label) => {
+        const elapsed = (performance.now() - inferenceStartTime) / 1000;
+        const eta = stepsDone > 0 ? (elapsed / stepsDone) * (totalSteps - stepsDone) : 0;
+        const frac = totalSteps > 0 ? stepsDone / totalSteps : 0;
+        postProgress(0.25 + 0.55 * frac, `${label} (ETA: ${eta.toFixed(0)}s)`);
+      }
+    }
+  );
+  await session.release();
+  postLog(`DeepISLES inference complete in ${((performance.now() - inferenceStartTime) / 1000).toFixed(1)}s`);
+
+  let outputLabels = result.labels;
+  if (!workerState.isIdentity) {
+    outputLabels = inverseOrient(outputLabels, workerState.rasDims, workerState.perm, workerState.flip, workerState.origDims);
+  }
+  const outputNifti = createOutputNifti(outputLabels, workerState.origHeaderBytes, workerState.origDims);
+  postStageData('segmentation', outputNifti, 'DeepISLES lesion seed');
+
+  let finalVoxels = 0;
+  for (let i = 0; i < outputLabels.length; i++) {
+    if (outputLabels[i] > 0) finalVoxels++;
+  }
+  postLog(`DeepISLES output: ${finalVoxels} foreground voxels`);
+  if (finalVoxels === 0) {
+    postLog(`WARNING: DeepISLES seed is empty. Probability map max=${result.probStats.max.toFixed(4)} (threshold=${threshold}).`);
+  }
+  postProgress(1.0, 'Complete');
+  postStepComplete('inference');
+  postComplete();
+}
+
 // Phase 2a.1 brain extraction. The orchestration lives in
 // web/js/modules/brain-extraction.js (a 1:1 port of vesselboost-webapp's
 // stepSynthStrip); this adapter wires it into the worker protocol: pulls
@@ -1555,8 +1707,185 @@ async function stepRegister(params = {}) {
         }
       }
     }
+  return out;
+}
+
+function affineFromHeaderBytes(headerBytes) {
+  return extractAffine(new DataView(headerBytes)).map(row => Array.from(row));
+}
+
+function dimsEqual(a, b) {
+  return Array.isArray(a) && Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((value, index) => Number(value) === Number(b[index]));
+}
+
+function affinesClose(a, b, tolerance = 1e-3) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 4; c++) {
+      if (Math.abs(Number(a[r]?.[c]) - Number(b[r]?.[c])) > tolerance) return false;
+    }
+  }
+  return true;
+}
+
+function nonzeroZScore(data) {
+  let count = 0;
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const value = data[i];
+    if (value !== 0 && Number.isFinite(value)) {
+      count++;
+      sum += value;
+    }
+  }
+  const mean = count > 0 ? sum / count : 0;
+  let sumSq = 0;
+  for (let i = 0; i < data.length; i++) {
+    const value = data[i];
+    if (value !== 0 && Number.isFinite(value)) {
+      const d = value - mean;
+      sumSq += d * d;
+    }
+  }
+  const std = count > 0 ? Math.sqrt(sumSq / count) || 1 : 1;
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const value = data[i];
+    out[i] = Number.isFinite(value) ? (value - mean) / std : 0;
+  }
+  return out;
+}
+
+function zeroPadChannelsToPatchMultiple(channels, dims, patchSize) {
+  const [nx, ny, nz] = dims;
+  const [px, py, pz] = patchSize;
+  const pad = (d, p) => d > p && d % p !== 0 ? Math.ceil(d / p) * p : d < p ? p : d;
+  const outDims = [pad(nx, px), pad(ny, py), pad(nz, pz)];
+  if (outDims[0] === nx && outDims[1] === ny && outDims[2] === nz) {
+    return { channels, dims: outDims };
+  }
+  const outChannels = channels.map(() => new Float32Array(outDims[0] * outDims[1] * outDims[2]));
+  for (let c = 0; c < channels.length; c++) {
+    const src = channels[c];
+    const dst = outChannels[c];
+    for (let z = 0; z < nz; z++) {
+      for (let y = 0; y < ny; y++) {
+        for (let x = 0; x < nx; x++) {
+          dst[x + y * outDims[0] + z * outDims[0] * outDims[1]] = src[x + y * nx + z * nx * ny];
+        }
+      }
+    }
+  }
+  return { channels: outChannels, dims: outDims };
+}
+
+function extractMultiChannelPatch(channels, volumeDims, position, patchDims) {
+  const [vx, vy, vz] = volumeDims;
+  const [px, py, pz] = patchDims;
+  const [ox, oy, oz] = position;
+  const patchVoxels = px * py * pz;
+  const patch = new Float32Array(channels.length * patchVoxels);
+  for (let c = 0; c < channels.length; c++) {
+    const src = channels[c];
+    const channelOffset = c * patchVoxels;
+    for (let z = 0; z < pz; z++) {
+      const gz = oz + z;
+      if (gz < 0 || gz >= vz) continue;
+      for (let y = 0; y < py; y++) {
+        const gy = oy + y;
+        if (gy < 0 || gy >= vy) continue;
+        for (let x = 0; x < px; x++) {
+          const gx = ox + x;
+          if (gx < 0 || gx >= vx) continue;
+          patch[channelOffset + x * py * pz + y * pz + z] = src[gx + gy * vx + gz * vx * vy];
+        }
+      }
+    }
+  }
+  return patch;
+}
+
+function softmaxStrokeChannel(raw, voxels, channels = 2, strokeChannel = 1) {
+  if (raw.length === voxels) {
+    const out = new Float32Array(voxels);
+    for (let i = 0; i < voxels; i++) out[i] = 1 / (1 + Math.exp(-raw[i]));
     return out;
   }
+  if (raw.length !== channels * voxels) {
+    throw new Error(`Unexpected DeepISLES output length ${raw.length}; expected ${voxels} or ${channels * voxels}`);
+  }
+  const out = new Float32Array(voxels);
+  for (let i = 0; i < voxels; i++) {
+    let maxLogit = -Infinity;
+    for (let c = 0; c < channels; c++) {
+      const value = raw[c * voxels + i];
+      if (value > maxLogit) maxLogit = value;
+    }
+    let denom = 0;
+    for (let c = 0; c < channels; c++) denom += Math.exp(raw[c * voxels + i] - maxLogit);
+    out[i] = Math.exp(raw[strokeChannel * voxels + i] - maxLogit) / Math.max(denom, 1e-12);
+  }
+  return out;
+}
+
+async function runDeepIslesMultiChannelPipeline(input, runPatch, options = {}) {
+  const overlap = options.overlap ?? 0.625;
+  const threshold = options.threshold ?? 0.5;
+  const minComponentSize = options.minComponentSize ?? 30;
+  const onLog = options.onLog || (() => {});
+  const onProgress = options.onProgress || (() => {});
+  let channels = input.channels.map(channel => nonzeroZScore(channel));
+  let dims = [...input.dims];
+  const patchSize = input.patchSize;
+  const prePadDims = [...dims];
+  const padded = zeroPadChannelsToPatchMultiple(channels, dims, patchSize);
+  channels = padded.channels;
+  dims = padded.dims;
+  if (!dimsEqual(prePadDims, dims)) {
+    onLog(`Padded DeepISLES inputs: ${prePadDims.join('x')} -> ${dims.join('x')}`);
+  }
+
+  const positions = InferencePipeline.computePatchPositions3D(dims, patchSize, overlap);
+  const weights = InferencePipeline.computeGaussianWeightMap3D(patchSize[0], patchSize[1], patchSize[2], 8);
+  const totalVoxels = dims[0] * dims[1] * dims[2];
+  const patchVoxels = patchSize[0] * patchSize[1] * patchSize[2];
+  const probAccum = new Float32Array(totalVoxels);
+  const weightAccum = new Float32Array(totalVoxels);
+  onLog(`Starting DeepISLES inference: ${positions.length} patches (${patchSize.join('x')}), overlap=${overlap}, channelOrder=${input.channelOrder.join(',')}`);
+  for (let pi = 0; pi < positions.length; pi++) {
+    const patch = extractMultiChannelPatch(channels, dims, positions[pi], patchSize);
+    const probabilities = await runPatch(patch, patchSize);
+    InferencePipeline.accumulatePatch3D(probAccum, weightAccum, dims, positions[pi], probabilities, weights, patchSize);
+    onProgress(pi + 1, positions.length, `DeepISLES patch ${pi + 1}/${positions.length}`);
+    if (pi < 5) {
+      let pMax = -Infinity;
+      let pAbove = 0;
+      for (let i = 0; i < patchVoxels; i++) {
+        if (probabilities[i] > pMax) pMax = probabilities[i];
+        if (probabilities[i] >= threshold) pAbove++;
+      }
+      onLog(`DeepISLES patch ${pi} pos=[${positions[pi]}]: prob max=${pMax.toFixed(4)}, n>thr=${pAbove}`);
+    }
+  }
+
+  const binary = new Uint8Array(totalVoxels);
+  let pMax = -Infinity;
+  for (let i = 0; i < totalVoxels; i++) {
+    const p = weightAccum[i] > 0 ? probAccum[i] / weightAccum[i] : 0;
+    if (p > pMax) pMax = p;
+    if (p >= threshold) binary[i] = 1;
+  }
+  let labels = binary;
+  if (!dimsEqual(prePadDims, dims)) {
+    labels = InferencePipeline.unpadVolume(labels, dims, prePadDims, Uint8Array);
+  }
+  if (minComponentSize > 1) {
+    labels = InferencePipeline.removeSmallComponents(labels, prePadDims, minComponentSize);
+  }
+  return { labels, dims: prePadDims, probStats: { max: pMax } };
+}
 
   const sourceModel = maybeResampleToModelGrid(sourceNormalized, 'source');
   const targetModel = maybeResampleToModelGrid(targetData, 'target');
@@ -1800,6 +2129,15 @@ self.onmessage = async (e) => {
         await stepInference(data || {});
       } catch (error) {
         console.error('Inference error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'run-deepisles-inference':
+      try {
+        await stepDeepIslesInference(data || {});
+      } catch (error) {
+        console.error('DeepISLES inference error:', error);
         postError(error?.message || String(error));
       }
       break;

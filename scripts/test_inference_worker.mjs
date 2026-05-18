@@ -127,6 +127,11 @@ assert.match(
 );
 assert.match(
   worker,
+  /case\s+['"]run-deepisles-inference['"]/,
+  "worker dispatch must handle the opt-in DeepISLES DWI/ADC seed route"
+);
+assert.match(
+  worker,
   /\bstepSynthStrip\s*\(/,
   "worker must define / call stepSynthStrip(...)"
 );

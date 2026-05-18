@@ -132,6 +132,22 @@ assert.ok(typeof stroke.probabilityThreshold === 'number',
 assert.ok(typeof stroke.minComponentSize === 'number',
   'lnm-stroke-lesion must declare a minComponentSize');
 
+const deepIsles = manifest.modelAssets.find(a => a.id === 'lnm-deepisles-nvauto-browser-seed');
+assert.ok(deepIsles,
+  "manifest must register 'lnm-deepisles-nvauto-browser-seed' as the DeepISLES candidate asset");
+assert.equal(deepIsles.supportStatus, 'benchmark-only',
+  'DeepISLES candidate must not count as supported until gap analysis and browser budget gates pass');
+assert.equal(deepIsles.inputModality, 'DWI_ADC',
+  'DeepISLES candidate must declare that it uses DWI/ADC rather than T1');
+assert.deepEqual(deepIsles.inputContrasts, ['ADC', 'TRACE'],
+  'DeepISLES candidate must pin ADC + TRACE inputs');
+assert.deepEqual(deepIsles.preprocessing?.channelOrder, ['ADC', 'TRACE'],
+  'DeepISLES candidate must pin ADC,TRACE channel order');
+assert.deepEqual(deepIsles.patchSize, [192, 192, 128],
+  'DeepISLES candidate must document upstream NVAUTO patch geometry');
+assert.equal(deepIsles.overlap, 0.625,
+  'DeepISLES candidate must document upstream NVAUTO overlap');
+
 // Phase 3: the SynthMorph registration target — an MNI152 brain at the
 // 160x160x192 1mm grid the model was trained against. Lives under
 // atlasAssets to share the same loader as Yeo / Schaefer.

@@ -71,6 +71,22 @@ class ModeSpec:
     source: str
 
 
+@dataclass(frozen=True)
+class DeepIslesModeSpec:
+    id: str
+    backend: str
+    input_contrasts: tuple[str, str]
+    patch_size: tuple[int, int, int]
+    overlap: float
+    tta: bool
+    channel_order: tuple[str, str]
+    min_component_size: int
+    source: str
+    prediction_glob: str | None = None
+    probability_globs: tuple[str, ...] = ()
+    probability_threshold: float = 0.5
+
+
 MODE_SPECS = {
     "baseline-app": ModeSpec(
         id="baseline-app",
@@ -121,6 +137,53 @@ MODE_SPECS = {
         source="liamchalcroft/synthstroke-synth-plus",
     ),
 }
+
+DEEPISLES_MODE_SPECS = {
+    "deepisles-nvauto-single-fold": DeepIslesModeSpec(
+        id="deepisles-nvauto-single-fold",
+        backend="deepisles-prediction",
+        input_contrasts=("ADC", "TRACE"),
+        patch_size=(192, 192, 128),
+        overlap=0.625,
+        tta=False,
+        channel_order=("ADC", "TRACE"),
+        min_component_size=30,
+        source="DeepISLES NVAUTO single browser-candidate fold (model7 by prior SOOP sub-1 sweep)",
+        prediction_glob="{subject}_nvauto_allfolds/{subject}_deepisles-nvauto-model7_onnx_pred.nii.gz",
+    ),
+    "deepisles-nvauto-best3": DeepIslesModeSpec(
+        id="deepisles-nvauto-best3",
+        backend="deepisles-probability-mean",
+        input_contrasts=("ADC", "TRACE"),
+        patch_size=(192, 192, 128),
+        overlap=0.625,
+        tta=False,
+        channel_order=("ADC", "TRACE"),
+        min_component_size=30,
+        source="DeepISLES NVAUTO best-3 browser-candidate folds (models 7, 9, 11 by prior SOOP sub-1 sweep)",
+        probability_globs=(
+            "{subject}_nvauto_allfolds/{subject}_deepisles-nvauto-model7_onnx_prob.nii.gz",
+            "{subject}_nvauto_allfolds/{subject}_deepisles-nvauto-model9_onnx_prob.nii.gz",
+            "{subject}_nvauto_allfolds/{subject}_deepisles-nvauto-model11_onnx_prob.nii.gz",
+        ),
+        probability_threshold=0.5,
+    ),
+    "deepisles-nvauto-15fold": DeepIslesModeSpec(
+        id="deepisles-nvauto-15fold",
+        backend="deepisles-prediction",
+        input_contrasts=("ADC", "TRACE"),
+        patch_size=(192, 192, 128),
+        overlap=0.625,
+        tta=False,
+        channel_order=("ADC", "TRACE"),
+        min_component_size=30,
+        source="DeepISLES NVAUTO 15-fold ONNX ensemble",
+        prediction_glob="{subject}_nvauto_allfolds/{subject}_deepisles-nvauto-15fold_onnx_pred.nii.gz",
+    ),
+}
+
+DEFAULT_MODES = list(MODE_SPECS.keys())
+ALL_MODE_SPECS = {**MODE_SPECS, **DEEPISLES_MODE_SPECS}
 
 TTA_AXES = [
     (),
@@ -657,6 +720,126 @@ def model_runner(spec: ModeSpec, requested_device: str, batch_size: int) -> Call
     raise BenchmarkError(f"Unknown backend: {spec.backend}")
 
 
+def deepisles_prediction_path(pred_root: Path, subject: str, pattern: str) -> Path:
+    return pred_root / pattern.format(subject=subject)
+
+
+def load_deepisles_binary_prediction(subject: str, spec: DeepIslesModeSpec, pred_root: Path) -> tuple[nib.Nifti1Image, np.ndarray, str]:
+    if spec.backend == "deepisles-prediction":
+        if not spec.prediction_glob:
+            raise BenchmarkError(f"{spec.id}: missing prediction_glob")
+        path = deepisles_prediction_path(pred_root, subject, spec.prediction_glob)
+        require_file(path, f"{spec.id} prediction for {subject}")
+        image, data, notes = load_nifti_3d(path, binary=True)
+        return image, data, "; ".join(notes)
+
+    if spec.backend == "deepisles-probability-mean":
+        if not spec.probability_globs:
+            raise BenchmarkError(f"{spec.id}: missing probability_globs")
+        images: list[nib.Nifti1Image] = []
+        arrays: list[np.ndarray] = []
+        note_parts: list[str] = []
+        for pattern in spec.probability_globs:
+            path = deepisles_prediction_path(pred_root, subject, pattern)
+            require_file(path, f"{spec.id} probability input for {subject}")
+            image, data, notes = load_nifti_3d(path, binary=False)
+            images.append(image)
+            arrays.append(np.asarray(data, dtype=np.float32))
+            note_parts.extend(notes)
+        first = images[0]
+        for image in images[1:]:
+            if image.shape[:3] != first.shape[:3] or not np.allclose(image.affine, first.affine, atol=1e-3):
+                raise BenchmarkError(f"{spec.id}: probability maps for {subject} are not on the same grid")
+        probability = np.mean(np.stack(arrays, axis=0), axis=0)
+        binary = remove_small_components(probability >= spec.probability_threshold, spec.min_component_size)
+        return first, binary, "; ".join(note_parts)
+
+    raise BenchmarkError(f"{spec.id}: unknown DeepISLES backend {spec.backend}")
+
+
+def run_deepisles_prediction_modes(
+    args: argparse.Namespace,
+    modes: list[str],
+    subjects: list[str],
+    thresholds: list[float],
+    results: list[dict[str, str | float | int]],
+    sweep_rows: list[dict[str, str | float | int]],
+    warnings: list[str],
+) -> None:
+    subjects_to_score = [subject for subject in subjects if subject.startswith("sub-")]
+    if not subjects_to_score:
+        return
+    for subject in subjects_to_score:
+        if subject not in SOOP_PAIRED_SUBJECTS and subject not in SOOP_PREDICTION_ONLY_SUBJECTS:
+            raise BenchmarkError(f"{subject} is not in the planned SOOP subject set.")
+        paired = subject in SOOP_PAIRED_SUBJECTS
+        mask_path = soop_combined_mask_path(args.soop_mask_root, subject)
+        if paired:
+            require_file(mask_path, f"{subject} combined TRACE-space lesion mask")
+            mask_image, mask_data, mask_notes = load_nifti_3d(mask_path, binary=True)
+        else:
+            mask_image = None
+            mask_data = None
+            mask_notes = []
+
+        dwi_path = soop_image_path(args.soop_raw_root, subject, "TRACE")
+        adc_path = soop_image_path(args.soop_raw_root, subject, "ADC")
+        require_file(dwi_path, f"{subject} TRACE/DWI image")
+        require_file(adc_path, f"{subject} ADC image")
+        note_parts = [f"inputs={adc_path},{dwi_path}", "channel_order=ADC,TRACE", *[f"mask {n}" for n in mask_notes]]
+
+        for mode in modes:
+            spec = DEEPISLES_MODE_SPECS[mode]
+            print(f"\nCase soop/{subject}/ADC+TRACE/{mode}", flush=True)
+            t0 = time.time()
+            pred_image, pred_binary, pred_note = load_deepisles_binary_prediction(subject, spec, args.deepisles_pred_root)
+            runtime = time.time() - t0
+            note = "; ".join([*note_parts, pred_note])
+            warning = None
+            if paired:
+                assert mask_image is not None and mask_data is not None
+                warning = fov_warning(pred_image, mask_image)
+                if warning:
+                    full_warning = f"{subject} ADC+TRACE {mode}: {warning}"
+                    warnings.append(full_warning)
+                    print(f"WARNING: {full_warning}", flush=True)
+                fixed_on_mask = resample_binary_to_mask_grid(pred_binary, pred_image, mask_image)
+                fixed_metrics = metrics(fixed_on_mask, mask_data)
+            else:
+                fixed_metrics = {
+                    "dice": math.nan,
+                    "jaccard": math.nan,
+                    "precision": math.nan,
+                    "recall": math.nan,
+                    "tp": 0,
+                    "fp": 0,
+                    "fn": 0,
+                    "pred_voxels": int(pred_binary.sum()),
+                    "truth_voxels": 0,
+                    "volume_ratio": math.inf,
+                }
+
+            pseudo_case = Case("soop", subject, "ADC+TRACE", dwi_path, mask_path if paired else None, paired)
+            mode_as_baseline_shape = ModeSpec(
+                id=spec.id,
+                backend=spec.backend,
+                repo_id=None,
+                patch_size=spec.patch_size,
+                overlap=spec.overlap,
+                tta=spec.tta,
+                out_channels=2,
+                stroke_channel=1,
+                min_component_size=spec.min_component_size,
+                source=spec.source,
+            )
+            results.append(row_for_case(pseudo_case, mode_as_baseline_shape, args.fixed_threshold, runtime, note, fixed_metrics))
+            for threshold in thresholds:
+                # Prediction-backed DeepISLES modes are already binary at their
+                # validated threshold; repeat the fixed metrics into the sweep
+                # so summary tables stay rectangular and comparable.
+                sweep_rows.append(row_for_case(pseudo_case, mode_as_baseline_shape, threshold, runtime, note, fixed_metrics))
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
     thresholds = parse_thresholds(args.thresholds)
     if args.fixed_threshold not in thresholds:
@@ -664,7 +847,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
     subjects = expand_subjects(parse_csv_list(args.subjects))
     contrasts = parse_csv_list(args.contrasts)
     modes = parse_csv_list(args.modes)
-    unknown_modes = [mode for mode in modes if mode not in MODE_SPECS]
+    if modes == ["all"]:
+        modes = list(ALL_MODE_SPECS.keys())
+    unknown_modes = [mode for mode in modes if mode not in ALL_MODE_SPECS]
     if unknown_modes:
         raise BenchmarkError(f"Unknown modes: {', '.join(unknown_modes)}")
     unknown_contrasts = [contrast for contrast in contrasts if contrast not in SOOP_CONTRASTS]
@@ -672,6 +857,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
         raise BenchmarkError(f"Unknown contrasts: {', '.join(unknown_contrasts)}")
     if args.torch_batch_size < 1:
         raise BenchmarkError("--torch-batch-size must be >= 1")
+
+    synth_modes = [mode for mode in modes if mode in MODE_SPECS]
+    deepisles_modes = [mode for mode in modes if mode in DEEPISLES_MODE_SPECS]
 
     cases = discover_cases(args.soop_raw_root, args.soop_mask_root, subjects, contrasts)
     if args.list_cases:
@@ -701,7 +889,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
     warnings: list[str] = []
     best_worst: dict[tuple[str, str, str], dict[str, dict[str, float | Path] | None]] = {}
 
-    for mode in modes:
+    for mode in synth_modes:
         spec = MODE_SPECS[mode]
         print(f"\nLoading mode {spec.id}: {spec.source}", flush=True)
         runners[mode] = model_runner(spec, args.torch_device, args.torch_batch_size)
@@ -726,7 +914,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 warnings.append(full_warning)
                 print(f"WARNING: {full_warning}", flush=True)
 
-        for mode in modes:
+        for mode in synth_modes:
             spec = MODE_SPECS[mode]
             t0 = time.time()
             probability = run_sliding_window(source_data, spec, runners[mode], lambda msg: print(msg, flush=True))
@@ -782,6 +970,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
             write_csv(args.out_dir / "results.csv", results)
             write_csv(args.out_dir / "threshold_sweep.csv", sweep_rows)
             (args.out_dir / "summary.md").write_text(summarize(results, sweep_rows, warnings), encoding="utf-8")
+
+    if deepisles_modes:
+        run_deepisles_prediction_modes(args, deepisles_modes, subjects, thresholds, results, sweep_rows, warnings)
+        write_csv(args.out_dir / "results.csv", results)
+        write_csv(args.out_dir / "threshold_sweep.csv", sweep_rows)
+        (args.out_dir / "summary.md").write_text(summarize(results, sweep_rows, warnings), encoding="utf-8")
 
     write_csv(args.out_dir / "results.csv", results)
     write_csv(args.out_dir / "threshold_sweep.csv", sweep_rows)
@@ -855,11 +1049,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--subjects", default="all", help="Comma list, or all/soop/paired/prediction-only/ds004884.")
     parser.add_argument("--contrasts", default=",".join(SOOP_CONTRASTS))
-    parser.add_argument("--modes", default=",".join(MODE_SPECS.keys()))
+    parser.add_argument(
+        "--modes",
+        default=",".join(DEFAULT_MODES),
+        help="Comma list of SynthStroke/SynthPlus modes, DeepISLES modes, or all.",
+    )
     parser.add_argument("--thresholds", default=",".join(str(v) for v in DEFAULT_THRESHOLDS))
     parser.add_argument("--fixed-threshold", type=float, default=0.4)
     parser.add_argument("--torch-device", default="auto", help="Torch device for PyTorch modes: auto, cpu, mps, or cuda.")
     parser.add_argument("--torch-batch-size", type=int, default=4, help="Patch batch size for PyTorch modes.")
+    parser.add_argument(
+        "--deepisles-pred-root",
+        type=Path,
+        default=ROOT / ".tmp_weights" / "deepisles_onnx_run",
+        help="Root containing precomputed DeepISLES NVAUTO prediction/probability NIfTIs.",
+    )
     parser.add_argument("--save-predictions", choices=["none", "all", "best-worst"], default="none")
     parser.add_argument("--list-cases", action="store_true", help="Print discovered cases and exit before loading models.")
     return parser

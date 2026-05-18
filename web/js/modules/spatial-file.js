@@ -3,6 +3,7 @@ const META_PROP = Symbol.for('lnm.spatialMetadata');
 
 export const VOLUME_SPACES = {
   NATIVE_T1: 'native-t1',
+  NATIVE_DWI: 'native-dwi',
   MNI160: 'mni160'
 };
 

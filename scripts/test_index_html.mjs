@@ -50,6 +50,8 @@ const requiredIds = [
   '#computeOverlapButton',
   '#outsideAtlasWarning',
   '#structuralFileInput',
+  '#deepIslesDwiFileInput',
+  '#deepIslesAdcFileInput',
   '#atlasSelect',
   '#lesionFileInput',
   // Phase 2a.1.4b additions: brain-extraction button (explicit trigger) and
@@ -59,6 +61,7 @@ const requiredIds = [
   // Phase 2a.2.3 additions: lesion-segmentation trigger button + mask
   // download button.
   '#runLesionSegmentationButton',
+  '#runDeepIslesSegmentationButton',
   '#startManualMaskButton',
   '#downloadLesionMaskButton',
   // Phase 3.4 additions: registration button.
@@ -164,7 +167,7 @@ const advancedWorkflow = workflowStart >= 0 && workflowEnd > workflowStart
 assert.ok(advancedWorkflow, 'advanced controls must expose an ordered workflow container');
 assert.match(
   advancedWorkflow,
-  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*Manual mask[\s\S]*Upload mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → atlas grid[\s\S]*7 Compute atlas overlap[\s\S]*8 Compute network map/,
+  /1 Brain extraction[\s\S]*2 Pre-align T1[\s\S]*3 Lesion mask[\s\S]*Auto seed mask[\s\S]*DeepISLES DWI\/ADC seed[\s\S]*Manual mask[\s\S]*Upload mask[\s\S]*4 MNI registration \(SynthMorph\)[\s\S]*5 Check atlas alignment[\s\S]*6 Warp lesion → atlas grid[\s\S]*7 Compute atlas overlap[\s\S]*8 Compute network map/,
   'advanced controls must show the seed/manual mask review workflow in execution order'
 );
 assert.match(html, /<label\b[^>]*for=["']atlasSelect["'][^>]*>Atlas<\/label>/,
@@ -175,8 +178,8 @@ assert.match(html, /<option\s+value=["']yeo7["']>Yeo 7 networks<\/option>/,
   'atlas selector must keep Yeo 7 networks selectable for compatibility');
 assert.match(
   advancedWorkflow,
-  /aria-label=["']Lesion mask source choice["'][\s\S]*id=["']runLesionSegmentationButton["'][\s\S]*id=["']startManualMaskButton["'][\s\S]*id=["']uploadManualMaskButton["']/,
-  'advanced controls must offer auto seed, blank manual mask, and manual mask upload choices'
+  /aria-label=["']Lesion mask source choice["'][\s\S]*id=["']runLesionSegmentationButton["'][\s\S]*id=["']runDeepIslesSegmentationButton["'][\s\S]*id=["']startManualMaskButton["'][\s\S]*id=["']uploadManualMaskButton["']/,
+  'advanced controls must offer SynthStroke seed, DeepISLES seed, blank manual mask, and manual mask upload choices'
 );
 assert.match(
   advancedWorkflow,
