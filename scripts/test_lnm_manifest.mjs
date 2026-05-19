@@ -79,6 +79,16 @@ assert.ok(typeof synthstrip.sizeBytes === 'number' && synthstrip.sizeBytes > 0,
   'lnm-synthstrip must declare a non-zero sizeBytes');
 assert.match(synthstrip.sourceUrl, /huggingface\.co.+\.onnx$/,
   'lnm-synthstrip sourceUrl must point at an ONNX file on Hugging Face');
+assert.equal(synthstrip.upstreamModelName, 'FreeSurfer SynthStrip main model v1 (synthstrip.1.pt)',
+  'lnm-synthstrip must document the exact original FreeSurfer checkpoint variant');
+assert.equal(synthstrip.upstreamSourceUrl,
+  'https://surfer.nmr.mgh.harvard.edu/pub/dist/freesurfer/synthstrip/models/synthstrip.1.pt',
+  'lnm-synthstrip must document the original FreeSurfer checkpoint URL');
+assert.equal(synthstrip.upstreamChecksum,
+  'sha256:37417f802196186441aae3e7f385d94f8a98c64a88acaeaa2723af995c653e33',
+  'lnm-synthstrip must document the original FreeSurfer checkpoint checksum');
+assert.match(synthstrip.conversionSource || '', /neurodesk\/vesselboost-webapp:scripts\/convert_synthstrip\.py/,
+  'lnm-synthstrip must document the conversion source script');
 
 // Phase 3: SynthMorph MNI registration model (SVF sub-model).
 const synmorph = manifest.modelAssets.find(a => a.id === 'lnm-synthmorph-mni');
@@ -131,6 +141,30 @@ assert.ok(typeof stroke.probabilityThreshold === 'number',
   'lnm-stroke-lesion must declare a probabilityThreshold');
 assert.ok(typeof stroke.minComponentSize === 'number',
   'lnm-stroke-lesion must declare a minComponentSize');
+assert.equal(stroke.upstreamModelName, 'SynthStroke baseline',
+  'lnm-stroke-lesion must document the exact upstream SynthStroke variant');
+assert.equal(stroke.upstreamModelRepo, 'liamchalcroft/synthstroke-baseline',
+  'lnm-stroke-lesion must document the upstream Hugging Face model repo');
+assert.equal(stroke.upstreamRevision, 'b693a650026359705688fbce409219c4dbb5d6be',
+  'lnm-stroke-lesion must document the observed upstream revision used for provenance');
+assert.match(stroke.upstreamConfigUrl || '', /liamchalcroft\/synthstroke-baseline\/raw\/main\/config\.json/,
+  'lnm-stroke-lesion must document the upstream config URL');
+assert.equal(stroke.upstreamConfigChecksum,
+  'sha256:2d9e7eb2ab4cb0a696ce6a845ad3123b77b31867f7ba74a271b81132cca38b1e',
+  'lnm-stroke-lesion must document the upstream config checksum');
+assert.match(stroke.upstreamWeightsUrl || '', /liamchalcroft\/synthstroke-baseline\/resolve\/main\/model\.safetensors/,
+  'lnm-stroke-lesion must document the upstream safetensors weights URL');
+assert.equal(stroke.upstreamWeightsSizeBytes, 74468100,
+  'lnm-stroke-lesion must document the upstream safetensors size');
+assert.equal(stroke.upstreamWeightsETag,
+  'd56c089e8c4bcc0ad2281f1e80b7c0e265f3b7138dee17fb2d160487604eee66',
+  'lnm-stroke-lesion must document the upstream safetensors ETag');
+assert.equal(stroke.conversionSource, 'scripts/convert_lesion_seg_model.py',
+  'lnm-stroke-lesion must document the conversion source script');
+assert.deepEqual(stroke.conversionInputShape, [1, 1, 128, 128, 128],
+  'lnm-stroke-lesion must document the ONNX trace shape');
+assert.equal(stroke.conversionOpset, 17,
+  'lnm-stroke-lesion must document the ONNX opset');
 
 const deepIsles = manifest.modelAssets.find(a => a.id === 'lnm-deepisles-nvauto-browser-seed');
 assert.ok(deepIsles,
